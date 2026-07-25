@@ -1,7 +1,9 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
+bin/
 build/
+__build/
 dist/
 wheels/
 *.egg-info

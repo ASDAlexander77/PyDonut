@@ -19,3 +19,22 @@ cache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*.{h,c,hpp,cpp}" }, 
 [build-system]
 requires = ["scikit-build-core>=0.10", "pybind11"]
 build-backend = "scikit_build_core.build"
+
+[tool.scikit-build.cmake.define]
+PYNRI_ENABLE_D3D12 = "ON"
+PYNRI_ENABLE_VULKAN = "ON"
+
+[tool.pyrefly]
+project-includes = [
+    "**/*.py*",
+    "**/*.ipynb",
+]
+search_path = [
+    "src",
+    "test",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
