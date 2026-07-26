@@ -1,4 +1,13 @@
 cmake_minimum_required(VERSION 4.2)
+
+if ("${SKBUILD_PROJECT_NAME}" STREQUAL "")
+    # to support custom compile in VS    
+    message("Using SKBUILD_PROJECT_NAME as: ${SKBUILD_PROJECT_NAME}")
+    set(SKBUILD_PROJECT_NAME "pydonut")
+    message("Using pybind11 from: ${pybind11_DIR}")
+    set(pybind11_DIR ".venv/Lib/site-packages/pybind11/share/cmake/pybind11")
+endif()
+
 project(${SKBUILD_PROJECT_NAME} LANGUAGES CXX)
 
 # ---------------------------------------
