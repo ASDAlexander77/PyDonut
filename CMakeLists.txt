@@ -44,4 +44,9 @@ pybind11_add_module(
 	_core MODULE 
 	src/cpp/_core.cpp)
 
+pybind11_add_module(
+	_pynri MODULE 
+	src/cpp/_pynri.cpp)
+
 install(TARGETS _core DESTINATION ${SKBUILD_PROJECT_NAME})
+install(TARGETS _pynri DESTINATION ${SKBUILD_PROJECT_NAME})
