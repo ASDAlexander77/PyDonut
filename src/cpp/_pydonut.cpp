@@ -1,5 +1,6 @@
 #include <string>
 #include <vector>
+#include <memory>
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -7,6 +8,7 @@
 #include <pybind11/functional.h>
 #include <pybind11/chrono.h>
 
+#include <donut/app/DeviceManager.h>
 #include <donut/app/ApplicationBase.h>
 
 #pragma once
@@ -39,4 +41,8 @@ PYBIND11_MODULE(_pydonut, m) {
         }, R"pbdoc(
         // TODO:
     )pbdoc");    
+
+    pybind11::class_<donut::app::DeviceManager> deviceManager(m, "DeviceManager");
+    deviceManager.def_static("Create", &donut::app::DeviceManager::Create, py::arg("api") = nvrhi::GraphicsAPI::VULKAN);
+
 }
