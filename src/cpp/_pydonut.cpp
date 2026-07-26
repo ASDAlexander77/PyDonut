@@ -47,15 +47,16 @@ PYBIND11_MODULE(_pydonut, m) {
     pybind11::class_<donut::app::DeviceManager> deviceManager(m, "DeviceManager");
     deviceManager.def_static(
         "Create", 
-        [](nvrhi::GraphicsAPI api) {
-            return  std::shared_ptr<donut::app::DeviceManager>(donut::app::DeviceManager::Create(api));
-        },
+        &donut::app::DeviceManager::Create,
         py::arg("api") = nvrhi::GraphicsAPI::VULKAN);
     deviceManager.def(
         "CreateWindowDeviceAndSwapChain", 
-        &donut::app::DeviceManager::CreateWindowDeviceAndSwapChain, 
+        &donut::app::DeviceManager::CreateWindowDeviceAndSwapChain,
         py::arg("params"), 
         py::arg("windowTitle") = "");
+    deviceManager.def(
+        "Shutdown", 
+        &donut::app::DeviceManager::Shutdown);
 
     pybind11::class_<donut::app::DeviceCreationParameters> deviceCreationParameters(m, "DeviceCreationParameters");
     deviceCreationParameters.def(pybind11::init<>());

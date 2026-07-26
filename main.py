@@ -9,7 +9,7 @@ if __name__ == "__main__":
 
     deviceManager = pyd.DeviceManager.Create(api)
     if not deviceManager:
-        print("Failed to create DeviceManager.")
+        print("Failed to create DeviceManager.", file=sys.stderr)
         exit(1)
     else:
         print("DeviceManager created successfully.")
@@ -23,5 +23,11 @@ if __name__ == "__main__":
     if not deviceManager.CreateWindowDeviceAndSwapChain(deviceParams, "PyDonut Window"):
         print("Cannot initialize a graphics device with the requested parameters", file=sys.stderr)
         exit(1)
+
+    # TODO: finish it
+
+    deviceManager.Shutdown()
+
+    del deviceManager
 
     print("Done.")
