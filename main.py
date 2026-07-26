@@ -1,8 +1,10 @@
-from src import pydonut as pyd
-
 if __name__ == "__main__":
-    print(pyd.hello())
+    from src import pydonut as pyd
+    import sys
 
-    pyd.get_graphics_api_from_command_line(["--api", "vulkan"])
+    print(pyd.hello_from_bin())
+
+    api = pyd.GetGraphicsAPIFromCommandLine(sys.argv)
+    print(f"Selected Graphics API: {api}")
 
     print("Done.")

@@ -16,6 +16,11 @@ namespace py = pybind11;
 PYBIND11_MODULE(_pydonut, m) {
     m.doc() = "pybind11 donut module";
 
+    pybind11::enum_<nvrhi::GraphicsAPI>(m, "GraphicsAPI")
+        .value("D3D11", nvrhi::GraphicsAPI::D3D11)
+        .value("D3D12", nvrhi::GraphicsAPI::D3D12)
+        .value("Vulkan", nvrhi::GraphicsAPI::VULKAN);
+
     m.def(
         "GetGraphicsAPIFromCommandLine", 
         [](std::vector<std::string> args) { 
@@ -30,8 +35,7 @@ PYBIND11_MODULE(_pydonut, m) {
             const char* const* argv = cstrs.data();
             size_t argc = cstrs.size();
 
-            /*return*/ donut::app::GetGraphicsAPIFromCommandLine(static_cast<int>(argc), argv); 
-            return 1;
+            return donut::app::GetGraphicsAPIFromCommandLine(static_cast<int>(argc), argv); 
         }, R"pbdoc(
         // TODO:
     )pbdoc");    
