@@ -1,6 +1,12 @@
 #include <string>
 #include <vector>
+
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+#include <pybind11/complex.h>
+#include <pybind11/functional.h>
+#include <pybind11/chrono.h>
+
 #include <donut/app/ApplicationBase.h>
 
 #pragma once
@@ -24,7 +30,8 @@ PYBIND11_MODULE(_pydonut, m) {
             const char* const* argv = cstrs.data();
             size_t argc = cstrs.size();
 
-            return donut::app::GetGraphicsAPIFromCommandLine(static_cast<int>(argc), argv); 
+            /*return*/ donut::app::GetGraphicsAPIFromCommandLine(static_cast<int>(argc), argv); 
+            return 1;
         }, R"pbdoc(
         // TODO:
     )pbdoc");    
