@@ -42,6 +42,10 @@ if (NVRHI_WITH_DX12)
         DESTINATION "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/D3D12/")
 endif()
 
+if (MSVC)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /MP")
+endif()
+
 # ---------------------------------------
 # Pybind11
 # ---------------------------------------
@@ -51,17 +55,22 @@ find_package(pybind11 CONFIG REQUIRED)
 
 pybind11_add_module(
 	_core MODULE 
-	src/cpp/_core.cpp)
+	src/cpp/_core.cpp
+)
 
 pybind11_add_module(
-	_pynri MODULE 
-	src/cpp/_pynri.cpp
-    src/cpp/pynri/Device.cpp)
+	_pydonut MODULE 
+	src/cpp/_pydonut.cpp
+)
 
-target_include_directories(_pynri PRIVATE
+target_include_directories(_pydonut PRIVATE
     src/cpp
     include
 )    
 
+target_link_libraries(_pydonut PRIVATE 
+    donut_app 
+    donut_engine)
+
 install(TARGETS _core DESTINATION ${SKBUILD_PROJECT_NAME})
-install(TARGETS _pynri DESTINATION ${SKBUILD_PROJECT_NAME})
+install(TARGETS _pydonut DESTINATION ${SKBUILD_PROJECT_NAME})
