@@ -6,3 +6,7 @@ class GraphicsAPI(Enum):
     Vulkan = 2
 
 def GetGraphicsAPIFromCommandLine(args: list[str]) -> GraphicsAPI: ...
+
+class DeviceManager():
+    @staticmethod
+    def Create(api: GraphicsAPI = GraphicsAPI.Vulkan) -> DeviceManager: ...

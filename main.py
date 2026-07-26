@@ -11,5 +11,7 @@ if __name__ == "__main__":
     if not deviceManager:
         print("Failed to create DeviceManager.")
         exit(1)
+    else:
+        print("DeviceManager created successfully.")
 
     print("Done.")
