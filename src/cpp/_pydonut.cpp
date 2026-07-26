@@ -55,6 +55,9 @@ PYBIND11_MODULE(_pydonut, m) {
         py::arg("params"), 
         py::arg("windowTitle") = "");
     deviceManager.def(
+        "RunMessageLoop", 
+        &donut::app::DeviceManager::RunMessageLoop);
+    deviceManager.def(
         "Shutdown", 
         &donut::app::DeviceManager::Shutdown);
 
