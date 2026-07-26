@@ -1,8 +1,8 @@
 if __name__ == "__main__":
-    from src import pydonut as pyd
     import sys
+    from src import pydonut as pyd
 
-    print(pyd.hello_from_bin())
+    is_debug = True
 
     api = pyd.GetGraphicsAPIFromCommandLine(sys.argv)
     print(f"Selected Graphics API: {api}")
@@ -13,5 +13,15 @@ if __name__ == "__main__":
         exit(1)
     else:
         print("DeviceManager created successfully.")
+
+    deviceParams = pyd.DeviceCreationParameters()
+    if is_debug:
+        print("Debug mode is enabled.")
+        deviceParams.enableDebugRuntime = True
+        deviceParams.enableNvrhiValidationLayer = True
+
+    if not deviceManager.CreateWindowDeviceAndSwapChain(deviceParams, "PyDonut Window"):
+        print("Cannot initialize a graphics device with the requested parameters", file=sys.stderr)
+        exit(1)
 
     print("Done.")
