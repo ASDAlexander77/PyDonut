@@ -11,6 +11,6 @@ public:
     // void submit(const CommandBuffer& cmd);
 
 private:
-    nri::Device* m_device = nullptr;
+    //nri::Device* m_device = nullptr;
     // plus queues, allocator, etc.
 };

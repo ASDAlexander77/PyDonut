@@ -1,5 +1,5 @@
 #include <pybind11/pybind11.h>
-#include "Device.hpp"
+#include "pynri/Device.hpp"
 
 namespace py = pybind11;
 

@@ -7,7 +7,9 @@ authors = [
     { name = "ASDAlexander77", email = "duzhar@googlemail.com" }
 ]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "pybind11>=3.0.4",
+]
 
 [tool.scikit-build]
 minimum-version = "build-system.requires"

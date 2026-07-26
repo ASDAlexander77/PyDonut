@@ -46,7 +46,13 @@ pybind11_add_module(
 
 pybind11_add_module(
 	_pynri MODULE 
-	src/cpp/_pynri.cpp)
+	src/cpp/_pynri.cpp
+    src/cpp/pynri/Device.cpp)
+
+target_include_directories(_pynri PRIVATE
+    src/cpp
+    include
+)    
 
 install(TARGETS _core DESTINATION ${SKBUILD_PROJECT_NAME})
 install(TARGETS _pynri DESTINATION ${SKBUILD_PROJECT_NAME})
