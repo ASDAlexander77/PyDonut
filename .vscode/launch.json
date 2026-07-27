@@ -17,23 +17,8 @@
                 "enable": true
             },
             "justMyCode": false,
+            "cwd": "${workspaceFolder}",
+            "python": ".venv/Scripts/python.exe",
         },
-        {
-            "name": "Python DBG: UV",
-            "type": "debugpy",
-            "request": "launch",
-            "python": "uv",
-            "console": "integratedTerminal",
-            "pythonArgs": [
-                "run",
-                "${workspaceFolder}/main.py",
-            ],
-            "autoReload": {
-                "enable": true
-            },
-            "justMyCode": false,
-            "program": "${workspaceFolder}/runner.py"
-        },
-
     ]
 }
