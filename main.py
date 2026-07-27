@@ -2,6 +2,13 @@ if __name__ == "__main__":
     import sys
     from src import pydonut as pyd
 
+    # class BasicTriangle(pyd.IRenderPass):
+    #     __init__():
+    #         pass
+
+    #     def Init():
+    #         pass
+
     is_debug = "--debug" in sys.argv or "-d" in sys.argv
 
     api = pyd.GetGraphicsAPIFromCommandLine(sys.argv)
@@ -24,8 +31,11 @@ if __name__ == "__main__":
         print("Cannot initialize a graphics device with the requested parameters", file=sys.stderr)
         exit(1)
 
-    # TODO: finish it
-    deviceManager.RunMessageLoop()
+    # example = BasicTriangle(deviceManager)
+    # if example.Init():
+    #     deviceManager.AddRenderPassToBack(example)
+    #     deviceManager.RunMessageLoop()
+    #     deviceManager.RemoveRenderPass(example)
 
     deviceManager.Shutdown()
 
