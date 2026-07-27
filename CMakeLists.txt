@@ -18,6 +18,13 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 
+# _pydonut is a shared object (a Python extension module) that statically links donut's
+# libraries (donut_core/engine/app, nvrhi, glfw, imgui, ...) built below via
+# add_subdirectory(extern/donut). On Linux/macOS, static libraries linked into a shared
+# object must be position-independent; set this before that add_subdirectory() so it
+# applies to all of them. No-op on Windows.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 if (MSVC)
 	set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
@@ -76,17 +83,20 @@ target_link_libraries(_pydonut PRIVATE
 # here regardless of which subdirectory originally set it.
 #
 # The fetched package layout differs by platform (Windows zip: bin/<arch>/dxc.exe,
-# inc/dxcapi.h, lib/<arch>/dxcompiler.lib; Linux tarball: bin/dxc, include/dxcapi.h,
-# lib/libdxcompiler.so) -- so rather than hardcoding one layout, search a superset of
-# candidate directories at both possible depths above the dxc executable and let
-# find_path/find_library/find_file pick whichever actually exists.
+# inc/dxcapi.h, lib/<arch>/dxcompiler.lib; Linux tarball: bin/dxc,
+# include/dxc/dxcapi.h (nested one level deeper than Windows -- verified against the
+# actual fetched tarball), lib/libdxcompiler.so, lib/libdxil.so) -- so rather than
+# hardcoding one layout, search a superset of candidate directories at both possible
+# depths above the dxc executable and let find_path/find_library/find_file pick
+# whichever actually exists.
 if (SHADERMAKE_DXC_PATH AND EXISTS "${SHADERMAKE_DXC_PATH}")
     get_filename_component(DXC_BIN_DIR "${SHADERMAKE_DXC_PATH}" DIRECTORY)  # .../bin  or .../bin/<arch>
     get_filename_component(DXC_ROOT_1 "${DXC_BIN_DIR}" DIRECTORY)          # one level up
     get_filename_component(DXC_ROOT_2 "${DXC_ROOT_1}" DIRECTORY)          # two levels up
 
     find_path(DXC_INCLUDE_DIR NAMES dxcapi.h
-        PATHS "${DXC_ROOT_1}/inc" "${DXC_ROOT_1}/include" "${DXC_ROOT_2}/inc" "${DXC_ROOT_2}/include"
+        PATHS "${DXC_ROOT_1}/inc" "${DXC_ROOT_1}/include" "${DXC_ROOT_1}/include/dxc"
+              "${DXC_ROOT_2}/inc" "${DXC_ROOT_2}/include" "${DXC_ROOT_2}/include/dxc"
         NO_DEFAULT_PATH)
     find_library(DXC_LIB NAMES dxcompiler
         PATHS "${DXC_ROOT_1}/lib" "${DXC_ROOT_1}/lib/x64" "${DXC_ROOT_1}/lib/arm64"
@@ -95,8 +105,8 @@ if (SHADERMAKE_DXC_PATH AND EXISTS "${SHADERMAKE_DXC_PATH}")
     find_file(DXC_COMPILER_RUNTIME NAMES dxcompiler.dll libdxcompiler.so
         PATHS "${DXC_BIN_DIR}" "${DXC_ROOT_1}/lib" "${DXC_ROOT_1}/lib/x64"
         NO_DEFAULT_PATH)
-    find_file(DXC_SIGNER_RUNTIME NAMES dxil.dll
-        PATHS "${DXC_BIN_DIR}"
+    find_file(DXC_SIGNER_RUNTIME NAMES dxil.dll libdxil.so
+        PATHS "${DXC_BIN_DIR}" "${DXC_ROOT_1}/lib" "${DXC_ROOT_1}/lib/x64"
         NO_DEFAULT_PATH)
 endif()
 
