@@ -11,11 +11,12 @@
             "program": "${workspaceFolder}/main.py",
             "console": "integratedTerminal",
             "args": [
+                "--debug"
             ],
             "autoReload": {
                 "enable": true
             },
-            "justMyCode": false
+            "justMyCode": false,
         },
         {
             "name": "Python DBG: UV",

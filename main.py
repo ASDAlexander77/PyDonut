@@ -2,7 +2,7 @@ if __name__ == "__main__":
     import sys
     from src import pydonut as pyd
 
-    is_debug = True
+    is_debug = "--debug" in sys.argv or "-d" in sys.argv
 
     api = pyd.GetGraphicsAPIFromCommandLine(sys.argv)
     print(f"Selected Graphics API: {api}")
