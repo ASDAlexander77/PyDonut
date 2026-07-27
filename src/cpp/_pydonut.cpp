@@ -19,6 +19,11 @@
 #include <donut/engine/ShaderFactory.h>
 #include <nvrhi/utils.h>
 
+#if PYDONUT_HAVE_DXC
+#include <wrl/client.h>
+#include <dxcapi.h>
+#endif
+
 #pragma once
 
 namespace py = pybind11;
@@ -87,6 +92,93 @@ std::shared_ptr<T> DetachToShared(nvrhi::RefCountPtr<T> handle) {
     T* raw = handle.Detach();
     return std::shared_ptr<T>(raw, [](T* p) { if (p) p->Release(); });
 }
+
+#if PYDONUT_HAVE_DXC
+
+std::wstring ToWide(const std::string &s) {
+    return std::wstring(s.begin(), s.end());
+}
+
+const wchar_t* HlslProfilePrefix(nvrhi::ShaderType shaderType) {
+    switch (shaderType) {
+        case nvrhi::ShaderType::Vertex:        return L"vs";
+        case nvrhi::ShaderType::Hull:           return L"hs";
+        case nvrhi::ShaderType::Domain:          return L"ds";
+        case nvrhi::ShaderType::Geometry:        return L"gs";
+        case nvrhi::ShaderType::Pixel:            return L"ps";
+        case nvrhi::ShaderType::Compute:          return L"cs";
+        case nvrhi::ShaderType::Amplification:    return L"as";
+        case nvrhi::ShaderType::Mesh:              return L"ms";
+        default:
+            throw std::invalid_argument(
+                "CompileShader: shaderType must be one of Vertex, Hull, Domain, Geometry, Pixel, Compute, Amplification or Mesh");
+    }
+}
+
+// Compiles HLSL source to DXIL (D3D12) or SPIR-V (Vulkan) in-process via DXC, entirely
+// in memory -- no ShaderMake, no external process, no filesystem round-trip.
+py::bytes CompileShaderWithDXC(
+    const std::string &source,
+    const std::string &entryPoint,
+    nvrhi::ShaderType shaderType,
+    nvrhi::GraphicsAPI api,
+    const std::string &sourceName,
+    const std::string &shaderModel)
+{
+    using Microsoft::WRL::ComPtr;
+
+    ComPtr<IDxcUtils> utils;
+    ComPtr<IDxcCompiler3> compiler;
+    if (FAILED(DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils))) ||
+        FAILED(DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler))))
+        throw std::runtime_error("CompileShader: failed to create the DXC compiler instance");
+
+    ComPtr<IDxcIncludeHandler> includeHandler;
+    utils->CreateDefaultIncludeHandler(&includeHandler);
+
+    std::wstring wEntryPoint = ToWide(entryPoint);
+    std::wstring wProfile = std::wstring(HlslProfilePrefix(shaderType)) + L"_" + ToWide(shaderModel);
+    std::wstring wSourceName = ToWide(sourceName);
+
+    std::vector<LPCWSTR> args = {
+        wSourceName.c_str(),
+        L"-E", wEntryPoint.c_str(),
+        L"-T", wProfile.c_str(),
+    };
+    if (api == nvrhi::GraphicsAPI::VULKAN)
+        args.push_back(L"-spirv");
+
+    DxcBuffer sourceBuffer{};
+    sourceBuffer.Ptr = source.data();
+    sourceBuffer.Size = source.size();
+    sourceBuffer.Encoding = DXC_CP_UTF8;
+
+    ComPtr<IDxcResult> result;
+    HRESULT hr = compiler->Compile(&sourceBuffer, args.data(), (UINT32)args.size(), includeHandler.Get(), IID_PPV_ARGS(&result));
+    if (FAILED(hr) || !result)
+        throw std::runtime_error("CompileShader: the DXC Compile() call itself failed");
+
+    ComPtr<IDxcBlobUtf8> errors;
+    result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errors), nullptr);
+
+    HRESULT status = S_OK;
+    result->GetStatus(&status);
+    if (FAILED(status)) {
+        std::string message = "CompileShader: shader compilation failed";
+        if (errors && errors->GetStringLength() > 0)
+            message = std::string(errors->GetStringPointer(), errors->GetStringLength());
+        throw std::runtime_error(message);
+    }
+
+    ComPtr<IDxcBlob> object;
+    result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&object), nullptr);
+    if (!object || object->GetBufferSize() == 0)
+        throw std::runtime_error("CompileShader: DXC produced no output object");
+
+    return py::bytes(reinterpret_cast<const char*>(object->GetBufferPointer()), object->GetBufferSize());
+}
+
+#endif // PYDONUT_HAVE_DXC
 
 } // namespace
 
@@ -345,6 +437,12 @@ PYBIND11_MODULE(_pydonut, m) {
     device.def("executeCommandList", [](nvrhi::IDevice &self, nvrhi::ICommandList* cmdList, nvrhi::CommandQueue executionQueue) {
         return self.executeCommandList(cmdList, executionQueue);
     }, py::arg("commandList"), py::arg("executionQueue") = nvrhi::CommandQueue::Graphics);
+    device.def("createShader", [](nvrhi::IDevice &self, const std::string &bytecode, const std::string &entryName, nvrhi::ShaderType shaderType) {
+        nvrhi::ShaderDesc desc;
+        desc.shaderType = shaderType;
+        desc.entryName = entryName;
+        return DetachToShared(self.createShader(desc, bytecode.data(), bytecode.size()));
+    }, py::arg("bytecode"), py::arg("entryName"), py::arg("shaderType"));
 
     commandList.def("open", &nvrhi::ICommandList::open);
     commandList.def("close", &nvrhi::ICommandList::close);
@@ -356,6 +454,12 @@ PYBIND11_MODULE(_pydonut, m) {
 
     m.def("GetDirectoryWithExecutable", &donut::app::GetDirectoryWithExecutable);
     m.def("GetShaderTypeName", &donut::app::GetShaderTypeName, py::arg("api"));
+
+#if PYDONUT_HAVE_DXC
+    m.def("CompileShader", &CompileShaderWithDXC,
+        py::arg("source"), py::arg("entryPoint"), py::arg("shaderType"), py::arg("api"),
+        py::arg("sourceName") = "shader.hlsl", py::arg("shaderModel") = "6_5");
+#endif
 
     py::class_<donut::vfs::IFileSystem, std::shared_ptr<donut::vfs::IFileSystem>>(m, "IFileSystem");
     py::class_<donut::vfs::NativeFileSystem, donut::vfs::IFileSystem, std::shared_ptr<donut::vfs::NativeFileSystem>>(m, "NativeFileSystem")

@@ -35,6 +35,12 @@ from pydonut._pydonut import GetDirectoryWithExecutable
 from pydonut._pydonut import GetShaderTypeName
 from pydonut._pydonut import ClearColorAttachment
 
+try:
+    # Only present when the native module was built with DXC available.
+    from pydonut._pydonut import CompileShader
+except ImportError:
+    CompileShader = None
+
 __all__ = (
     'hello_from_bin',
     'GraphicsAPI',
@@ -70,4 +76,5 @@ __all__ = (
     'GetDirectoryWithExecutable',
     'GetShaderTypeName',
     'ClearColorAttachment',
+    'CompileShader',
 )

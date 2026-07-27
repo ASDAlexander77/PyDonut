@@ -17,13 +17,21 @@ if __name__ == "__main__":
 
         def Init(self: BasicTriangle) -> bool:
             device = self.GetDevice()
-            appShaderPath = folder / "shaders" / "basic_triangle" / pyd.GetShaderTypeName(device.getGraphicsAPI())
+            api = device.getGraphicsAPI()
 
-            nativeFS = pyd.NativeFileSystem()
-            shaderFactory = pyd.ShaderFactory(device, nativeFS, appShaderPath)
+            shaderPath = folder / "shaders" / "basic_triangle" / "shaders.hlsl"
+            source = shaderPath.read_text(encoding="utf-8")
 
-            self.vertexShader = shaderFactory.CreateShader("shaders.hlsl", "main_vs", pyd.ShaderType.Vertex)
-            self.pixelShader = shaderFactory.CreateShader("shaders.hlsl", "main_ps", pyd.ShaderType.Pixel)
+            try:
+                assert pyd.CompileShader
+                vsBytecode = pyd.CompileShader(source, "main_vs", pyd.ShaderType.Vertex, api, sourceName=shaderPath.name)
+                psBytecode = pyd.CompileShader(source, "main_ps", pyd.ShaderType.Pixel, api, sourceName=shaderPath.name)
+            except RuntimeError as e:
+                print(f"Shader compilation failed: {e}", file=sys.stderr)
+                return False
+
+            self.vertexShader = device.createShader(vsBytecode, "main_vs", pyd.ShaderType.Vertex)
+            self.pixelShader = device.createShader(psBytecode, "main_ps", pyd.ShaderType.Pixel)
 
             if not self.vertexShader or not self.pixelShader:
                 return False

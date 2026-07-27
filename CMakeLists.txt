@@ -66,11 +66,51 @@ pybind11_add_module(
 target_include_directories(_pydonut PRIVATE
     src/cpp
     include
-)    
+)
 
-target_link_libraries(_pydonut PRIVATE 
-    donut_app 
+target_link_libraries(_pydonut PRIVATE
+    donut_app
     donut_engine)
+
+# ---------------------------------------
+# DXC (in-process HLSL -> DXIL/SPIR-V compilation, for pyd.CompileShader)
+# ---------------------------------------
+
+# ShaderMake's own CMakeLists.txt (pulled in via add_subdirectory(extern/donut) above)
+# fetches DXC and records its path in this CACHE INTERNAL variable, so it is visible
+# here regardless of which subdirectory originally set it.
+if (SHADERMAKE_DXC_PATH AND EXISTS "${SHADERMAKE_DXC_PATH}")
+    get_filename_component(DXC_BIN_DIR "${SHADERMAKE_DXC_PATH}" DIRECTORY)   # .../bin/<arch>
+    get_filename_component(DXC_ARCH "${DXC_BIN_DIR}" NAME)                  # <arch>
+    get_filename_component(DXC_BIN "${DXC_BIN_DIR}" DIRECTORY)              # .../bin
+    get_filename_component(DXC_ROOT "${DXC_BIN}" DIRECTORY)                 # DXC package root
+
+    set(DXC_INCLUDE_DIR "${DXC_ROOT}/inc")
+    set(DXC_LIB "${DXC_ROOT}/lib/${DXC_ARCH}/dxcompiler.lib")
+    set(DXC_COMPILER_DLL "${DXC_BIN_DIR}/dxcompiler.dll")
+    set(DXC_SIGNER_DLL "${DXC_BIN_DIR}/dxil.dll")
+endif()
+
+if (DXC_INCLUDE_DIR AND EXISTS "${DXC_INCLUDE_DIR}/dxcapi.h" AND EXISTS "${DXC_LIB}" AND EXISTS "${DXC_COMPILER_DLL}")
+    message(STATUS "pydonut: DXC found at '${DXC_ROOT}' -- enabling pyd.CompileShader")
+    target_include_directories(_pydonut PRIVATE "${DXC_INCLUDE_DIR}")
+    target_link_libraries(_pydonut PRIVATE "${DXC_LIB}")
+    target_compile_definitions(_pydonut PRIVATE PYDONUT_HAVE_DXC=1)
+
+    set(DXC_RUNTIME_DLLS "${DXC_COMPILER_DLL}")
+    if (EXISTS "${DXC_SIGNER_DLL}")
+        list(APPEND DXC_RUNTIME_DLLS "${DXC_SIGNER_DLL}")
+    endif()
+
+    add_custom_command(TARGET _pydonut POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${DXC_RUNTIME_DLLS} "$<TARGET_FILE_DIR:_pydonut>"
+        COMMENT "pydonut: copying DXC runtime DLLs next to _pydonut")
+
+    install(FILES ${DXC_RUNTIME_DLLS} DESTINATION ${SKBUILD_PROJECT_NAME})
+else()
+    message(WARNING "pydonut: DXC not found -- pyd.CompileShader will not be available. "
+                     "Set SHADERMAKE_DXC_PATH to a DXC install to enable it.")
+endif()
 
 install(TARGETS _core DESTINATION ${SKBUILD_PROJECT_NAME})
 install(TARGETS _pydonut DESTINATION ${SKBUILD_PROJECT_NAME})
