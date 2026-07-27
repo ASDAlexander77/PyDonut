@@ -23,7 +23,7 @@ if __name__ == "__main__":
             source = shaderPath.read_text(encoding="utf-8")
 
             try:
-                assert pyd.CompileShader
+                assert pyd.CompileShader is not None
                 vsBytecode = pyd.CompileShader(source, "main_vs", pyd.ShaderType.Vertex, api, sourceName=shaderPath.name)
                 psBytecode = pyd.CompileShader(source, "main_ps", pyd.ShaderType.Pixel, api, sourceName=shaderPath.name)
             except RuntimeError as e:
@@ -76,7 +76,6 @@ if __name__ == "__main__":
 
             self.commandList.close()
             device.executeCommandList(self.commandList)
-
 
     is_debug = "--debug" in sys.argv or "-d" in sys.argv
 

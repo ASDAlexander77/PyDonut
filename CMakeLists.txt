@@ -54,11 +54,6 @@ set(PYBIND11_FINDPYTHON ON)
 find_package(pybind11 CONFIG REQUIRED)
 
 pybind11_add_module(
-	_core MODULE 
-	src/cpp/_core.cpp
-)
-
-pybind11_add_module(
 	_pydonut MODULE 
 	src/cpp/_pydonut.cpp
 )
@@ -79,38 +74,55 @@ target_link_libraries(_pydonut PRIVATE
 # ShaderMake's own CMakeLists.txt (pulled in via add_subdirectory(extern/donut) above)
 # fetches DXC and records its path in this CACHE INTERNAL variable, so it is visible
 # here regardless of which subdirectory originally set it.
+#
+# The fetched package layout differs by platform (Windows zip: bin/<arch>/dxc.exe,
+# inc/dxcapi.h, lib/<arch>/dxcompiler.lib; Linux tarball: bin/dxc, include/dxcapi.h,
+# lib/libdxcompiler.so) -- so rather than hardcoding one layout, search a superset of
+# candidate directories at both possible depths above the dxc executable and let
+# find_path/find_library/find_file pick whichever actually exists.
 if (SHADERMAKE_DXC_PATH AND EXISTS "${SHADERMAKE_DXC_PATH}")
-    get_filename_component(DXC_BIN_DIR "${SHADERMAKE_DXC_PATH}" DIRECTORY)   # .../bin/<arch>
-    get_filename_component(DXC_ARCH "${DXC_BIN_DIR}" NAME)                  # <arch>
-    get_filename_component(DXC_BIN "${DXC_BIN_DIR}" DIRECTORY)              # .../bin
-    get_filename_component(DXC_ROOT "${DXC_BIN}" DIRECTORY)                 # DXC package root
+    get_filename_component(DXC_BIN_DIR "${SHADERMAKE_DXC_PATH}" DIRECTORY)  # .../bin  or .../bin/<arch>
+    get_filename_component(DXC_ROOT_1 "${DXC_BIN_DIR}" DIRECTORY)          # one level up
+    get_filename_component(DXC_ROOT_2 "${DXC_ROOT_1}" DIRECTORY)          # two levels up
 
-    set(DXC_INCLUDE_DIR "${DXC_ROOT}/inc")
-    set(DXC_LIB "${DXC_ROOT}/lib/${DXC_ARCH}/dxcompiler.lib")
-    set(DXC_COMPILER_DLL "${DXC_BIN_DIR}/dxcompiler.dll")
-    set(DXC_SIGNER_DLL "${DXC_BIN_DIR}/dxil.dll")
+    find_path(DXC_INCLUDE_DIR NAMES dxcapi.h
+        PATHS "${DXC_ROOT_1}/inc" "${DXC_ROOT_1}/include" "${DXC_ROOT_2}/inc" "${DXC_ROOT_2}/include"
+        NO_DEFAULT_PATH)
+    find_library(DXC_LIB NAMES dxcompiler
+        PATHS "${DXC_ROOT_1}/lib" "${DXC_ROOT_1}/lib/x64" "${DXC_ROOT_1}/lib/arm64"
+              "${DXC_ROOT_2}/lib" "${DXC_ROOT_2}/lib/x64" "${DXC_ROOT_2}/lib/arm64"
+        NO_DEFAULT_PATH)
+    find_file(DXC_COMPILER_RUNTIME NAMES dxcompiler.dll libdxcompiler.so
+        PATHS "${DXC_BIN_DIR}" "${DXC_ROOT_1}/lib" "${DXC_ROOT_1}/lib/x64"
+        NO_DEFAULT_PATH)
+    find_file(DXC_SIGNER_RUNTIME NAMES dxil.dll
+        PATHS "${DXC_BIN_DIR}"
+        NO_DEFAULT_PATH)
 endif()
 
-if (DXC_INCLUDE_DIR AND EXISTS "${DXC_INCLUDE_DIR}/dxcapi.h" AND EXISTS "${DXC_LIB}" AND EXISTS "${DXC_COMPILER_DLL}")
-    message(STATUS "pydonut: DXC found at '${DXC_ROOT}' -- enabling pyd.CompileShader")
+if (DXC_INCLUDE_DIR AND DXC_LIB AND DXC_COMPILER_RUNTIME)
+    message(STATUS "pydonut: DXC found (${DXC_LIB}) -- enabling pyd.CompileShader")
     target_include_directories(_pydonut PRIVATE "${DXC_INCLUDE_DIR}")
     target_link_libraries(_pydonut PRIVATE "${DXC_LIB}")
     target_compile_definitions(_pydonut PRIVATE PYDONUT_HAVE_DXC=1)
+    if (NOT WIN32)
+        # rpath so the loader finds libdxcompiler.so next to _pydonut without LD_LIBRARY_PATH
+        set_target_properties(_pydonut PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
+    endif()
 
-    set(DXC_RUNTIME_DLLS "${DXC_COMPILER_DLL}")
-    if (EXISTS "${DXC_SIGNER_DLL}")
-        list(APPEND DXC_RUNTIME_DLLS "${DXC_SIGNER_DLL}")
+    set(DXC_RUNTIME_FILES "${DXC_COMPILER_RUNTIME}")
+    if (DXC_SIGNER_RUNTIME)
+        list(APPEND DXC_RUNTIME_FILES "${DXC_SIGNER_RUNTIME}")
     endif()
 
     add_custom_command(TARGET _pydonut POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${DXC_RUNTIME_DLLS} "$<TARGET_FILE_DIR:_pydonut>"
-        COMMENT "pydonut: copying DXC runtime DLLs next to _pydonut")
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${DXC_RUNTIME_FILES} "$<TARGET_FILE_DIR:_pydonut>"
+        COMMENT "pydonut: copying DXC runtime library next to _pydonut")
 
-    install(FILES ${DXC_RUNTIME_DLLS} DESTINATION ${SKBUILD_PROJECT_NAME})
+    install(FILES ${DXC_RUNTIME_FILES} DESTINATION ${SKBUILD_PROJECT_NAME})
 else()
     message(WARNING "pydonut: DXC not found -- pyd.CompileShader will not be available. "
                      "Set SHADERMAKE_DXC_PATH to a DXC install to enable it.")
 endif()
 
-install(TARGETS _core DESTINATION ${SKBUILD_PROJECT_NAME})
 install(TARGETS _pydonut DESTINATION ${SKBUILD_PROJECT_NAME})

@@ -20,11 +20,8 @@
 #include <nvrhi/utils.h>
 
 #if PYDONUT_HAVE_DXC
-#include <wrl/client.h>
 #include <dxcapi.h>
 #endif
-
-#pragma once
 
 namespace py = pybind11;
 
@@ -95,6 +92,30 @@ std::shared_ptr<T> DetachToShared(nvrhi::RefCountPtr<T> handle) {
 
 #if PYDONUT_HAVE_DXC
 
+// Minimal COM smart pointer, standing in for Microsoft::WRL::ComPtr (Windows-only,
+// part of the Windows SDK) so this compiles against DXC's cross-platform COM-lite
+// layer (WinAdapter.h) on Linux too -- DXC ships IUnknown/HRESULT/IID_PPV_ARGS etc.
+// there, just not <wrl/client.h> itself.
+template <typename T>
+class ComPtr {
+public:
+    ComPtr() noexcept : ptr_(nullptr) {}
+    ComPtr(const ComPtr &) = delete;
+    ComPtr &operator=(const ComPtr &) = delete;
+    ~ComPtr() { if (ptr_) ptr_->Release(); }
+
+    T **operator&() noexcept {
+        if (ptr_) { ptr_->Release(); ptr_ = nullptr; }
+        return &ptr_;
+    }
+    T *operator->() const noexcept { return ptr_; }
+    T *Get() const noexcept { return ptr_; }
+    explicit operator bool() const noexcept { return ptr_ != nullptr; }
+
+private:
+    T *ptr_;
+};
+
 std::wstring ToWide(const std::string &s) {
     return std::wstring(s.begin(), s.end());
 }
@@ -125,8 +146,6 @@ py::bytes CompileShaderWithDXC(
     const std::string &sourceName,
     const std::string &shaderModel)
 {
-    using Microsoft::WRL::ComPtr;
-
     ComPtr<IDxcUtils> utils;
     ComPtr<IDxcCompiler3> compiler;
     if (FAILED(DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils))) ||
