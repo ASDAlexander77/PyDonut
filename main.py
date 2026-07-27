@@ -1,4 +1,3 @@
-from xmlrpc.client import Boolean
 if __name__ == "__main__":
     import sys
     from src import pydonut as pyd
@@ -8,7 +7,7 @@ if __name__ == "__main__":
             super().__init__(deviceManager)
             pass
 
-        def Init(self: BasicTriangle) -> Boolean:
+        def Init(self: BasicTriangle) -> bool:
             return True
 
         def BackBufferResizing(self: BasicTriangle):
