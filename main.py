@@ -1,71 +1,73 @@
 if __name__ == "__main__":
     import sys
+    from pathlib import Path
     from typing import Optional
     from src import pydonut as pyd
 
     WINDOW_TITLE = "PyDonut Basic Triangle"
+    folder = Path(__file__).resolve().parent
 
     class BasicTriangle(pyd.IRenderPass):
         def __init__(self: BasicTriangle, deviceManager: pyd.DeviceManager) -> None:
             super().__init__(deviceManager)
-            self.m_VertexShader: Optional[pyd.Shader] = None
-            self.m_PixelShader: Optional[pyd.Shader] = None
-            self.m_Pipeline: Optional[pyd.GraphicsPipeline] = None
-            self.m_CommandList: Optional[pyd.CommandList] = None
+            self.vertexShader: Optional[pyd.Shader] = None
+            self.pixelShader: Optional[pyd.Shader] = None
+            self.pipeline: Optional[pyd.GraphicsPipeline] = None
+            self.commandList: Optional[pyd.CommandList] = None
 
         def Init(self: BasicTriangle) -> bool:
             device = self.GetDevice()
-            appShaderPath = pyd.GetDirectoryWithExecutable() / "shaders" / "basic_triangle" / pyd.GetShaderTypeName(device.getGraphicsAPI())
+            appShaderPath = folder / "shaders" / "basic_triangle" / pyd.GetShaderTypeName(device.getGraphicsAPI())
 
             nativeFS = pyd.NativeFileSystem()
             shaderFactory = pyd.ShaderFactory(device, nativeFS, appShaderPath)
 
-            self.m_VertexShader = shaderFactory.CreateShader("shaders.hlsl", "main_vs", pyd.ShaderType.Vertex)
-            self.m_PixelShader = shaderFactory.CreateShader("shaders.hlsl", "main_ps", pyd.ShaderType.Pixel)
+            self.vertexShader = shaderFactory.CreateShader("shaders.hlsl", "main_vs", pyd.ShaderType.Vertex)
+            self.pixelShader = shaderFactory.CreateShader("shaders.hlsl", "main_ps", pyd.ShaderType.Pixel)
 
-            if not self.m_VertexShader or not self.m_PixelShader:
+            if not self.vertexShader or not self.pixelShader:
                 return False
 
-            self.m_CommandList = device.createCommandList()
+            self.commandList = device.createCommandList()
 
             return True
 
         def BackBufferResizing(self: BasicTriangle):
-            self.m_Pipeline = None
+            self.pipeline = None
 
         def Animate(self: BasicTriangle, elapsedTimeSeconds: float):
             self.GetDeviceManager().SetInformativeWindowTitle(WINDOW_TITLE)
 
         def Render(self: BasicTriangle, framebuffer: pyd.Framebuffer):
             device = self.GetDevice()
-            assert self.m_CommandList is not None
+            assert self.commandList is not None
 
-            if not self.m_Pipeline:
+            if not self.pipeline:
                 psoDesc = pyd.GraphicsPipelineDesc()
-                psoDesc.VS = self.m_VertexShader
-                psoDesc.PS = self.m_PixelShader
+                psoDesc.VS = self.vertexShader
+                psoDesc.PS = self.pixelShader
                 psoDesc.primType = pyd.PrimitiveType.TriangleList
                 psoDesc.renderState.depthStencilState.depthTestEnable = False
 
-                self.m_Pipeline = device.createGraphicsPipeline(psoDesc, framebuffer.getFramebufferInfo())
+                self.pipeline = device.createGraphicsPipeline(psoDesc, framebuffer.getFramebufferInfo())
 
-            self.m_CommandList.open()
+            self.commandList.open()
 
-            pyd.ClearColorAttachment(self.m_CommandList, framebuffer, 0, pyd.Color(0.0))
+            pyd.ClearColorAttachment(self.commandList, framebuffer, 0, pyd.Color(0.0))
 
             state = pyd.GraphicsState()
-            state.pipeline = self.m_Pipeline
+            state.pipeline = self.pipeline
             state.framebuffer = framebuffer
             state.viewport.addViewportAndScissorRect(framebuffer.getFramebufferInfo().getViewport())
 
-            self.m_CommandList.setGraphicsState(state)
+            self.commandList.setGraphicsState(state)
 
             args = pyd.DrawArguments()
             args.vertexCount = 3
-            self.m_CommandList.draw(args)
+            self.commandList.draw(args)
 
-            self.m_CommandList.close()
-            device.executeCommandList(self.m_CommandList)
+            self.commandList.close()
+            device.executeCommandList(self.commandList)
 
 
     is_debug = "--debug" in sys.argv or "-d" in sys.argv
