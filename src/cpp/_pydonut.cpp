@@ -518,6 +518,7 @@ PYBIND11_MODULE(_pydonut, m) {
     // owning reference, handed to Python as a std::shared_ptr that Releases() on collection.
     py::class_<nvrhi::IShader, std::shared_ptr<nvrhi::IShader>>(m, "Shader");
     py::class_<nvrhi::IGraphicsPipeline, std::shared_ptr<nvrhi::IGraphicsPipeline>>(m, "GraphicsPipeline");
+    py::class_<nvrhi::IMeshletPipeline, std::shared_ptr<nvrhi::IMeshletPipeline>>(m, "MeshletPipeline");
     py::class_<nvrhi::ICommandList, std::shared_ptr<nvrhi::ICommandList>> commandList(m, "CommandList");
     py::class_<nvrhi::IBuffer, std::shared_ptr<nvrhi::IBuffer>> buffer(m, "Buffer");
     py::class_<nvrhi::IBindingLayout, std::shared_ptr<nvrhi::IBindingLayout>> bindingLayout(m, "BindingLayout");
@@ -606,6 +607,35 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_property("framebuffer",
             [](const nvrhi::GraphicsState &s) -> nvrhi::IFramebuffer* { return s.framebuffer; },
             [](nvrhi::GraphicsState &s, nvrhi::IFramebuffer* fb) { s.framebuffer = fb; },
+            py::return_value_policy::reference);
+
+    py::class_<nvrhi::MeshletPipelineDesc>(m, "MeshletPipelineDesc")
+        .def(py::init<>())
+        .def_readwrite("primType", &nvrhi::MeshletPipelineDesc::primType)
+        .def_readwrite("renderState", &nvrhi::MeshletPipelineDesc::renderState)
+        .def_property("AS",
+            [](const nvrhi::MeshletPipelineDesc &d) -> nvrhi::IShader* { return d.AS.Get(); },
+            [](nvrhi::MeshletPipelineDesc &d, nvrhi::IShader* shader) { d.AS = shader; },
+            py::return_value_policy::reference)
+        .def_property("MS",
+            [](const nvrhi::MeshletPipelineDesc &d) -> nvrhi::IShader* { return d.MS.Get(); },
+            [](nvrhi::MeshletPipelineDesc &d, nvrhi::IShader* shader) { d.MS = shader; },
+            py::return_value_policy::reference)
+        .def_property("PS",
+            [](const nvrhi::MeshletPipelineDesc &d) -> nvrhi::IShader* { return d.PS.Get(); },
+            [](nvrhi::MeshletPipelineDesc &d, nvrhi::IShader* shader) { d.PS = shader; },
+            py::return_value_policy::reference);
+
+    py::class_<nvrhi::MeshletState>(m, "MeshletState")
+        .def(py::init<>())
+        .def_readwrite("viewport", &nvrhi::MeshletState::viewport)
+        .def_property("pipeline",
+            [](const nvrhi::MeshletState &s) -> nvrhi::IMeshletPipeline* { return s.pipeline; },
+            [](nvrhi::MeshletState &s, nvrhi::IMeshletPipeline* p) { s.pipeline = p; },
+            py::return_value_policy::reference)
+        .def_property("framebuffer",
+            [](const nvrhi::MeshletState &s) -> nvrhi::IFramebuffer* { return s.framebuffer; },
+            [](nvrhi::MeshletState &s, nvrhi::IFramebuffer* fb) { s.framebuffer = fb; },
             py::return_value_policy::reference);
 
     py::class_<nvrhi::BufferDesc>(m, "BufferDesc")
@@ -763,6 +793,9 @@ PYBIND11_MODULE(_pydonut, m) {
     device.def("createGraphicsPipeline", [](nvrhi::IDevice &self, const nvrhi::GraphicsPipelineDesc &desc, const nvrhi::FramebufferInfoEx &framebufferInfo) {
         return DetachToShared(self.createGraphicsPipeline(desc, framebufferInfo));
     }, py::arg("desc"), py::arg("framebufferInfo"));
+    device.def("createMeshletPipeline", [](nvrhi::IDevice &self, const nvrhi::MeshletPipelineDesc &desc, const nvrhi::FramebufferInfoEx &framebufferInfo) {
+        return DetachToShared(self.createMeshletPipeline(desc, framebufferInfo));
+    }, py::arg("desc"), py::arg("framebufferInfo"));
     device.def("executeCommandList", [](nvrhi::IDevice &self, nvrhi::ICommandList* cmdList, nvrhi::CommandQueue executionQueue) {
         return self.executeCommandList(cmdList, executionQueue);
     }, py::arg("commandList"), py::arg("executionQueue") = nvrhi::CommandQueue::Graphics);
@@ -798,6 +831,9 @@ PYBIND11_MODULE(_pydonut, m) {
     commandList.def("close", &nvrhi::ICommandList::close);
     commandList.def("setGraphicsState", &nvrhi::ICommandList::setGraphicsState, py::arg("state"));
     commandList.def("draw", &nvrhi::ICommandList::draw, py::arg("args"));
+    commandList.def("setMeshletState", &nvrhi::ICommandList::setMeshletState, py::arg("state"));
+    commandList.def("dispatchMesh", &nvrhi::ICommandList::dispatchMesh,
+        py::arg("groupsX"), py::arg("groupsY") = 1, py::arg("groupsZ") = 1);
     commandList.def("writeBuffer", [](nvrhi::ICommandList &self, nvrhi::IBuffer* buffer, py::buffer data, uint64_t destOffsetBytes) {
         py::buffer_info info = data.request();
         self.writeBuffer(buffer, info.ptr, static_cast<size_t>(info.size * info.itemsize), destOffsetBytes);

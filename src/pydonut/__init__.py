@@ -19,6 +19,8 @@ from pydonut._pydonut import RenderState
 from pydonut._pydonut import DrawArguments
 from pydonut._pydonut import GraphicsPipelineDesc
 from pydonut._pydonut import GraphicsState
+from pydonut._pydonut import MeshletPipelineDesc
+from pydonut._pydonut import MeshletState
 from pydonut._pydonut import BufferDesc
 from pydonut._pydonut import TextureDesc
 from pydonut._pydonut import FramebufferAttachment
@@ -41,6 +43,7 @@ from pydonut._pydonut import Texture
 from pydonut._pydonut import Shader
 from pydonut._pydonut import ShaderLibrary
 from pydonut._pydonut import GraphicsPipeline
+from pydonut._pydonut import MeshletPipeline
 from pydonut._pydonut import RayTracingPipeline
 from pydonut._pydonut import ShaderTable
 from pydonut._pydonut import CommandList
@@ -95,6 +98,8 @@ __all__ = (
     'DrawArguments',
     'GraphicsPipelineDesc',
     'GraphicsState',
+    'MeshletPipelineDesc',
+    'MeshletState',
     'BufferDesc',
     'TextureDesc',
     'FramebufferAttachment',
@@ -117,6 +122,7 @@ __all__ = (
     'Shader',
     'ShaderLibrary',
     'GraphicsPipeline',
+    'MeshletPipeline',
     'RayTracingPipeline',
     'ShaderTable',
     'CommandList',
