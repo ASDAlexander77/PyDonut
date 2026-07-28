@@ -181,6 +181,19 @@ py::bytes RunDXC(const std::string &source, std::vector<LPCWSTR> args)
     return py::bytes(reinterpret_cast<const char*>(object->GetBufferPointer()), object->GetBufferSize());
 }
 
+// NVRHI's default VulkanBindingOffsets (see nvrhi::BindingLayoutDesc::bindingOffsets in
+// nvrhi.h) place HLSL's separate t/s/b/u register spaces into disjoint Vulkan binding
+// number ranges -- Vulkan has one flat binding namespace per descriptor set, unlike
+// DX's separate SRV/Sampler/CBV/UAV register classes. DXC must be told to apply the same
+// shifts when cross-compiling to SPIR-V, or e.g. t0 and u0 both land on binding 0 and
+// collide (this is exactly what the Vulkan validation layer flags if omitted).
+void AddVulkanBindingShiftArgs(std::vector<LPCWSTR> &args) {
+    args.push_back(L"-fvk-t-shift"); args.push_back(L"0");   args.push_back(L"0");
+    args.push_back(L"-fvk-s-shift"); args.push_back(L"128"); args.push_back(L"0");
+    args.push_back(L"-fvk-b-shift"); args.push_back(L"256"); args.push_back(L"0");
+    args.push_back(L"-fvk-u-shift"); args.push_back(L"384"); args.push_back(L"0");
+}
+
 // Compiles HLSL source to DXIL (D3D12) or SPIR-V (Vulkan) in-process via DXC, entirely
 // in memory -- no ShaderMake, no external process, no filesystem round-trip.
 py::bytes CompileShaderWithDXC(
@@ -200,8 +213,10 @@ py::bytes CompileShaderWithDXC(
         L"-E", wEntryPoint.c_str(),
         L"-T", wProfile.c_str(),
     };
-    if (api == nvrhi::GraphicsAPI::VULKAN)
+    if (api == nvrhi::GraphicsAPI::VULKAN) {
         args.push_back(L"-spirv");
+        AddVulkanBindingShiftArgs(args);
+    }
 
     return RunDXC(source, args);
 }
@@ -227,6 +242,7 @@ py::bytes CompileShaderLibraryWithDXC(
         // Ray tracing needs SPIR-V 1.4+ / Vulkan 1.1+, above DXC's default target env.
         args.push_back(L"-spirv");
         args.push_back(L"-fspv-target-env=vulkan1.2");
+        AddVulkanBindingShiftArgs(args);
     }
 
     return RunDXC(source, args);

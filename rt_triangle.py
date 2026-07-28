@@ -42,8 +42,16 @@ if __name__ == "__main__":
             if not self.shaderLibrary:
                 return False
 
-            nativeFS = pyd.NativeFileSystem()
-            shaderFactory = pyd.ShaderFactory(device, nativeFS, folder / "shaders")
+            # CommonRenderPasses' own shaders (blit/fullscreen/etc.) are only statically
+            # linked in when Donut is built with DONUT_WITH_STATIC_SHADERS, which this
+            # project's CMake leaves off -- so it always reads them as precompiled .bin
+            # files instead, via the filesystem. Those are produced by ShaderMake as part
+            # of the normal `uv sync` build (see CMAKE_RUNTIME_OUTPUT_DIRECTORY / bin/shaders
+            # in CMakeLists.txt), so mount that directory in.
+            frameworkShaderPath = folder / "bin" / "shaders" / "framework" / pyd.GetShaderTypeName(api)
+            rootFS = pyd.RootFileSystem()
+            rootFS.mount(Path("/shaders/donut"), frameworkShaderPath)
+            shaderFactory = pyd.ShaderFactory(device, rootFS, Path("/shaders"))
 
             self.bindingCache = pyd.BindingCache(device)
             self.commonPasses = pyd.CommonRenderPasses(device, shaderFactory)
@@ -211,6 +219,10 @@ if __name__ == "__main__":
             device.executeCommandList(self.commandList)
 
     is_debug = "-debug" in sys.argv
+
+    # On Windows, Donut's default log config shows errors as a blocking MessageBox instead
+    # of printing them -- redirect to the console so failures are actually visible here.
+    pyd.log.ConsoleApplicationMode()
 
     api = pyd.GetGraphicsAPIFromCommandLine(sys.argv)
     print(f"Selected Graphics API: {api}")
