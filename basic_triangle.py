@@ -2,6 +2,7 @@ if __name__ == "__main__":
     import sys
     from pathlib import Path
     from typing import Optional
+
     from src import pydonut as pyd
 
     WINDOW_TITLE = "PyDonut Basic Triangle"
@@ -10,10 +11,10 @@ if __name__ == "__main__":
     class BasicTriangle(pyd.IRenderPass):
         def __init__(self: BasicTriangle, deviceManager: pyd.DeviceManager) -> None:
             super().__init__(deviceManager)
-            self.vertexShader: Optional[pyd.Shader] = None
-            self.pixelShader: Optional[pyd.Shader] = None
-            self.pipeline: Optional[pyd.GraphicsPipeline] = None
-            self.commandList: Optional[pyd.CommandList] = None
+            self.vertexShader: pyd.Shader | None = None
+            self.pixelShader: pyd.Shader | None = None
+            self.pipeline: pyd.GraphicsPipeline | None = None
+            self.commandList: pyd.CommandList | None = None
 
         def Init(self: BasicTriangle) -> bool:
             device = self.GetDevice()
@@ -24,14 +25,30 @@ if __name__ == "__main__":
 
             try:
                 assert pyd.CompileShader is not None
-                vsBytecode = pyd.CompileShader(source, "main_vs", pyd.ShaderType.Vertex, api, sourceName=shaderPath.name)
-                psBytecode = pyd.CompileShader(source, "main_ps", pyd.ShaderType.Pixel, api, sourceName=shaderPath.name)
+                vsBytecode = pyd.CompileShader(
+                    source,
+                    "main_vs",
+                    pyd.ShaderType.Vertex,
+                    api,
+                    sourceName=shaderPath.name,
+                )
+                psBytecode = pyd.CompileShader(
+                    source,
+                    "main_ps",
+                    pyd.ShaderType.Pixel,
+                    api,
+                    sourceName=shaderPath.name,
+                )
             except RuntimeError as e:
                 pyd.log.fatal(f"Shader compilation failed: {e}")
                 return False
 
-            self.vertexShader = device.createShader(vsBytecode, "main_vs", pyd.ShaderType.Vertex)
-            self.pixelShader = device.createShader(psBytecode, "main_ps", pyd.ShaderType.Pixel)
+            self.vertexShader = device.createShader(
+                vsBytecode, "main_vs", pyd.ShaderType.Vertex
+            )
+            self.pixelShader = device.createShader(
+                psBytecode, "main_ps", pyd.ShaderType.Pixel
+            )
 
             if not self.vertexShader or not self.pixelShader:
                 return False
@@ -57,7 +74,9 @@ if __name__ == "__main__":
                 psoDesc.primType = pyd.PrimitiveType.TriangleList
                 psoDesc.renderState.depthStencilState.depthTestEnable = False
 
-                self.pipeline = device.createGraphicsPipeline(psoDesc, framebuffer.getFramebufferInfo())
+                self.pipeline = device.createGraphicsPipeline(
+                    psoDesc, framebuffer.getFramebufferInfo()
+                )
 
             self.commandList.open()
 
@@ -66,7 +85,9 @@ if __name__ == "__main__":
             state = pyd.GraphicsState()
             state.pipeline = self.pipeline
             state.framebuffer = framebuffer
-            state.viewport.addViewportAndScissorRect(framebuffer.getFramebufferInfo().getViewport())
+            state.viewport.addViewportAndScissorRect(
+                framebuffer.getFramebufferInfo().getViewport()
+            )
 
             self.commandList.setGraphicsState(state)
 
@@ -85,7 +106,7 @@ if __name__ == "__main__":
     deviceManager = pyd.DeviceManager.Create(api)
     if not deviceManager:
         pyd.log.fatal("Failed to create DeviceManager.")
-        exit(1)
+        sys.exit(1)
     else:
         print("DeviceManager created successfully.")
 
@@ -96,8 +117,10 @@ if __name__ == "__main__":
         deviceParams.enableNvrhiValidationLayer = True
 
     if not deviceManager.CreateWindowDeviceAndSwapChain(deviceParams, "PyDonut Window"):
-        pyd.log.fatal("Cannot initialize a graphics device with the requested parameters")
-        exit(1)
+        pyd.log.fatal(
+            "Cannot initialize a graphics device with the requested parameters"
+        )
+        sys.exit(1)
 
     example = BasicTriangle(deviceManager)
     if example.Init():

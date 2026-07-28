@@ -3,6 +3,7 @@ if __name__ == "__main__":
     import sys
     from pathlib import Path
     from typing import Optional
+
     from src import pydonut as pyd
 
     WINDOW_TITLE = "PyDonut Ray Traced Triangle"
@@ -11,17 +12,17 @@ if __name__ == "__main__":
     class RayTracedTriangle(pyd.IRenderPass):
         def __init__(self: RayTracedTriangle, deviceManager: pyd.DeviceManager) -> None:
             super().__init__(deviceManager)
-            self.shaderLibrary: Optional[pyd.ShaderLibrary] = None
-            self.pipeline: Optional[pyd.RayTracingPipeline] = None
-            self.shaderTable: Optional[pyd.ShaderTable] = None
-            self.commandList: Optional[pyd.CommandList] = None
-            self.bindingLayout: Optional[pyd.BindingLayout] = None
-            self.bindingSet: Optional[pyd.BindingSet] = None
-            self.bottomLevelAS: Optional[pyd.AccelStruct] = None
-            self.topLevelAS: Optional[pyd.AccelStruct] = None
-            self.renderTarget: Optional[pyd.Texture] = None
-            self.commonPasses: Optional[pyd.CommonRenderPasses] = None
-            self.bindingCache: Optional[pyd.BindingCache] = None
+            self.shaderLibrary: pyd.ShaderLibrary | None = None
+            self.pipeline: pyd.RayTracingPipeline | None = None
+            self.shaderTable: pyd.ShaderTable | None = None
+            self.commandList: pyd.CommandList | None = None
+            self.bindingLayout: pyd.BindingLayout | None = None
+            self.bindingSet: pyd.BindingSet | None = None
+            self.bottomLevelAS: pyd.AccelStruct | None = None
+            self.topLevelAS: pyd.AccelStruct | None = None
+            self.renderTarget: pyd.Texture | None = None
+            self.commonPasses: pyd.CommonRenderPasses | None = None
+            self.bindingCache: pyd.BindingCache | None = None
 
         def Init(self: RayTracedTriangle) -> bool:
             device = self.GetDevice()
@@ -32,7 +33,9 @@ if __name__ == "__main__":
 
             try:
                 assert pyd.CompileShaderLibrary is not None
-                bytecode = pyd.CompileShaderLibrary(source, api, sourceName=shaderPath.name)
+                bytecode = pyd.CompileShaderLibrary(
+                    source, api, sourceName=shaderPath.name
+                )
             except RuntimeError as e:
                 print(f"Shader compilation failed: {e}", file=sys.stderr)
                 return False
@@ -48,7 +51,9 @@ if __name__ == "__main__":
             # files instead, via the filesystem. Those are produced by ShaderMake as part
             # of the normal `uv sync` build (see CMAKE_RUNTIME_OUTPUT_DIRECTORY / bin/shaders
             # in CMakeLists.txt), so mount that directory in.
-            frameworkShaderPath = folder / "bin" / "shaders" / "framework" / pyd.GetShaderTypeName(api)
+            frameworkShaderPath = (
+                folder / "bin" / "shaders" / "framework" / pyd.GetShaderTypeName(api)
+            )
             rootFS = pyd.RootFileSystem()
             rootFS.mount(Path("/shaders/donut"), frameworkShaderPath)
             shaderFactory = pyd.ShaderFactory(device, rootFS, Path("/shaders"))
@@ -68,10 +73,18 @@ if __name__ == "__main__":
             pipelineDesc = pyd.RayTracingPipelineDesc()
             pipelineDesc.addBindingLayout(self.bindingLayout)
 
-            rayGenShaderExport = self.shaderLibrary.getShader("RayGen", pyd.ShaderType.RayGeneration)
+            rayGenShaderExport = self.shaderLibrary.getShader(
+                "RayGen", pyd.ShaderType.RayGeneration
+            )
             missShaderExport = self.shaderLibrary.getShader("Miss", pyd.ShaderType.Miss)
-            closestHitShaderExport = self.shaderLibrary.getShader("ClosestHit", pyd.ShaderType.ClosestHit)
-            if not rayGenShaderExport or not missShaderExport or not closestHitShaderExport:
+            closestHitShaderExport = self.shaderLibrary.getShader(
+                "ClosestHit", pyd.ShaderType.ClosestHit
+            )
+            if (
+                not rayGenShaderExport
+                or not missShaderExport
+                or not closestHitShaderExport
+            ):
                 return False
 
             rayGenShader = pyd.PipelineShaderDesc()
@@ -101,10 +114,7 @@ if __name__ == "__main__":
             self.commandList.open()
 
             indices = struct.pack("<3I", 0, 1, 2)
-            vertices = struct.pack("<9f",
-                0.0, -1.0, 1.0,
-                -1.0, 1.0, 1.0,
-                1.0, 1.0, 1.0)
+            vertices = struct.pack("<9f", 0.0, -1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
 
             indexBufferDesc = pyd.BufferDesc()
             indexBufferDesc.byteSize = len(indices)
@@ -141,7 +151,9 @@ if __name__ == "__main__":
             blasDesc.bottomLevelGeometries = [geometryDesc]
 
             self.bottomLevelAS = device.createAccelStruct(blasDesc)
-            pyd.BuildBottomLevelAccelStruct(self.commandList, self.bottomLevelAS, blasDesc)
+            pyd.BuildBottomLevelAccelStruct(
+                self.commandList, self.bottomLevelAS, blasDesc
+            )
 
             tlasDesc = pyd.AccelStructDesc()
             tlasDesc.isTopLevel = True
@@ -179,7 +191,9 @@ if __name__ == "__main__":
             assert self.bindingCache is not None
 
             if not self.renderTarget:
-                colorAttachmentTexture = framebuffer.getDesc().getColorAttachment(0).texture
+                colorAttachmentTexture = (
+                    framebuffer.getDesc().getColorAttachment(0).texture
+                )
                 assert colorAttachmentTexture is not None
                 textureDesc = colorAttachmentTexture.getDesc()
                 textureDesc.isUAV = True
@@ -195,7 +209,9 @@ if __name__ == "__main__":
                     pyd.BindingSetItem.Texture_UAV(0, self.renderTarget),
                 ]
 
-                self.bindingSet = device.createBindingSet(bindingSetDesc, self.bindingLayout)
+                self.bindingSet = device.createBindingSet(
+                    bindingSetDesc, self.bindingLayout
+                )
 
             assert self.bindingSet is not None
             fbinfo = framebuffer.getFramebufferInfo()
@@ -213,7 +229,9 @@ if __name__ == "__main__":
             self.commandList.dispatchRays(args)
 
             assert self.renderTarget is not None
-            self.commonPasses.BlitTexture(self.commandList, framebuffer, self.renderTarget, self.bindingCache)
+            self.commonPasses.BlitTexture(
+                self.commandList, framebuffer, self.renderTarget, self.bindingCache
+            )
 
             self.commandList.close()
             device.executeCommandList(self.commandList)
@@ -230,7 +248,7 @@ if __name__ == "__main__":
     deviceManager = pyd.DeviceManager.Create(api)
     if not deviceManager:
         pyd.log.fatal("Failed to create DeviceManager.")
-        exit(1)
+        sys.exit(1)
     else:
         print("DeviceManager created successfully.")
 
@@ -242,13 +260,16 @@ if __name__ == "__main__":
         deviceParams.enableNvrhiValidationLayer = True
 
     if not deviceManager.CreateWindowDeviceAndSwapChain(deviceParams, "PyDonut Window"):
-        pyd.log.fatal("Cannot initialize a graphics device with the requested parameters")
-        exit(1)
+        pyd.log.fatal(
+            "Cannot initialize a graphics device with the requested parameters"
+        )
+        sys.exit(1)
 
-    if not deviceManager.GetDevice().queryFeatureSupport(pyd.Feature.RayTracingPipeline):
+    if not deviceManager.GetDevice().queryFeatureSupport(
+        pyd.Feature.RayTracingPipeline
+    ):
         pyd.log.fatal("The graphics device does not support Ray Tracing Pipelines")
-        exit(1)
-
+        sys.exit(1)
 
     example = RayTracedTriangle(deviceManager)
     if example.Init():

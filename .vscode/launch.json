@@ -18,7 +18,9 @@
             },
             "justMyCode": false,
             "cwd": "${workspaceFolder}",
-            "python": ".venv/Scripts/python.exe",
+            "windows": {
+                "python": ".venv/Scripts/python.exe"
+            },
         },
     ]
 }
