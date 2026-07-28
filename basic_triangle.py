@@ -129,6 +129,9 @@ if __name__ == "__main__":
 
     deviceManager.Shutdown()
 
+    if is_debug:
+        deviceManager.ReportLiveObjects()
+
     del deviceManager
 
     print("Done.")
