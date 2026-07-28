@@ -5,13 +5,13 @@
     "version": "0.2.0",
     "configurations": [        
         {
-            "name": "Python DBG: main",
+            "name": "Python DBG: current",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/main.py",
+            "program": "${workspaceFolder}/${fileBasename}",
             "console": "integratedTerminal",
             "args": [
-                "--debug"
+                "-debug"
             ],
             "autoReload": {
                 "enable": true

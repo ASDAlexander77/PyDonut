@@ -124,10 +124,114 @@ class CommandQueue(Enum):
     Compute = 1
     Copy = 2
 
+class Feature(Enum):
+    ComputeQueue = 0
+    ConservativeRasterization = 1
+    ConstantBufferRanges = 2
+    CopyQueue = 3
+    DeferredCommandLists = 4
+    FastGeometryShader = 5
+    HeapDirectlyIndexed = 6
+    HlslExtensionUAV = 7
+    LinearSweptSpheres = 8
+    Meshlets = 9
+    RayQuery = 10
+    RayTracingAccelStruct = 11
+    RayTracingClusters = 12
+    RayTracingOpacityMicromap = 13
+    RayTracingPipeline = 14
+    SamplerFeedback = 15
+    ShaderExecutionReordering = 16
+    ShaderSpecializations = 17
+    SinglePassStereo = 18
+    Spheres = 19
+    VariableRateShading = 20
+    VirtualResources = 21
+    WaveLaneCountMinMax = 22
+    CooperativeVectorInferencing = 23
+    CooperativeVectorTraining = 24
+    EnhancedBarriers = 25
+
+class ResourceStates(Enum):
+    Unknown = 0x00000000
+    Common = 0x00000001
+    ConstantBuffer = 0x00000002
+    VertexBuffer = 0x00000004
+    IndexBuffer = 0x00000008
+    IndirectArgument = 0x00000010
+    PixelShaderResource = 0x00000020
+    NonPixelShaderResource = 0x00000040
+    ShaderResource = 0x00000060
+    UnorderedAccess = 0x00000080
+    RenderTarget = 0x00000100
+    DepthWrite = 0x00000200
+    DepthRead = 0x00000400
+    StreamOut = 0x00000800
+    CopyDest = 0x00001000
+    CopySource = 0x00002000
+    ResolveDest = 0x00004000
+    ResolveSource = 0x00008000
+    Present = 0x00010000
+    AccelStructRead = 0x00020000
+    AccelStructWrite = 0x00040000
+    AccelStructBuildInput = 0x00080000
+    AccelStructBuildBlas = 0x00100000
+    ShadingRateSurface = 0x00200000
+    OpacityMicromapWrite = 0x00400000
+    OpacityMicromapBuildInput = 0x00800000
+    ConvertCoopVecMatrixInput = 0x01000000
+    ConvertCoopVecMatrixOutput = 0x02000000
+
+class GeometryFlags(Enum):
+    None_ = 0
+    Opaque = 1
+    NoDuplicateAnyHitInvocation = 2
+
+class InstanceFlags(Enum):
+    None_ = 0
+    TriangleCullDisable = 1
+    TriangleFrontCounterclockwise = 2
+    ForceOpaque = 4
+    ForceNonOpaque = 8
+    ForceOMM2State = 16
+    DisableOMMs = 32
+
 def GetGraphicsAPIFromCommandLine(args: list[str]) -> GraphicsAPI: ...
 def GetDirectoryWithExecutable() -> Path: ...
 def GetShaderTypeName(api: GraphicsAPI) -> str: ...
 def ClearColorAttachment(commandList: CommandList, framebuffer: Framebuffer, attachmentIndex: int, color: Color) -> None: ...
+
+class log():
+    @staticmethod
+    def SetMinSeverity(severity: LogSeverity) -> None: ...
+    @staticmethod
+    def SetCallback(callback: Callable[[LogSeverity, str], None]) -> None: ...
+    @staticmethod
+    def ResetCallback() -> None: ...
+    @staticmethod
+    def EnableOutputToMessageBox(enable: bool) -> None: ...
+    @staticmethod
+    def EnableOutputToConsole(enable: bool) -> None: ...
+    @staticmethod
+    def EnableOutputToDebug(enable: bool) -> None: ...
+    @staticmethod
+    def SetErrorMessageCaption(caption: str) -> None: ...
+    @staticmethod
+    def ConsoleApplicationMode() -> None: ...
+    @staticmethod
+    def message(severity: LogSeverity, message: str) -> None: ...
+    @staticmethod
+    def debug(message: str) -> None: ...
+    @staticmethod
+    def info(message: str) -> None: ...
+    @staticmethod
+    def warning(message: str) -> None: ...
+    @staticmethod
+    def error(message: str) -> None: ...
+    # Aborts the process by default (Donut's DefaultCallback behavior) after logging;
+    # install a custom callback via Log.SetCallback first if that's not desired.
+    @staticmethod
+    def fatal(message: str) -> None: ...
 
 # In-process HLSL -> DXIL/SPIR-V compilation via DXC. Not available in every build
 # (requires DXC to have been found at configure time); raises RuntimeError on a
@@ -136,6 +240,16 @@ def CompileShader(
     source: str,
     entryPoint: str,
     shaderType: ShaderType,
+    api: GraphicsAPI,
+    sourceName: str = "shader.hlsl",
+    shaderModel: str = "6_5",
+) -> bytes: ...
+
+# Same as CompileShader, but for a shader library with multiple [shader("...")]-annotated
+# exports (e.g. a DXR raygen/closesthit/miss set) instead of a single entry point. Feed the
+# result to Device.createShaderLibrary.
+def CompileShaderLibrary(
+    source: str,
     api: GraphicsAPI,
     sourceName: str = "shader.hlsl",
     shaderModel: str = "6_5",
@@ -211,19 +325,165 @@ class GraphicsState():
     framebuffer: Optional[Framebuffer]
     def __init__(self: GraphicsState) -> None: ...
 
+class BufferDesc():
+    byteSize: int
+    structStride: int
+    maxVersions: int
+    debugName: str
+    format: Format
+    canHaveUAVs: bool
+    canHaveTypedViews: bool
+    canHaveRawViews: bool
+    isVertexBuffer: bool
+    isIndexBuffer: bool
+    isConstantBuffer: bool
+    isDrawIndirectArgs: bool
+    isAccelStructBuildInput: bool
+    isAccelStructStorage: bool
+    isShaderBindingTable: bool
+    isVolatile: bool
+    initialState: ResourceStates
+    keepInitialState: bool
+    def __init__(self: BufferDesc) -> None: ...
+
+class TextureDesc():
+    width: int
+    height: int
+    depth: int
+    arraySize: int
+    mipLevels: int
+    sampleCount: int
+    format: Format
+    debugName: str
+    isShaderResource: bool
+    isRenderTarget: bool
+    isUAV: bool
+    clearValue: Color
+    useClearValue: bool
+    initialState: ResourceStates
+    keepInitialState: bool
+    def __init__(self: TextureDesc) -> None: ...
+
+class FramebufferAttachment():
+    texture: Optional[Texture]
+
+class FramebufferDesc():
+    def getColorAttachment(self: FramebufferDesc, index: int) -> FramebufferAttachment: ...
+
+# BindingLayoutItem/BindingSetItem are opaque -- Python only obtains instances through
+# these static factories, matching how nvrhi's own C++ call sites construct them.
+class BindingLayoutItem():
+    @staticmethod
+    def Texture_UAV(slot: int) -> BindingLayoutItem: ...
+    @staticmethod
+    def RayTracingAccelStruct(slot: int) -> BindingLayoutItem: ...
+
+class BindingLayoutDesc():
+    visibility: ShaderType
+    bindings: list[BindingLayoutItem]
+    def __init__(self: BindingLayoutDesc) -> None: ...
+
+class BindingSetItem():
+    @staticmethod
+    def Texture_UAV(slot: int, texture: Texture) -> BindingSetItem: ...
+    @staticmethod
+    def RayTracingAccelStruct(slot: int, accelStruct: AccelStruct) -> BindingSetItem: ...
+
+class BindingSetDesc():
+    bindings: list[BindingSetItem]
+    def __init__(self: BindingSetDesc) -> None: ...
+
+class GeometryTriangles():
+    indexBuffer: Optional[Buffer]
+    vertexBuffer: Optional[Buffer]
+    indexFormat: Format
+    vertexFormat: Format
+    indexCount: int
+    vertexCount: int
+    vertexStride: int
+    def __init__(self: GeometryTriangles) -> None: ...
+
+class GeometryDesc():
+    flags: GeometryFlags
+    def __init__(self: GeometryDesc) -> None: ...
+    def setTriangles(self: GeometryDesc, triangles: GeometryTriangles) -> None: ...
+
+class AccelStructDesc():
+    isTopLevel: bool
+    topLevelMaxInstances: int
+    bottomLevelGeometries: list[GeometryDesc]
+    def __init__(self: AccelStructDesc) -> None: ...
+
+# InstanceDesc packs bitfields + a union, so it's mutated through setter methods rather
+# than plain properties. The default constructor already fills in the identity transform.
+class InstanceDesc():
+    def __init__(self: InstanceDesc) -> None: ...
+    def setInstanceMask(self: InstanceDesc, value: int) -> None: ...
+    def setInstanceID(self: InstanceDesc, value: int) -> None: ...
+    def setInstanceContributionToHitGroupIndex(self: InstanceDesc, value: int) -> None: ...
+    def setFlags(self: InstanceDesc, value: InstanceFlags) -> None: ...
+    def setBLAS(self: InstanceDesc, value: AccelStruct) -> None: ...
+
+class PipelineShaderDesc():
+    def __init__(self: PipelineShaderDesc) -> None: ...
+    def setShader(self: PipelineShaderDesc, shader: Shader) -> None: ...
+
+class PipelineHitGroupDesc():
+    def __init__(self: PipelineHitGroupDesc) -> None: ...
+    def setExportName(self: PipelineHitGroupDesc, value: str) -> None: ...
+    def setClosestHitShader(self: PipelineHitGroupDesc, shader: Shader) -> None: ...
+
+class RayTracingPipelineDesc():
+    maxPayloadSize: int
+    def __init__(self: RayTracingPipelineDesc) -> None: ...
+    def addShader(self: RayTracingPipelineDesc, shader: PipelineShaderDesc) -> None: ...
+    def addHitGroup(self: RayTracingPipelineDesc, hitGroup: PipelineHitGroupDesc) -> None: ...
+    def addBindingLayout(self: RayTracingPipelineDesc, layout: BindingLayout) -> None: ...
+
+class RayTracingState():
+    shaderTable: Optional[ShaderTable]
+    def __init__(self: RayTracingState) -> None: ...
+    def addBindingSet(self: RayTracingState, bindingSet: BindingSet) -> None: ...
+
+class DispatchRaysArguments():
+    width: int
+    height: int
+    depth: int
+    def __init__(self: DispatchRaysArguments) -> None: ...
+
 # Swap-chain resources: owned by the DeviceManager, never constructible from Python.
 class Framebuffer():
     def getFramebufferInfo(self: Framebuffer) -> FramebufferInfo: ...
-class Texture(): ...
+    def getDesc(self: Framebuffer) -> FramebufferDesc: ...
+
+# Texture wraps both borrowed (swap-chain) and owned (Device.createTexture) instances.
+class Texture():
+    def getDesc(self: Texture) -> TextureDesc: ...
 
 # Objects created through Device / ShaderFactory factory calls.
 class Shader(): ...
+class ShaderLibrary():
+    def getShader(self: ShaderLibrary, entryName: str, shaderType: ShaderType) -> Optional[Shader]: ...
 class GraphicsPipeline(): ...
+class RayTracingPipeline():
+    def createShaderTable(self: RayTracingPipeline) -> ShaderTable: ...
+class ShaderTable():
+    def setRayGenerationShader(self: ShaderTable, exportName: str, bindings: Optional[BindingSet] = None) -> None: ...
+    def addHitGroup(self: ShaderTable, exportName: str, bindings: Optional[BindingSet] = None) -> int: ...
+    def addMissShader(self: ShaderTable, exportName: str, bindings: Optional[BindingSet] = None) -> int: ...
 class CommandList():
     def open(self: CommandList) -> None: ...
     def close(self: CommandList) -> None: ...
     def setGraphicsState(self: CommandList, state: GraphicsState) -> None: ...
     def draw(self: CommandList, args: DrawArguments) -> None: ...
+    def writeBuffer(self: CommandList, buffer: Buffer, data: bytes, destOffsetBytes: int = 0) -> None: ...
+    def buildTopLevelAccelStruct(self: CommandList, as_: AccelStruct, instances: list[InstanceDesc]) -> None: ...
+    def setRayTracingState(self: CommandList, state: RayTracingState) -> None: ...
+    def dispatchRays(self: CommandList, args: DispatchRaysArguments) -> None: ...
+class Buffer(): ...
+class BindingLayout(): ...
+class BindingSet(): ...
+class AccelStruct(): ...
 
 class Device():
     def getGraphicsAPI(self: Device) -> GraphicsAPI: ...
@@ -231,14 +491,36 @@ class Device():
     def createGraphicsPipeline(self: Device, desc: GraphicsPipelineDesc, framebufferInfo: FramebufferInfo) -> GraphicsPipeline: ...
     def executeCommandList(self: Device, commandList: CommandList, executionQueue: CommandQueue = CommandQueue.Graphics) -> int: ...
     def createShader(self: Device, bytecode: bytes, entryName: str, shaderType: ShaderType) -> Optional[Shader]: ...
+    def queryFeatureSupport(self: Device, feature: Feature) -> bool: ...
+    def createBuffer(self: Device, desc: BufferDesc) -> Buffer: ...
+    def createTexture(self: Device, desc: TextureDesc) -> Texture: ...
+    def createBindingLayout(self: Device, desc: BindingLayoutDesc) -> BindingLayout: ...
+    def createBindingSet(self: Device, desc: BindingSetDesc, layout: BindingLayout) -> BindingSet: ...
+    def createAccelStruct(self: Device, desc: AccelStructDesc) -> AccelStruct: ...
+    def createRayTracingPipeline(self: Device, desc: RayTracingPipelineDesc) -> RayTracingPipeline: ...
+    def createShaderLibrary(self: Device, bytecode: bytes) -> Optional[ShaderLibrary]: ...
+
+def BuildBottomLevelAccelStruct(commandList: CommandList, as_: AccelStruct, desc: AccelStructDesc) -> None: ...
 
 class IFileSystem(): ...
 class NativeFileSystem(IFileSystem):
     def __init__(self: NativeFileSystem) -> None: ...
+class RootFileSystem(IFileSystem):
+    def __init__(self: RootFileSystem) -> None: ...
+    def mount(self: RootFileSystem, path: Path, nativePath: Path) -> None: ...
 
 class ShaderFactory():
     def __init__(self: ShaderFactory, device: Device, fs: IFileSystem, basePath: Path) -> None: ...
     def CreateShader(self: ShaderFactory, fileName: str, entryName: str, shaderType: ShaderType) -> Optional[Shader]: ...
+    def CreateShaderLibrary(self: ShaderFactory, fileName: str) -> Optional[ShaderLibrary]: ...
+
+class BindingCache():
+    def __init__(self: BindingCache, device: Device) -> None: ...
+    def Clear(self: BindingCache) -> None: ...
+
+class CommonRenderPasses():
+    def __init__(self: CommonRenderPasses, device: Device, shaderFactory: ShaderFactory) -> None: ...
+    def BlitTexture(self: CommonRenderPasses, commandList: CommandList, targetFramebuffer: Framebuffer, sourceTexture: Texture, bindingCache: Optional[BindingCache] = None) -> None: ...
 
 class AdapterInfo():
     name: str

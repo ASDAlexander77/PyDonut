@@ -27,7 +27,7 @@ if __name__ == "__main__":
                 vsBytecode = pyd.CompileShader(source, "main_vs", pyd.ShaderType.Vertex, api, sourceName=shaderPath.name)
                 psBytecode = pyd.CompileShader(source, "main_ps", pyd.ShaderType.Pixel, api, sourceName=shaderPath.name)
             except RuntimeError as e:
-                print(f"Shader compilation failed: {e}", file=sys.stderr)
+                pyd.log.fatal(f"Shader compilation failed: {e}")
                 return False
 
             self.vertexShader = device.createShader(vsBytecode, "main_vs", pyd.ShaderType.Vertex)
@@ -77,14 +77,14 @@ if __name__ == "__main__":
             self.commandList.close()
             device.executeCommandList(self.commandList)
 
-    is_debug = "--debug" in sys.argv or "-d" in sys.argv
+    is_debug = "-debug" in sys.argv
 
     api = pyd.GetGraphicsAPIFromCommandLine(sys.argv)
     print(f"Selected Graphics API: {api}")
 
     deviceManager = pyd.DeviceManager.Create(api)
     if not deviceManager:
-        print("Failed to create DeviceManager.", file=sys.stderr)
+        pyd.log.fatal("Failed to create DeviceManager.")
         exit(1)
     else:
         print("DeviceManager created successfully.")
@@ -96,7 +96,7 @@ if __name__ == "__main__":
         deviceParams.enableNvrhiValidationLayer = True
 
     if not deviceManager.CreateWindowDeviceAndSwapChain(deviceParams, "PyDonut Window"):
-        print("Cannot initialize a graphics device with the requested parameters", file=sys.stderr)
+        pyd.log.fatal("Cannot initialize a graphics device with the requested parameters")
         exit(1)
 
     example = BasicTriangle(deviceManager)

@@ -17,6 +17,8 @@
 #include <donut/core/log.h>
 #include <donut/core/vfs/VFS.h>
 #include <donut/engine/ShaderFactory.h>
+#include <donut/engine/CommonRenderPasses.h>
+#include <donut/engine/BindingCache.h>
 #include <nvrhi/utils.h>
 
 #if PYDONUT_HAVE_DXC
@@ -136,15 +138,9 @@ const wchar_t* HlslProfilePrefix(nvrhi::ShaderType shaderType) {
     }
 }
 
-// Compiles HLSL source to DXIL (D3D12) or SPIR-V (Vulkan) in-process via DXC, entirely
-// in memory -- no ShaderMake, no external process, no filesystem round-trip.
-py::bytes CompileShaderWithDXC(
-    const std::string &source,
-    const std::string &entryPoint,
-    nvrhi::ShaderType shaderType,
-    nvrhi::GraphicsAPI api,
-    const std::string &sourceName,
-    const std::string &shaderModel)
+// Shared DXC invocation: runs the compiler with the given command-line args over `source`
+// and returns the resulting object blob, or throws with DXC's diagnostic text on failure.
+py::bytes RunDXC(const std::string &source, std::vector<LPCWSTR> args)
 {
     ComPtr<IDxcUtils> utils;
     ComPtr<IDxcCompiler3> compiler;
@@ -154,18 +150,6 @@ py::bytes CompileShaderWithDXC(
 
     ComPtr<IDxcIncludeHandler> includeHandler;
     utils->CreateDefaultIncludeHandler(&includeHandler);
-
-    std::wstring wEntryPoint = ToWide(entryPoint);
-    std::wstring wProfile = std::wstring(HlslProfilePrefix(shaderType)) + L"_" + ToWide(shaderModel);
-    std::wstring wSourceName = ToWide(sourceName);
-
-    std::vector<LPCWSTR> args = {
-        wSourceName.c_str(),
-        L"-E", wEntryPoint.c_str(),
-        L"-T", wProfile.c_str(),
-    };
-    if (api == nvrhi::GraphicsAPI::VULKAN)
-        args.push_back(L"-spirv");
 
     DxcBuffer sourceBuffer{};
     sourceBuffer.Ptr = source.data();
@@ -197,7 +181,84 @@ py::bytes CompileShaderWithDXC(
     return py::bytes(reinterpret_cast<const char*>(object->GetBufferPointer()), object->GetBufferSize());
 }
 
+// Compiles HLSL source to DXIL (D3D12) or SPIR-V (Vulkan) in-process via DXC, entirely
+// in memory -- no ShaderMake, no external process, no filesystem round-trip.
+py::bytes CompileShaderWithDXC(
+    const std::string &source,
+    const std::string &entryPoint,
+    nvrhi::ShaderType shaderType,
+    nvrhi::GraphicsAPI api,
+    const std::string &sourceName,
+    const std::string &shaderModel)
+{
+    std::wstring wEntryPoint = ToWide(entryPoint);
+    std::wstring wProfile = std::wstring(HlslProfilePrefix(shaderType)) + L"_" + ToWide(shaderModel);
+    std::wstring wSourceName = ToWide(sourceName);
+
+    std::vector<LPCWSTR> args = {
+        wSourceName.c_str(),
+        L"-E", wEntryPoint.c_str(),
+        L"-T", wProfile.c_str(),
+    };
+    if (api == nvrhi::GraphicsAPI::VULKAN)
+        args.push_back(L"-spirv");
+
+    return RunDXC(source, args);
+}
+
+// Compiles an HLSL shader library (multiple [shader("...")]-annotated exports, e.g. a
+// DXR raygen/closesthit/miss set) to a single DXIL or SPIR-V library blob via DXC. Unlike
+// CompileShaderWithDXC, there's no single entry point -- DXC exports whatever [shader(...)]
+// functions the source defines, which nvrhi::IDevice::createShaderLibrary then wraps.
+py::bytes CompileShaderLibraryWithDXC(
+    const std::string &source,
+    nvrhi::GraphicsAPI api,
+    const std::string &sourceName,
+    const std::string &shaderModel)
+{
+    std::wstring wProfile = L"lib_" + ToWide(shaderModel);
+    std::wstring wSourceName = ToWide(sourceName);
+
+    std::vector<LPCWSTR> args = {
+        wSourceName.c_str(),
+        L"-T", wProfile.c_str(),
+    };
+    if (api == nvrhi::GraphicsAPI::VULKAN) {
+        // Ray tracing needs SPIR-V 1.4+ / Vulkan 1.1+, above DXC's default target env.
+        args.push_back(L"-spirv");
+        args.push_back(L"-fspv-target-env=vulkan1.2");
+    }
+
+    return RunDXC(source, args);
+}
+
 #endif // PYDONUT_HAVE_DXC
+
+// Static wrapper around the donut::log free functions, exposed to Python as a class of
+// static methods (Log.info(...), Log.SetMinSeverity(...)) rather than one flat module
+// function per call. The message/debug/info/warning/error/fatal functions take
+// printf-style varargs in C++; Python callers already have a formatted string, so it's
+// passed through as a literal "%s" argument rather than exposing raw varargs.
+struct Log {
+    Log() = delete;
+
+    static void SetMinSeverity(donut::log::Severity severity) { donut::log::SetMinSeverity(severity); }
+    static void SetCallback(donut::log::Callback callback) { donut::log::SetCallback(std::move(callback)); }
+    static void ResetCallback() { donut::log::ResetCallback(); }
+    static void EnableOutputToMessageBox(bool enable) { donut::log::EnableOutputToMessageBox(enable); }
+    static void EnableOutputToConsole(bool enable) { donut::log::EnableOutputToConsole(enable); }
+    static void EnableOutputToDebug(bool enable) { donut::log::EnableOutputToDebug(enable); }
+    static void SetErrorMessageCaption(const std::string &caption) { donut::log::SetErrorMessageCaption(caption.c_str()); }
+    static void ConsoleApplicationMode() { donut::log::ConsoleApplicationMode(); }
+    static void message(donut::log::Severity severity, const std::string &msg) { donut::log::message(severity, "%s", msg.c_str()); }
+    static void debug(const std::string &msg) { donut::log::debug("%s", msg.c_str()); }
+    static void info(const std::string &msg) { donut::log::info("%s", msg.c_str()); }
+    static void warning(const std::string &msg) { donut::log::warning("%s", msg.c_str()); }
+    static void error(const std::string &msg) { donut::log::error("%s", msg.c_str()); }
+    // Aborts the process by default (Donut's DefaultCallback behavior) after logging;
+    // install a custom callback via Log.SetCallback first if that's not desired.
+    static void fatal(const std::string &msg) { donut::log::fatal("%s", msg.c_str()); }
+};
 
 } // namespace
 
@@ -332,6 +393,82 @@ PYBIND11_MODULE(_pydonut, m) {
         .value("Copy", nvrhi::CommandQueue::Copy)
         .finalize();
 
+    pybind11::native_enum<nvrhi::Feature>(m, "Feature", "enum.Enum")
+        .value("ComputeQueue", nvrhi::Feature::ComputeQueue)
+        .value("ConservativeRasterization", nvrhi::Feature::ConservativeRasterization)
+        .value("ConstantBufferRanges", nvrhi::Feature::ConstantBufferRanges)
+        .value("CopyQueue", nvrhi::Feature::CopyQueue)
+        .value("DeferredCommandLists", nvrhi::Feature::DeferredCommandLists)
+        .value("FastGeometryShader", nvrhi::Feature::FastGeometryShader)
+        .value("HeapDirectlyIndexed", nvrhi::Feature::HeapDirectlyIndexed)
+        .value("HlslExtensionUAV", nvrhi::Feature::HlslExtensionUAV)
+        .value("LinearSweptSpheres", nvrhi::Feature::LinearSweptSpheres)
+        .value("Meshlets", nvrhi::Feature::Meshlets)
+        .value("RayQuery", nvrhi::Feature::RayQuery)
+        .value("RayTracingAccelStruct", nvrhi::Feature::RayTracingAccelStruct)
+        .value("RayTracingClusters", nvrhi::Feature::RayTracingClusters)
+        .value("RayTracingOpacityMicromap", nvrhi::Feature::RayTracingOpacityMicromap)
+        .value("RayTracingPipeline", nvrhi::Feature::RayTracingPipeline)
+        .value("SamplerFeedback", nvrhi::Feature::SamplerFeedback)
+        .value("ShaderExecutionReordering", nvrhi::Feature::ShaderExecutionReordering)
+        .value("ShaderSpecializations", nvrhi::Feature::ShaderSpecializations)
+        .value("SinglePassStereo", nvrhi::Feature::SinglePassStereo)
+        .value("Spheres", nvrhi::Feature::Spheres)
+        .value("VariableRateShading", nvrhi::Feature::VariableRateShading)
+        .value("VirtualResources", nvrhi::Feature::VirtualResources)
+        .value("WaveLaneCountMinMax", nvrhi::Feature::WaveLaneCountMinMax)
+        .value("CooperativeVectorInferencing", nvrhi::Feature::CooperativeVectorInferencing)
+        .value("CooperativeVectorTraining", nvrhi::Feature::CooperativeVectorTraining)
+        .value("EnhancedBarriers", nvrhi::Feature::EnhancedBarriers)
+        .finalize();
+
+    pybind11::native_enum<nvrhi::ResourceStates>(m, "ResourceStates", "enum.Enum")
+        .value("Unknown", nvrhi::ResourceStates::Unknown)
+        .value("Common", nvrhi::ResourceStates::Common)
+        .value("ConstantBuffer", nvrhi::ResourceStates::ConstantBuffer)
+        .value("VertexBuffer", nvrhi::ResourceStates::VertexBuffer)
+        .value("IndexBuffer", nvrhi::ResourceStates::IndexBuffer)
+        .value("IndirectArgument", nvrhi::ResourceStates::IndirectArgument)
+        .value("PixelShaderResource", nvrhi::ResourceStates::PixelShaderResource)
+        .value("NonPixelShaderResource", nvrhi::ResourceStates::NonPixelShaderResource)
+        .value("ShaderResource", nvrhi::ResourceStates::ShaderResource)
+        .value("UnorderedAccess", nvrhi::ResourceStates::UnorderedAccess)
+        .value("RenderTarget", nvrhi::ResourceStates::RenderTarget)
+        .value("DepthWrite", nvrhi::ResourceStates::DepthWrite)
+        .value("DepthRead", nvrhi::ResourceStates::DepthRead)
+        .value("StreamOut", nvrhi::ResourceStates::StreamOut)
+        .value("CopyDest", nvrhi::ResourceStates::CopyDest)
+        .value("CopySource", nvrhi::ResourceStates::CopySource)
+        .value("ResolveDest", nvrhi::ResourceStates::ResolveDest)
+        .value("ResolveSource", nvrhi::ResourceStates::ResolveSource)
+        .value("Present", nvrhi::ResourceStates::Present)
+        .value("AccelStructRead", nvrhi::ResourceStates::AccelStructRead)
+        .value("AccelStructWrite", nvrhi::ResourceStates::AccelStructWrite)
+        .value("AccelStructBuildInput", nvrhi::ResourceStates::AccelStructBuildInput)
+        .value("AccelStructBuildBlas", nvrhi::ResourceStates::AccelStructBuildBlas)
+        .value("ShadingRateSurface", nvrhi::ResourceStates::ShadingRateSurface)
+        .value("OpacityMicromapWrite", nvrhi::ResourceStates::OpacityMicromapWrite)
+        .value("OpacityMicromapBuildInput", nvrhi::ResourceStates::OpacityMicromapBuildInput)
+        .value("ConvertCoopVecMatrixInput", nvrhi::ResourceStates::ConvertCoopVecMatrixInput)
+        .value("ConvertCoopVecMatrixOutput", nvrhi::ResourceStates::ConvertCoopVecMatrixOutput)
+        .finalize();
+
+    pybind11::native_enum<nvrhi::rt::GeometryFlags>(m, "GeometryFlags", "enum.Enum")
+        .value("None_", nvrhi::rt::GeometryFlags::None)
+        .value("Opaque", nvrhi::rt::GeometryFlags::Opaque)
+        .value("NoDuplicateAnyHitInvocation", nvrhi::rt::GeometryFlags::NoDuplicateAnyHitInvocation)
+        .finalize();
+
+    pybind11::native_enum<nvrhi::rt::InstanceFlags>(m, "InstanceFlags", "enum.Enum")
+        .value("None_", nvrhi::rt::InstanceFlags::None)
+        .value("TriangleCullDisable", nvrhi::rt::InstanceFlags::TriangleCullDisable)
+        .value("TriangleFrontCounterclockwise", nvrhi::rt::InstanceFlags::TriangleFrontCounterclockwise)
+        .value("ForceOpaque", nvrhi::rt::InstanceFlags::ForceOpaque)
+        .value("ForceNonOpaque", nvrhi::rt::InstanceFlags::ForceNonOpaque)
+        .value("ForceOMM2State", nvrhi::rt::InstanceFlags::ForceOMM2State)
+        .value("DisableOMMs", nvrhi::rt::InstanceFlags::DisableOMMs)
+        .finalize();
+
     m.def(
         "GetGraphicsAPIFromCommandLine",
         [](std::vector<std::string> args) {
@@ -354,14 +491,25 @@ PYBIND11_MODULE(_pydonut, m) {
     // nvrhi swap-chain resources: owned by the DeviceManager, never by Python. py::nodelete
     // keeps pybind11 from ever trying to destroy an object it doesn't own.
     py::class_<nvrhi::IFramebuffer, std::unique_ptr<nvrhi::IFramebuffer, py::nodelete>> framebuffer(m, "Framebuffer");
-    py::class_<nvrhi::ITexture, std::unique_ptr<nvrhi::ITexture, py::nodelete>>(m, "Texture");
     py::class_<nvrhi::IDevice, std::unique_ptr<nvrhi::IDevice, py::nodelete>> device(m, "Device");
+
+    // ITexture instances can be either borrowed (swap-chain textures, returned by raw pointer
+    // with return_value_policy::reference below) or owned (created via Device.createTexture,
+    // via DetachToShared); shared_ptr as the holder supports both without conflating lifetimes.
+    py::class_<nvrhi::ITexture, std::shared_ptr<nvrhi::ITexture>> texture(m, "Texture");
 
     // nvrhi objects created through factory calls below: each create*() call returns one
     // owning reference, handed to Python as a std::shared_ptr that Releases() on collection.
     py::class_<nvrhi::IShader, std::shared_ptr<nvrhi::IShader>>(m, "Shader");
     py::class_<nvrhi::IGraphicsPipeline, std::shared_ptr<nvrhi::IGraphicsPipeline>>(m, "GraphicsPipeline");
     py::class_<nvrhi::ICommandList, std::shared_ptr<nvrhi::ICommandList>> commandList(m, "CommandList");
+    py::class_<nvrhi::IBuffer, std::shared_ptr<nvrhi::IBuffer>> buffer(m, "Buffer");
+    py::class_<nvrhi::IBindingLayout, std::shared_ptr<nvrhi::IBindingLayout>> bindingLayout(m, "BindingLayout");
+    py::class_<nvrhi::IBindingSet, std::shared_ptr<nvrhi::IBindingSet>> bindingSet(m, "BindingSet");
+    py::class_<nvrhi::rt::IAccelStruct, std::shared_ptr<nvrhi::rt::IAccelStruct>> accelStruct(m, "AccelStruct");
+    py::class_<nvrhi::rt::IShaderTable, std::shared_ptr<nvrhi::rt::IShaderTable>> shaderTable(m, "ShaderTable");
+    py::class_<nvrhi::rt::IPipeline, std::shared_ptr<nvrhi::rt::IPipeline>> rtPipeline(m, "RayTracingPipeline");
+    py::class_<nvrhi::IShaderLibrary, std::shared_ptr<nvrhi::IShaderLibrary>> shaderLibrary(m, "ShaderLibrary");
 
     py::class_<nvrhi::Color>(m, "Color")
         .def(py::init<>())
@@ -444,7 +592,153 @@ PYBIND11_MODULE(_pydonut, m) {
             [](nvrhi::GraphicsState &s, nvrhi::IFramebuffer* fb) { s.framebuffer = fb; },
             py::return_value_policy::reference);
 
+    py::class_<nvrhi::BufferDesc>(m, "BufferDesc")
+        .def(py::init<>())
+        .def_readwrite("byteSize", &nvrhi::BufferDesc::byteSize)
+        .def_readwrite("structStride", &nvrhi::BufferDesc::structStride)
+        .def_readwrite("maxVersions", &nvrhi::BufferDesc::maxVersions)
+        .def_readwrite("debugName", &nvrhi::BufferDesc::debugName)
+        .def_readwrite("format", &nvrhi::BufferDesc::format)
+        .def_readwrite("canHaveUAVs", &nvrhi::BufferDesc::canHaveUAVs)
+        .def_readwrite("canHaveTypedViews", &nvrhi::BufferDesc::canHaveTypedViews)
+        .def_readwrite("canHaveRawViews", &nvrhi::BufferDesc::canHaveRawViews)
+        .def_readwrite("isVertexBuffer", &nvrhi::BufferDesc::isVertexBuffer)
+        .def_readwrite("isIndexBuffer", &nvrhi::BufferDesc::isIndexBuffer)
+        .def_readwrite("isConstantBuffer", &nvrhi::BufferDesc::isConstantBuffer)
+        .def_readwrite("isDrawIndirectArgs", &nvrhi::BufferDesc::isDrawIndirectArgs)
+        .def_readwrite("isAccelStructBuildInput", &nvrhi::BufferDesc::isAccelStructBuildInput)
+        .def_readwrite("isAccelStructStorage", &nvrhi::BufferDesc::isAccelStructStorage)
+        .def_readwrite("isShaderBindingTable", &nvrhi::BufferDesc::isShaderBindingTable)
+        .def_readwrite("isVolatile", &nvrhi::BufferDesc::isVolatile)
+        .def_readwrite("initialState", &nvrhi::BufferDesc::initialState)
+        .def_readwrite("keepInitialState", &nvrhi::BufferDesc::keepInitialState);
+
+    py::class_<nvrhi::TextureDesc>(m, "TextureDesc")
+        .def(py::init<>())
+        .def_readwrite("width", &nvrhi::TextureDesc::width)
+        .def_readwrite("height", &nvrhi::TextureDesc::height)
+        .def_readwrite("depth", &nvrhi::TextureDesc::depth)
+        .def_readwrite("arraySize", &nvrhi::TextureDesc::arraySize)
+        .def_readwrite("mipLevels", &nvrhi::TextureDesc::mipLevels)
+        .def_readwrite("sampleCount", &nvrhi::TextureDesc::sampleCount)
+        .def_readwrite("format", &nvrhi::TextureDesc::format)
+        .def_readwrite("debugName", &nvrhi::TextureDesc::debugName)
+        .def_readwrite("isShaderResource", &nvrhi::TextureDesc::isShaderResource)
+        .def_readwrite("isRenderTarget", &nvrhi::TextureDesc::isRenderTarget)
+        .def_readwrite("isUAV", &nvrhi::TextureDesc::isUAV)
+        .def_readwrite("clearValue", &nvrhi::TextureDesc::clearValue)
+        .def_readwrite("useClearValue", &nvrhi::TextureDesc::useClearValue)
+        .def_readwrite("initialState", &nvrhi::TextureDesc::initialState)
+        .def_readwrite("keepInitialState", &nvrhi::TextureDesc::keepInitialState);
+
+    py::class_<nvrhi::FramebufferAttachment>(m, "FramebufferAttachment")
+        .def_property_readonly("texture", [](const nvrhi::FramebufferAttachment &a) -> nvrhi::ITexture* { return a.texture; },
+            py::return_value_policy::reference);
+
+    py::class_<nvrhi::FramebufferDesc>(m, "FramebufferDesc")
+        .def("getColorAttachment", [](const nvrhi::FramebufferDesc &self, size_t index) { return self.colorAttachments[index]; },
+            py::arg("index"));
+
+    // BindingLayoutItem/BindingSetItem pack a bitfield + union that pybind11 can't expose as
+    // plain properties; Python only ever obtains instances through these static factories,
+    // matching how nvrhi's own C++ call sites are expected to construct them.
+    py::class_<nvrhi::BindingLayoutItem>(m, "BindingLayoutItem")
+        .def_static("Texture_UAV", &nvrhi::BindingLayoutItem::Texture_UAV, py::arg("slot"))
+        .def_static("RayTracingAccelStruct", &nvrhi::BindingLayoutItem::RayTracingAccelStruct, py::arg("slot"));
+
+    py::class_<nvrhi::BindingLayoutDesc>(m, "BindingLayoutDesc")
+        .def(py::init<>())
+        .def_readwrite("visibility", &nvrhi::BindingLayoutDesc::visibility)
+        .def_readwrite("bindings", &nvrhi::BindingLayoutDesc::bindings);
+
+    py::class_<nvrhi::BindingSetItem>(m, "BindingSetItem")
+        .def_static("Texture_UAV", [](uint32_t slot, nvrhi::ITexture* texture) {
+            return nvrhi::BindingSetItem::Texture_UAV(slot, texture);
+        }, py::arg("slot"), py::arg("texture"))
+        .def_static("RayTracingAccelStruct", [](uint32_t slot, nvrhi::rt::IAccelStruct* accelStruct) {
+            return nvrhi::BindingSetItem::RayTracingAccelStruct(slot, accelStruct);
+        }, py::arg("slot"), py::arg("accelStruct"));
+
+    py::class_<nvrhi::BindingSetDesc>(m, "BindingSetDesc")
+        .def(py::init<>())
+        .def_readwrite("bindings", &nvrhi::BindingSetDesc::bindings);
+
+    py::class_<nvrhi::rt::GeometryTriangles>(m, "GeometryTriangles")
+        .def(py::init<>())
+        .def_property("indexBuffer",
+            [](const nvrhi::rt::GeometryTriangles &g) -> nvrhi::IBuffer* { return g.indexBuffer; },
+            [](nvrhi::rt::GeometryTriangles &g, nvrhi::IBuffer* b) { g.indexBuffer = b; },
+            py::return_value_policy::reference)
+        .def_property("vertexBuffer",
+            [](const nvrhi::rt::GeometryTriangles &g) -> nvrhi::IBuffer* { return g.vertexBuffer; },
+            [](nvrhi::rt::GeometryTriangles &g, nvrhi::IBuffer* b) { g.vertexBuffer = b; },
+            py::return_value_policy::reference)
+        .def_readwrite("indexFormat", &nvrhi::rt::GeometryTriangles::indexFormat)
+        .def_readwrite("vertexFormat", &nvrhi::rt::GeometryTriangles::vertexFormat)
+        .def_readwrite("indexCount", &nvrhi::rt::GeometryTriangles::indexCount)
+        .def_readwrite("vertexCount", &nvrhi::rt::GeometryTriangles::vertexCount)
+        .def_readwrite("vertexStride", &nvrhi::rt::GeometryTriangles::vertexStride);
+
+    py::class_<nvrhi::rt::GeometryDesc>(m, "GeometryDesc")
+        .def(py::init<>())
+        .def_readwrite("flags", &nvrhi::rt::GeometryDesc::flags)
+        .def("setTriangles", [](nvrhi::rt::GeometryDesc &self, const nvrhi::rt::GeometryTriangles &triangles) {
+            self.setTriangles(triangles);
+        }, py::arg("triangles"));
+
+    py::class_<nvrhi::rt::AccelStructDesc>(m, "AccelStructDesc")
+        .def(py::init<>())
+        .def_readwrite("isTopLevel", &nvrhi::rt::AccelStructDesc::isTopLevel)
+        .def_readwrite("topLevelMaxInstances", &nvrhi::rt::AccelStructDesc::topLevelMaxInstances)
+        .def_readwrite("bottomLevelGeometries", &nvrhi::rt::AccelStructDesc::bottomLevelGeometries);
+
+    // InstanceDesc packs bitfields + a union (like BindingLayoutItem/BindingSetItem above),
+    // so it's mutated through its setter methods rather than plain properties. The default
+    // constructor already fills in the identity transform.
+    py::class_<nvrhi::rt::InstanceDesc>(m, "InstanceDesc")
+        .def(py::init<>())
+        .def("setInstanceMask", [](nvrhi::rt::InstanceDesc &self, uint32_t value) { self.setInstanceMask(value); }, py::arg("value"))
+        .def("setInstanceID", [](nvrhi::rt::InstanceDesc &self, uint32_t value) { self.setInstanceID(value); }, py::arg("value"))
+        .def("setInstanceContributionToHitGroupIndex", [](nvrhi::rt::InstanceDesc &self, uint32_t value) {
+            self.setInstanceContributionToHitGroupIndex(value);
+        }, py::arg("value"))
+        .def("setFlags", [](nvrhi::rt::InstanceDesc &self, nvrhi::rt::InstanceFlags value) { self.setFlags(value); }, py::arg("value"))
+        .def("setBLAS", [](nvrhi::rt::InstanceDesc &self, nvrhi::rt::IAccelStruct* value) { self.setBLAS(value); }, py::arg("value"));
+
+    py::class_<nvrhi::rt::PipelineShaderDesc>(m, "PipelineShaderDesc")
+        .def(py::init<>())
+        .def("setShader", [](nvrhi::rt::PipelineShaderDesc &self, nvrhi::IShader* shader) { self.setShader(shader); }, py::arg("shader"));
+
+    py::class_<nvrhi::rt::PipelineHitGroupDesc>(m, "PipelineHitGroupDesc")
+        .def(py::init<>())
+        .def("setExportName", [](nvrhi::rt::PipelineHitGroupDesc &self, const std::string &value) { self.setExportName(value); }, py::arg("value"))
+        .def("setClosestHitShader", [](nvrhi::rt::PipelineHitGroupDesc &self, nvrhi::IShader* shader) { self.setClosestHitShader(shader); }, py::arg("shader"));
+
+    py::class_<nvrhi::rt::PipelineDesc>(m, "RayTracingPipelineDesc")
+        .def(py::init<>())
+        .def_readwrite("maxPayloadSize", &nvrhi::rt::PipelineDesc::maxPayloadSize)
+        .def("addShader", [](nvrhi::rt::PipelineDesc &self, const nvrhi::rt::PipelineShaderDesc &shader) { self.addShader(shader); }, py::arg("shader"))
+        .def("addHitGroup", [](nvrhi::rt::PipelineDesc &self, const nvrhi::rt::PipelineHitGroupDesc &hitGroup) { self.addHitGroup(hitGroup); }, py::arg("hitGroup"))
+        .def("addBindingLayout", [](nvrhi::rt::PipelineDesc &self, nvrhi::IBindingLayout* layout) { self.addBindingLayout(layout); }, py::arg("layout"));
+
+    py::class_<nvrhi::rt::State>(m, "RayTracingState")
+        .def(py::init<>())
+        .def_property("shaderTable",
+            [](const nvrhi::rt::State &s) -> nvrhi::rt::IShaderTable* { return s.shaderTable; },
+            [](nvrhi::rt::State &s, nvrhi::rt::IShaderTable* t) { s.shaderTable = t; },
+            py::return_value_policy::reference)
+        .def("addBindingSet", [](nvrhi::rt::State &self, nvrhi::IBindingSet* set) { self.addBindingSet(set); }, py::arg("bindingSet"));
+
+    py::class_<nvrhi::rt::DispatchRaysArguments>(m, "DispatchRaysArguments")
+        .def(py::init<>())
+        .def_readwrite("width", &nvrhi::rt::DispatchRaysArguments::width)
+        .def_readwrite("height", &nvrhi::rt::DispatchRaysArguments::height)
+        .def_readwrite("depth", &nvrhi::rt::DispatchRaysArguments::depth);
+
     framebuffer.def("getFramebufferInfo", &nvrhi::IFramebuffer::getFramebufferInfo, py::return_value_policy::reference_internal);
+    framebuffer.def("getDesc", [](nvrhi::IFramebuffer &self) { return self.getDesc(); });
+
+    texture.def("getDesc", [](nvrhi::ITexture &self) { return self.getDesc(); });
 
     device.def("getGraphicsAPI", &nvrhi::IDevice::getGraphicsAPI);
     device.def("createCommandList", [](nvrhi::IDevice &self) {
@@ -462,27 +756,106 @@ PYBIND11_MODULE(_pydonut, m) {
         desc.entryName = entryName;
         return DetachToShared(self.createShader(desc, bytecode.data(), bytecode.size()));
     }, py::arg("bytecode"), py::arg("entryName"), py::arg("shaderType"));
+    device.def("queryFeatureSupport", [](nvrhi::IDevice &self, nvrhi::Feature feature) {
+        return self.queryFeatureSupport(feature);
+    }, py::arg("feature"));
+    device.def("createBuffer", [](nvrhi::IDevice &self, const nvrhi::BufferDesc &desc) {
+        return DetachToShared(self.createBuffer(desc));
+    }, py::arg("desc"));
+    device.def("createTexture", [](nvrhi::IDevice &self, const nvrhi::TextureDesc &desc) {
+        return DetachToShared(self.createTexture(desc));
+    }, py::arg("desc"));
+    device.def("createBindingLayout", [](nvrhi::IDevice &self, const nvrhi::BindingLayoutDesc &desc) {
+        return DetachToShared(self.createBindingLayout(desc));
+    }, py::arg("desc"));
+    device.def("createBindingSet", [](nvrhi::IDevice &self, const nvrhi::BindingSetDesc &desc, nvrhi::IBindingLayout* layout) {
+        return DetachToShared(self.createBindingSet(desc, layout));
+    }, py::arg("desc"), py::arg("layout"));
+    device.def("createAccelStruct", [](nvrhi::IDevice &self, const nvrhi::rt::AccelStructDesc &desc) {
+        return DetachToShared(self.createAccelStruct(desc));
+    }, py::arg("desc"));
+    device.def("createRayTracingPipeline", [](nvrhi::IDevice &self, const nvrhi::rt::PipelineDesc &desc) {
+        return DetachToShared(self.createRayTracingPipeline(desc));
+    }, py::arg("desc"));
 
     commandList.def("open", &nvrhi::ICommandList::open);
     commandList.def("close", &nvrhi::ICommandList::close);
     commandList.def("setGraphicsState", &nvrhi::ICommandList::setGraphicsState, py::arg("state"));
     commandList.def("draw", &nvrhi::ICommandList::draw, py::arg("args"));
+    commandList.def("writeBuffer", [](nvrhi::ICommandList &self, nvrhi::IBuffer* buffer, py::buffer data, uint64_t destOffsetBytes) {
+        py::buffer_info info = data.request();
+        self.writeBuffer(buffer, info.ptr, static_cast<size_t>(info.size * info.itemsize), destOffsetBytes);
+    }, py::arg("buffer"), py::arg("data"), py::arg("destOffsetBytes") = 0);
+    commandList.def("buildTopLevelAccelStruct", [](nvrhi::ICommandList &self, nvrhi::rt::IAccelStruct* as, const std::vector<nvrhi::rt::InstanceDesc> &instances) {
+        self.buildTopLevelAccelStruct(as, instances.data(), instances.size());
+    }, py::arg("as"), py::arg("instances"));
+    commandList.def("setRayTracingState", &nvrhi::ICommandList::setRayTracingState, py::arg("state"));
+    commandList.def("dispatchRays", &nvrhi::ICommandList::dispatchRays, py::arg("args"));
 
     m.def("ClearColorAttachment", &nvrhi::utils::ClearColorAttachment,
         py::arg("commandList"), py::arg("framebuffer"), py::arg("attachmentIndex"), py::arg("color"));
 
+    m.def("BuildBottomLevelAccelStruct", &nvrhi::utils::BuildBottomLevelAccelStruct,
+        py::arg("commandList"), py::arg("as"), py::arg("desc"));
+
+    rtPipeline.def("createShaderTable", [](nvrhi::rt::IPipeline &self) {
+        return DetachToShared(self.createShaderTable());
+    });
+
+    shaderTable.def("setRayGenerationShader", [](nvrhi::rt::IShaderTable &self, const std::string &exportName, nvrhi::IBindingSet* bindings) {
+        self.setRayGenerationShader(exportName.c_str(), bindings);
+    }, py::arg("exportName"), py::arg("bindings") = nullptr);
+    shaderTable.def("addHitGroup", [](nvrhi::rt::IShaderTable &self, const std::string &exportName, nvrhi::IBindingSet* bindings) {
+        return self.addHitGroup(exportName.c_str(), bindings);
+    }, py::arg("exportName"), py::arg("bindings") = nullptr);
+    shaderTable.def("addMissShader", [](nvrhi::rt::IShaderTable &self, const std::string &exportName, nvrhi::IBindingSet* bindings) {
+        return self.addMissShader(exportName.c_str(), bindings);
+    }, py::arg("exportName"), py::arg("bindings") = nullptr);
+
+    shaderLibrary.def("getShader", [](nvrhi::IShaderLibrary &self, const std::string &entryName, nvrhi::ShaderType shaderType) {
+        return DetachToShared(self.getShader(entryName.c_str(), shaderType));
+    }, py::arg("entryName"), py::arg("shaderType"));
+
     m.def("GetDirectoryWithExecutable", &donut::app::GetDirectoryWithExecutable);
     m.def("GetShaderTypeName", &donut::app::GetShaderTypeName, py::arg("api"));
+
+    py::class_<Log>(m, "log")
+        .def_static("SetMinSeverity", &Log::SetMinSeverity, py::arg("severity"))
+        .def_static("SetCallback", &Log::SetCallback, py::arg("callback"))
+        .def_static("ResetCallback", &Log::ResetCallback)
+        .def_static("EnableOutputToMessageBox", &Log::EnableOutputToMessageBox, py::arg("enable"))
+        .def_static("EnableOutputToConsole", &Log::EnableOutputToConsole, py::arg("enable"))
+        .def_static("EnableOutputToDebug", &Log::EnableOutputToDebug, py::arg("enable"))
+        .def_static("SetErrorMessageCaption", &Log::SetErrorMessageCaption, py::arg("caption"))
+        .def_static("ConsoleApplicationMode", &Log::ConsoleApplicationMode)
+        .def_static("message", &Log::message, py::arg("severity"), py::arg("message"))
+        .def_static("debug", &Log::debug, py::arg("message"))
+        .def_static("info", &Log::info, py::arg("message"))
+        .def_static("warning", &Log::warning, py::arg("message"))
+        .def_static("error", &Log::error, py::arg("message"))
+        .def_static("fatal", &Log::fatal, py::arg("message"));
+
+    device.def("createShaderLibrary", [](nvrhi::IDevice &self, const std::string &bytecode) {
+        return DetachToShared(self.createShaderLibrary(bytecode.data(), bytecode.size()));
+    }, py::arg("bytecode"));
 
 #if PYDONUT_HAVE_DXC
     m.def("CompileShader", &CompileShaderWithDXC,
         py::arg("source"), py::arg("entryPoint"), py::arg("shaderType"), py::arg("api"),
+        py::arg("sourceName") = "shader.hlsl", py::arg("shaderModel") = "6_5");
+    m.def("CompileShaderLibrary", &CompileShaderLibraryWithDXC,
+        py::arg("source"), py::arg("api"),
         py::arg("sourceName") = "shader.hlsl", py::arg("shaderModel") = "6_5");
 #endif
 
     py::class_<donut::vfs::IFileSystem, std::shared_ptr<donut::vfs::IFileSystem>>(m, "IFileSystem");
     py::class_<donut::vfs::NativeFileSystem, donut::vfs::IFileSystem, std::shared_ptr<donut::vfs::NativeFileSystem>>(m, "NativeFileSystem")
         .def(py::init<>());
+    py::class_<donut::vfs::RootFileSystem, donut::vfs::IFileSystem, std::shared_ptr<donut::vfs::RootFileSystem>>(m, "RootFileSystem")
+        .def(py::init<>())
+        .def("mount", [](donut::vfs::RootFileSystem &self, const std::filesystem::path &path, const std::filesystem::path &nativePath) {
+            self.mount(path, nativePath);
+        }, py::arg("path"), py::arg("nativePath"));
 
     py::class_<donut::engine::ShaderFactory, std::shared_ptr<donut::engine::ShaderFactory>> shaderFactory(m, "ShaderFactory");
     shaderFactory.def(py::init([](nvrhi::IDevice* device, std::shared_ptr<donut::vfs::IFileSystem> fs, const std::filesystem::path& basePath) {
@@ -491,6 +864,20 @@ PYBIND11_MODULE(_pydonut, m) {
     shaderFactory.def("CreateShader", [](donut::engine::ShaderFactory &self, const std::string &fileName, const std::string &entryName, nvrhi::ShaderType shaderType) {
         return DetachToShared(self.CreateShader(fileName.c_str(), entryName.c_str(), nullptr, shaderType));
     }, py::arg("fileName"), py::arg("entryName"), py::arg("shaderType"));
+    shaderFactory.def("CreateShaderLibrary", [](donut::engine::ShaderFactory &self, const std::string &fileName) {
+        return DetachToShared(self.CreateShaderLibrary(fileName.c_str(), nullptr));
+    }, py::arg("fileName"));
+
+    py::class_<donut::engine::BindingCache>(m, "BindingCache")
+        .def(py::init<nvrhi::IDevice*>(), py::arg("device"))
+        .def("Clear", &donut::engine::BindingCache::Clear);
+
+    py::class_<donut::engine::CommonRenderPasses, std::shared_ptr<donut::engine::CommonRenderPasses>>(m, "CommonRenderPasses")
+        .def(py::init<nvrhi::IDevice*, std::shared_ptr<donut::engine::ShaderFactory>>(), py::arg("device"), py::arg("shaderFactory"))
+        .def("BlitTexture", [](donut::engine::CommonRenderPasses &self, nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* targetFramebuffer,
+                nvrhi::ITexture* sourceTexture, donut::engine::BindingCache* bindingCache) {
+            self.BlitTexture(commandList, targetFramebuffer, sourceTexture, bindingCache);
+        }, py::arg("commandList"), py::arg("targetFramebuffer"), py::arg("sourceTexture"), py::arg("bindingCache") = nullptr);
 
     py::class_<donut::app::IRenderPass, PyIRenderPass> renderPass(m, "IRenderPass");
     renderPass.def(py::init<donut::app::DeviceManager*>(), py::arg("deviceManager"));
