@@ -5,6 +5,8 @@ from pydonut._pydonut import Format
 from pydonut._pydonut import LogSeverity
 from pydonut._pydonut import ShaderType
 from pydonut._pydonut import PrimitiveType
+from pydonut._pydonut import ComparisonFunc
+from pydonut._pydonut import RasterCullMode
 from pydonut._pydonut import CommandQueue
 from pydonut._pydonut import Feature
 from pydonut._pydonut import ResourceStates
@@ -15,6 +17,7 @@ from pydonut._pydonut import Viewport
 from pydonut._pydonut import ViewportState
 from pydonut._pydonut import FramebufferInfo
 from pydonut._pydonut import DepthStencilState
+from pydonut._pydonut import RasterState
 from pydonut._pydonut import RenderState
 from pydonut._pydonut import DrawArguments
 from pydonut._pydonut import GraphicsPipelineDesc
@@ -29,6 +32,7 @@ from pydonut._pydonut import BindingLayoutItem
 from pydonut._pydonut import BindingLayoutDesc
 from pydonut._pydonut import BindingSetItem
 from pydonut._pydonut import BindingSetDesc
+from pydonut._pydonut import BindlessLayoutDesc
 from pydonut._pydonut import GeometryTriangles
 from pydonut._pydonut import GeometryDesc
 from pydonut._pydonut import AccelStructDesc
@@ -50,6 +54,7 @@ from pydonut._pydonut import CommandList
 from pydonut._pydonut import Buffer
 from pydonut._pydonut import BindingLayout
 from pydonut._pydonut import BindingSet
+from pydonut._pydonut import Sampler
 from pydonut._pydonut import AccelStruct
 from pydonut._pydonut import Device
 from pydonut._pydonut import IFileSystem
@@ -58,6 +63,11 @@ from pydonut._pydonut import RootFileSystem
 from pydonut._pydonut import ShaderFactory
 from pydonut._pydonut import BindingCache
 from pydonut._pydonut import CommonRenderPasses
+from pydonut._pydonut import DescriptorTableManager
+from pydonut._pydonut import TextureCache
+from pydonut._pydonut import Scene
+from pydonut._pydonut import FirstPersonCamera
+from pydonut._pydonut import PlanarView
 from pydonut._pydonut import AdapterInfo
 from pydonut._pydonut import IRenderPass
 from pydonut._pydonut import PipelineCallbacks
@@ -67,7 +77,9 @@ from pydonut._pydonut import GetGraphicsAPIFromCommandLine
 from pydonut._pydonut import GetDirectoryWithExecutable
 from pydonut._pydonut import GetShaderTypeName
 from pydonut._pydonut import ClearColorAttachment
+from pydonut._pydonut import ClearDepthStencilAttachment
 from pydonut._pydonut import BuildBottomLevelAccelStruct
+from pydonut._pydonut import CreateBindingSetAndLayout
 from pydonut._pydonut import log
 
 try:
@@ -84,6 +96,8 @@ __all__ = (
     'LogSeverity',
     'ShaderType',
     'PrimitiveType',
+    'ComparisonFunc',
+    'RasterCullMode',
     'CommandQueue',
     'Feature',
     'ResourceStates',
@@ -94,6 +108,7 @@ __all__ = (
     'ViewportState',
     'FramebufferInfo',
     'DepthStencilState',
+    'RasterState',
     'RenderState',
     'DrawArguments',
     'GraphicsPipelineDesc',
@@ -108,6 +123,7 @@ __all__ = (
     'BindingLayoutDesc',
     'BindingSetItem',
     'BindingSetDesc',
+    'BindlessLayoutDesc',
     'GeometryTriangles',
     'GeometryDesc',
     'AccelStructDesc',
@@ -129,6 +145,7 @@ __all__ = (
     'Buffer',
     'BindingLayout',
     'BindingSet',
+    'Sampler',
     'AccelStruct',
     'Device',
     'IFileSystem',
@@ -137,6 +154,11 @@ __all__ = (
     'ShaderFactory',
     'BindingCache',
     'CommonRenderPasses',
+    'DescriptorTableManager',
+    'TextureCache',
+    'Scene',
+    'FirstPersonCamera',
+    'PlanarView',
     'AdapterInfo',
     'IRenderPass',
     'PipelineCallbacks',
@@ -146,7 +168,9 @@ __all__ = (
     'GetDirectoryWithExecutable',
     'GetShaderTypeName',
     'ClearColorAttachment',
+    'ClearDepthStencilAttachment',
     'BuildBottomLevelAccelStruct',
+    'CreateBindingSetAndLayout',
     'log',
     'CompileShader',
     'CompileShaderLibrary',

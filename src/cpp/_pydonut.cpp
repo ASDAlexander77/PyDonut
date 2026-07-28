@@ -14,16 +14,31 @@
 
 #include <donut/app/DeviceManager.h>
 #include <donut/app/ApplicationBase.h>
+#include <donut/app/Camera.h>
 #include <donut/core/log.h>
 #include <donut/core/vfs/VFS.h>
+#include <donut/core/math/math.h>
 #include <donut/engine/ShaderFactory.h>
 #include <donut/engine/CommonRenderPasses.h>
 #include <donut/engine/BindingCache.h>
+#include <donut/engine/View.h>
+#include <donut/engine/Scene.h>
+#include <donut/engine/SceneGraph.h>
+#include <donut/engine/TextureCache.h>
+#include <donut/engine/DescriptorTableManager.h>
 #include <nvrhi/utils.h>
 
 #if PYDONUT_HAVE_DXC
 #include <dxcapi.h>
 #endif
+
+// view_cb.h is a shared C++/HLSL header: its field types (float4x4, float2, ...) are
+// donut::math types used unqualified, exactly as donut's own View.cpp includes it. Its
+// PlanarViewConstants is forward-declared at GLOBAL scope in View.h (see the `struct
+// PlanarViewConstants;` there), so this include -- and the using-directive it needs --
+// must also sit at global scope for the two declarations to refer to the same type.
+using namespace donut::math;
+#include <donut/shaders/view_cb.h>
 
 namespace py = pybind11;
 
@@ -194,6 +209,17 @@ void AddVulkanBindingShiftArgs(std::vector<LPCWSTR> &args) {
     args.push_back(L"-fvk-u-shift"); args.push_back(L"384"); args.push_back(L"0");
 }
 
+// Appends "-I <path>" for each entry so #include <...> in the source can resolve
+// against donut's shared C++/HLSL header directories (e.g. donut/shaders/*.h). The
+// wstring conversions are appended to `storage` so their backing memory outlives `args`.
+void AddIncludePathArgs(std::vector<LPCWSTR> &args, const std::vector<std::string> &includePaths, std::vector<std::wstring> &storage) {
+    for (const auto &path : includePaths) {
+        storage.push_back(ToWide(path));
+        args.push_back(L"-I");
+        args.push_back(storage.back().c_str());
+    }
+}
+
 // Compiles HLSL source to DXIL (D3D12) or SPIR-V (Vulkan) in-process via DXC, entirely
 // in memory -- no ShaderMake, no external process, no filesystem round-trip.
 py::bytes CompileShaderWithDXC(
@@ -202,7 +228,8 @@ py::bytes CompileShaderWithDXC(
     nvrhi::ShaderType shaderType,
     nvrhi::GraphicsAPI api,
     const std::string &sourceName,
-    const std::string &shaderModel)
+    const std::string &shaderModel,
+    const std::vector<std::string> &includePaths)
 {
     std::wstring wEntryPoint = ToWide(entryPoint);
     std::wstring wProfile = std::wstring(HlslProfilePrefix(shaderType)) + L"_" + ToWide(shaderModel);
@@ -217,6 +244,8 @@ py::bytes CompileShaderWithDXC(
         args.push_back(L"-spirv");
         AddVulkanBindingShiftArgs(args);
     }
+    std::vector<std::wstring> includePathStorage;
+    AddIncludePathArgs(args, includePaths, includePathStorage);
 
     return RunDXC(source, args);
 }
@@ -229,7 +258,8 @@ py::bytes CompileShaderLibraryWithDXC(
     const std::string &source,
     nvrhi::GraphicsAPI api,
     const std::string &sourceName,
-    const std::string &shaderModel)
+    const std::string &shaderModel,
+    const std::vector<std::string> &includePaths)
 {
     std::wstring wProfile = L"lib_" + ToWide(shaderModel);
     std::wstring wSourceName = ToWide(sourceName);
@@ -244,6 +274,8 @@ py::bytes CompileShaderLibraryWithDXC(
         args.push_back(L"-fspv-target-env=vulkan1.2");
         AddVulkanBindingShiftArgs(args);
     }
+    std::vector<std::wstring> includePathStorage;
+    AddIncludePathArgs(args, includePaths, includePathStorage);
 
     return RunDXC(source, args);
 }
@@ -403,6 +435,23 @@ PYBIND11_MODULE(_pydonut, m) {
         .value("PatchList", nvrhi::PrimitiveType::PatchList)
         .finalize();
 
+    pybind11::native_enum<nvrhi::ComparisonFunc>(m, "ComparisonFunc", "enum.Enum")
+        .value("Never", nvrhi::ComparisonFunc::Never)
+        .value("Less", nvrhi::ComparisonFunc::Less)
+        .value("Equal", nvrhi::ComparisonFunc::Equal)
+        .value("LessOrEqual", nvrhi::ComparisonFunc::LessOrEqual)
+        .value("Greater", nvrhi::ComparisonFunc::Greater)
+        .value("NotEqual", nvrhi::ComparisonFunc::NotEqual)
+        .value("GreaterOrEqual", nvrhi::ComparisonFunc::GreaterOrEqual)
+        .value("Always", nvrhi::ComparisonFunc::Always)
+        .finalize();
+
+    pybind11::native_enum<nvrhi::RasterCullMode>(m, "RasterCullMode", "enum.Enum")
+        .value("Back", nvrhi::RasterCullMode::Back)
+        .value("Front", nvrhi::RasterCullMode::Front)
+        .value("None_", nvrhi::RasterCullMode::None)
+        .finalize();
+
     pybind11::native_enum<nvrhi::CommandQueue>(m, "CommandQueue", "enum.Enum")
         .value("Graphics", nvrhi::CommandQueue::Graphics)
         .value("Compute", nvrhi::CommandQueue::Compute)
@@ -523,6 +572,7 @@ PYBIND11_MODULE(_pydonut, m) {
     py::class_<nvrhi::IBuffer, std::shared_ptr<nvrhi::IBuffer>> buffer(m, "Buffer");
     py::class_<nvrhi::IBindingLayout, std::shared_ptr<nvrhi::IBindingLayout>> bindingLayout(m, "BindingLayout");
     py::class_<nvrhi::IBindingSet, std::shared_ptr<nvrhi::IBindingSet>> bindingSet(m, "BindingSet");
+    py::class_<nvrhi::ISampler, std::shared_ptr<nvrhi::ISampler>>(m, "Sampler");
     py::class_<nvrhi::rt::IAccelStruct, std::shared_ptr<nvrhi::rt::IAccelStruct>> accelStruct(m, "AccelStruct");
     py::class_<nvrhi::rt::IShaderTable, std::shared_ptr<nvrhi::rt::IShaderTable>> shaderTable(m, "ShaderTable");
     py::class_<nvrhi::rt::IPipeline, std::shared_ptr<nvrhi::rt::IPipeline>> rtPipeline(m, "RayTracingPipeline");
@@ -570,11 +620,18 @@ PYBIND11_MODULE(_pydonut, m) {
 
     py::class_<nvrhi::DepthStencilState>(m, "DepthStencilState")
         .def(py::init<>())
-        .def_readwrite("depthTestEnable", &nvrhi::DepthStencilState::depthTestEnable);
+        .def_readwrite("depthTestEnable", &nvrhi::DepthStencilState::depthTestEnable)
+        .def_readwrite("depthFunc", &nvrhi::DepthStencilState::depthFunc);
+
+    py::class_<nvrhi::RasterState>(m, "RasterState")
+        .def(py::init<>())
+        .def_readwrite("cullMode", &nvrhi::RasterState::cullMode)
+        .def_readwrite("frontCounterClockwise", &nvrhi::RasterState::frontCounterClockwise);
 
     py::class_<nvrhi::RenderState>(m, "RenderState")
         .def(py::init<>())
-        .def_readwrite("depthStencilState", &nvrhi::RenderState::depthStencilState);
+        .def_readwrite("depthStencilState", &nvrhi::RenderState::depthStencilState)
+        .def_readwrite("rasterState", &nvrhi::RenderState::rasterState);
 
     py::class_<nvrhi::DrawArguments>(m, "DrawArguments")
         .def(py::init<>())
@@ -595,7 +652,10 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_property("PS",
             [](const nvrhi::GraphicsPipelineDesc &d) -> nvrhi::IShader* { return d.PS.Get(); },
             [](nvrhi::GraphicsPipelineDesc &d, nvrhi::IShader* shader) { d.PS = shader; },
-            py::return_value_policy::reference);
+            py::return_value_policy::reference)
+        .def("addBindingLayout", [](nvrhi::GraphicsPipelineDesc &self, nvrhi::IBindingLayout* layout) {
+            self.addBindingLayout(layout);
+        }, py::arg("layout"));
 
     py::class_<nvrhi::GraphicsState>(m, "GraphicsState")
         .def(py::init<>())
@@ -607,7 +667,10 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_property("framebuffer",
             [](const nvrhi::GraphicsState &s) -> nvrhi::IFramebuffer* { return s.framebuffer; },
             [](nvrhi::GraphicsState &s, nvrhi::IFramebuffer* fb) { s.framebuffer = fb; },
-            py::return_value_policy::reference);
+            py::return_value_policy::reference)
+        .def("addBindingSet", [](nvrhi::GraphicsState &self, nvrhi::IBindingSet* set) {
+            self.addBindingSet(set);
+        }, py::arg("bindingSet"));
 
     py::class_<nvrhi::MeshletPipelineDesc>(m, "MeshletPipelineDesc")
         .def(py::init<>())
@@ -690,6 +753,8 @@ PYBIND11_MODULE(_pydonut, m) {
     // matching how nvrhi's own C++ call sites are expected to construct them.
     py::class_<nvrhi::BindingLayoutItem>(m, "BindingLayoutItem")
         .def_static("Texture_UAV", &nvrhi::BindingLayoutItem::Texture_UAV, py::arg("slot"))
+        .def_static("Texture_SRV", &nvrhi::BindingLayoutItem::Texture_SRV, py::arg("slot"))
+        .def_static("RawBuffer_SRV", &nvrhi::BindingLayoutItem::RawBuffer_SRV, py::arg("slot"))
         .def_static("RayTracingAccelStruct", &nvrhi::BindingLayoutItem::RayTracingAccelStruct, py::arg("slot"));
 
     py::class_<nvrhi::BindingLayoutDesc>(m, "BindingLayoutDesc")
@@ -703,11 +768,45 @@ PYBIND11_MODULE(_pydonut, m) {
         }, py::arg("slot"), py::arg("texture"))
         .def_static("RayTracingAccelStruct", [](uint32_t slot, nvrhi::rt::IAccelStruct* accelStruct) {
             return nvrhi::BindingSetItem::RayTracingAccelStruct(slot, accelStruct);
-        }, py::arg("slot"), py::arg("accelStruct"));
+        }, py::arg("slot"), py::arg("accelStruct"))
+        .def_static("ConstantBuffer", [](uint32_t slot, nvrhi::IBuffer* buffer) {
+            return nvrhi::BindingSetItem::ConstantBuffer(slot, buffer);
+        }, py::arg("slot"), py::arg("buffer"))
+        .def_static("StructuredBuffer_SRV", [](uint32_t slot, nvrhi::IBuffer* buffer) {
+            return nvrhi::BindingSetItem::StructuredBuffer_SRV(slot, buffer);
+        }, py::arg("slot"), py::arg("buffer"))
+        .def_static("Sampler", [](uint32_t slot, nvrhi::ISampler* sampler) {
+            return nvrhi::BindingSetItem::Sampler(slot, sampler);
+        }, py::arg("slot"), py::arg("sampler"))
+        .def_static("PushConstants", &nvrhi::BindingSetItem::PushConstants, py::arg("slot"), py::arg("byteSize"));
 
     py::class_<nvrhi::BindingSetDesc>(m, "BindingSetDesc")
         .def(py::init<>())
         .def_readwrite("bindings", &nvrhi::BindingSetDesc::bindings);
+
+    // BindlessLayoutDesc.registerSpaces reuses BindingLayoutItem, but its `slot` means
+    // "register space index" here rather than a binding slot (see nvrhi.h's comment on
+    // BindlessLayoutDesc) -- RawBuffer_SRV(1)/Texture_SRV(2) below assign spaces 1 and 2.
+    py::class_<nvrhi::BindlessLayoutDesc>(m, "BindlessLayoutDesc")
+        .def(py::init<>())
+        .def_readwrite("visibility", &nvrhi::BindlessLayoutDesc::visibility)
+        .def_readwrite("firstSlot", &nvrhi::BindlessLayoutDesc::firstSlot)
+        .def_readwrite("maxCapacity", &nvrhi::BindlessLayoutDesc::maxCapacity)
+        .def("addRegisterSpace", [](nvrhi::BindlessLayoutDesc &self, const nvrhi::BindingLayoutItem &item) {
+            self.addRegisterSpace(item);
+        }, py::arg("item"));
+
+    // Mirrors nvrhi::utils::CreateBindingSetAndLayout: derives a matching BindingLayoutDesc
+    // from the BindingSetDesc's items and creates both in one call.
+    m.def("CreateBindingSetAndLayout", [](nvrhi::IDevice* device, nvrhi::ShaderType visibility, uint32_t registerSpace, const nvrhi::BindingSetDesc &bindingSetDesc) {
+        nvrhi::BindingLayoutHandle layout;
+        nvrhi::BindingSetHandle set;
+        nvrhi::utils::CreateBindingSetAndLayout(device, visibility, registerSpace, bindingSetDesc, layout, set);
+        return py::make_tuple(DetachToShared(std::move(layout)), DetachToShared(std::move(set)));
+    }, py::arg("device"), py::arg("visibility"), py::arg("registerSpace"), py::arg("bindingSetDesc"));
+
+    m.def("ClearDepthStencilAttachment", &nvrhi::utils::ClearDepthStencilAttachment,
+        py::arg("commandList"), py::arg("framebuffer"), py::arg("depth"), py::arg("stencil"));
 
     py::class_<nvrhi::rt::GeometryTriangles>(m, "GeometryTriangles")
         .def(py::init<>())
@@ -826,6 +925,10 @@ PYBIND11_MODULE(_pydonut, m) {
     device.def("createRayTracingPipeline", [](nvrhi::IDevice &self, const nvrhi::rt::PipelineDesc &desc) {
         return DetachToShared(self.createRayTracingPipeline(desc));
     }, py::arg("desc"));
+    device.def("createBindlessLayout", [](nvrhi::IDevice &self, const nvrhi::BindlessLayoutDesc &desc) {
+        return DetachToShared(self.createBindlessLayout(desc));
+    }, py::arg("desc"));
+    device.def("waitForIdle", &nvrhi::IDevice::waitForIdle);
 
     commandList.def("open", &nvrhi::ICommandList::open);
     commandList.def("close", &nvrhi::ICommandList::close);
@@ -843,6 +946,10 @@ PYBIND11_MODULE(_pydonut, m) {
     }, py::arg("as"), py::arg("instances"));
     commandList.def("setRayTracingState", &nvrhi::ICommandList::setRayTracingState, py::arg("state"));
     commandList.def("dispatchRays", &nvrhi::ICommandList::dispatchRays, py::arg("args"));
+    commandList.def("setPushConstants", [](nvrhi::ICommandList &self, py::buffer data) {
+        py::buffer_info info = data.request();
+        self.setPushConstants(info.ptr, static_cast<size_t>(info.size * info.itemsize));
+    }, py::arg("data"));
 
     m.def("ClearColorAttachment", &nvrhi::utils::ClearColorAttachment,
         py::arg("commandList"), py::arg("framebuffer"), py::arg("attachmentIndex"), py::arg("color"));
@@ -894,10 +1001,12 @@ PYBIND11_MODULE(_pydonut, m) {
 #if PYDONUT_HAVE_DXC
     m.def("CompileShader", &CompileShaderWithDXC,
         py::arg("source"), py::arg("entryPoint"), py::arg("shaderType"), py::arg("api"),
-        py::arg("sourceName") = "shader.hlsl", py::arg("shaderModel") = "6_5");
+        py::arg("sourceName") = "shader.hlsl", py::arg("shaderModel") = "6_5",
+        py::arg("includePaths") = std::vector<std::string>{});
     m.def("CompileShaderLibrary", &CompileShaderLibraryWithDXC,
         py::arg("source"), py::arg("api"),
-        py::arg("sourceName") = "shader.hlsl", py::arg("shaderModel") = "6_5");
+        py::arg("sourceName") = "shader.hlsl", py::arg("shaderModel") = "6_5",
+        py::arg("includePaths") = std::vector<std::string>{});
 #endif
 
     py::class_<donut::vfs::IFileSystem, std::shared_ptr<donut::vfs::IFileSystem>>(m, "IFileSystem");
@@ -929,7 +1038,89 @@ PYBIND11_MODULE(_pydonut, m) {
         .def("BlitTexture", [](donut::engine::CommonRenderPasses &self, nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* targetFramebuffer,
                 nvrhi::ITexture* sourceTexture, donut::engine::BindingCache* bindingCache) {
             self.BlitTexture(commandList, targetFramebuffer, sourceTexture, bindingCache);
-        }, py::arg("commandList"), py::arg("targetFramebuffer"), py::arg("sourceTexture"), py::arg("bindingCache") = nullptr);
+        }, py::arg("commandList"), py::arg("targetFramebuffer"), py::arg("sourceTexture"), py::arg("bindingCache") = nullptr)
+        .def_property_readonly("m_AnisotropicWrapSampler", [](donut::engine::CommonRenderPasses &self) -> nvrhi::ISampler* {
+            return self.m_AnisotropicWrapSampler;
+        }, py::return_value_policy::reference_internal);
+
+    py::class_<donut::engine::DescriptorTableManager, std::shared_ptr<donut::engine::DescriptorTableManager>> descriptorTableManager(m, "DescriptorTableManager");
+    descriptorTableManager.def(py::init<nvrhi::IDevice*, nvrhi::IBindingLayout*>(), py::arg("device"), py::arg("layout"));
+    descriptorTableManager.def("GetDescriptorTable", [](donut::engine::DescriptorTableManager &self) -> nvrhi::IBindingSet* {
+        return self.GetDescriptorTable();
+    }, py::return_value_policy::reference_internal);
+
+    py::class_<donut::engine::TextureCache, std::shared_ptr<donut::engine::TextureCache>> textureCache(m, "TextureCache");
+    textureCache.def(py::init<nvrhi::IDevice*, std::shared_ptr<donut::vfs::IFileSystem>, std::shared_ptr<donut::engine::DescriptorTableManager>>(),
+        py::arg("device"), py::arg("fs"), py::arg("descriptorTable"));
+    textureCache.def("Reset", &donut::engine::TextureCache::Reset);
+    textureCache.def("ProcessRenderingThreadCommands", &donut::engine::TextureCache::ProcessRenderingThreadCommands,
+        py::arg("commonPasses"), py::arg("timeLimitMilliseconds"));
+    textureCache.def("LoadingFinished", &donut::engine::TextureCache::LoadingFinished);
+
+    // Scene::Load() reads a glTF file synchronously and builds the CPU-side scene graph;
+    // FinishedLoading() then uploads the GPU buffers (instances/geometries/materials) on
+    // its own internal command list. sceneTypeFactory is always null here -- Python has no
+    // use for custom scene node types, matching the samples that pass nullptr too.
+    py::class_<donut::engine::Scene, std::shared_ptr<donut::engine::Scene>> scene(m, "Scene");
+    scene.def(py::init([](nvrhi::IDevice* device, donut::engine::ShaderFactory& shaderFactory, std::shared_ptr<donut::vfs::IFileSystem> fs,
+            std::shared_ptr<donut::engine::TextureCache> textureCache, std::shared_ptr<donut::engine::DescriptorTableManager> descriptorTable) {
+        return new donut::engine::Scene(device, shaderFactory, fs, textureCache, descriptorTable, nullptr);
+    }), py::arg("device"), py::arg("shaderFactory"), py::arg("fs"), py::arg("textureCache"), py::arg("descriptorTable"));
+    scene.def("Load", [](donut::engine::Scene &self, const std::filesystem::path &sceneFileName) {
+        return self.Load(sceneFileName);
+    }, py::arg("sceneFileName"));
+    scene.def("FinishedLoading", &donut::engine::Scene::FinishedLoading, py::arg("frameIndex"));
+    scene.def("GetInstanceBuffer", [](donut::engine::Scene &self) -> nvrhi::IBuffer* { return self.GetInstanceBuffer(); }, py::return_value_policy::reference_internal);
+    scene.def("GetGeometryBuffer", [](donut::engine::Scene &self) -> nvrhi::IBuffer* { return self.GetGeometryBuffer(); }, py::return_value_policy::reference_internal);
+    scene.def("GetMaterialBuffer", [](donut::engine::Scene &self) -> nvrhi::IBuffer* { return self.GetMaterialBuffer(); }, py::return_value_policy::reference_internal);
+    // Flattens GetSceneGraph()->GetMeshInstances() -> each geometry into (instanceIndex,
+    // geometryIndexInMesh, numIndices) tuples, sparing Python from needing bindings for
+    // SceneGraph/MeshInstance/MeshInfo/MeshGeometry just to drive per-geometry draw calls.
+    scene.def("GetDrawItems", [](donut::engine::Scene &self) {
+        std::vector<std::tuple<int, int, uint32_t>> items;
+        for (const auto &instance : self.GetSceneGraph()->GetMeshInstances())
+        {
+            const auto &mesh = instance->GetMesh();
+            for (size_t i = 0; i < mesh->geometries.size(); i++)
+            {
+                items.emplace_back(instance->GetInstanceIndex(), static_cast<int>(i), mesh->geometries[i]->numIndices);
+            }
+        }
+        return items;
+    });
+
+    // FirstPersonCamera's matrices (dm::affine3/float4x4) aren't exposed to Python --
+    // SetMatricesFromCamera on PlanarView below consumes them internally instead.
+    py::class_<donut::app::FirstPersonCamera> firstPersonCamera(m, "FirstPersonCamera");
+    firstPersonCamera.def(py::init<>());
+    firstPersonCamera.def("LookAt", [](donut::app::FirstPersonCamera &self,
+            float posX, float posY, float posZ, float targetX, float targetY, float targetZ) {
+        self.LookAt(donut::math::float3(posX, posY, posZ), donut::math::float3(targetX, targetY, targetZ));
+    }, py::arg("posX"), py::arg("posY"), py::arg("posZ"), py::arg("targetX"), py::arg("targetY"), py::arg("targetZ"));
+    firstPersonCamera.def("SetMoveSpeed", &donut::app::FirstPersonCamera::SetMoveSpeed, py::arg("value"));
+    firstPersonCamera.def("Animate", &donut::app::FirstPersonCamera::Animate, py::arg("deltaT"));
+    firstPersonCamera.def("KeyboardUpdate", &donut::app::FirstPersonCamera::KeyboardUpdate,
+        py::arg("key"), py::arg("scancode"), py::arg("action"), py::arg("mods"));
+    firstPersonCamera.def("MousePosUpdate", &donut::app::FirstPersonCamera::MousePosUpdate, py::arg("xpos"), py::arg("ypos"));
+    firstPersonCamera.def("MouseButtonUpdate", &donut::app::FirstPersonCamera::MouseButtonUpdate,
+        py::arg("button"), py::arg("action"), py::arg("mods"));
+
+    py::class_<donut::engine::PlanarView> planarView(m, "PlanarView");
+    planarView.def(py::init<>());
+    planarView.def("SetViewport", [](donut::engine::PlanarView &self, const nvrhi::Viewport &viewport) {
+        self.SetViewport(viewport);
+    }, py::arg("viewport"));
+    planarView.def("SetMatricesFromCamera", [](donut::engine::PlanarView &self, const donut::app::FirstPersonCamera &camera,
+            float aspectRatio, float verticalFovRadians, float zNear) {
+        self.SetMatrices(camera.GetWorldToViewMatrix(), donut::math::perspProjD3DStyleReverse(verticalFovRadians, aspectRatio, zNear));
+    }, py::arg("camera"), py::arg("aspectRatio"), py::arg("verticalFovRadians") = donut::math::PI_f * 0.25f, py::arg("zNear") = 0.1f);
+    planarView.def("UpdateCache", &donut::engine::PlanarView::UpdateCache);
+    planarView.def("GetViewportState", &donut::engine::PlanarView::GetViewportState);
+    planarView.def("FillPlanarViewConstants", [](const donut::engine::PlanarView &self) {
+        PlanarViewConstants constants{};
+        self.FillPlanarViewConstants(constants);
+        return py::bytes(reinterpret_cast<const char*>(&constants), sizeof(constants));
+    });
 
     py::class_<donut::app::IRenderPass, PyIRenderPass> renderPass(m, "IRenderPass");
     renderPass.def(py::init<donut::app::DeviceManager*>(), py::arg("deviceManager"));
