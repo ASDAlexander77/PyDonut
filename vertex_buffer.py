@@ -163,6 +163,13 @@ if __name__ == "__main__":
 
             # Create a single binding layout and multiple binding sets, one set per view.
             # The different binding sets use different slices of the same constant buffer.
+            # All 4 binding sets must share the exact same BindingLayout object -- a pipeline
+            # is created against one layout instance, and nvrhi validates every binding set
+            # used with it against that same instance, not just a structurally equal one.
+            # pyd.CreateBindingSetAndLayout always allocates a fresh layout (unlike the C++
+            # nvrhi::utils::CreateBindingSetAndLayout, which reuses an existing BindingLayoutHandle&
+            # passed back in), so only the first view goes through it; the rest reuse
+            # self.bindingLayout via Device.createBindingSet directly.
             for viewIndex in range(NUM_VIEWS):
                 bindingSetDesc = pyd.BindingSetDesc()
                 bindingSetDesc.bindings = [
@@ -174,9 +181,12 @@ if __name__ == "__main__":
                     pyd.BindingSetItem.Texture_SRV(0, texture.texture),
                     pyd.BindingSetItem.Sampler(0, commonPasses.m_AnisotropicWrapSampler),
                 ]
-                self.bindingLayout, bindingSet = pyd.CreateBindingSetAndLayout(
-                    device, pyd.ShaderType.All, 0, bindingSetDesc
-                )
+                if self.bindingLayout is None:
+                    self.bindingLayout, bindingSet = pyd.CreateBindingSetAndLayout(
+                        device, pyd.ShaderType.All, 0, bindingSetDesc
+                    )
+                else:
+                    bindingSet = device.createBindingSet(bindingSetDesc, self.bindingLayout)
                 self.bindingSets[viewIndex] = bindingSet
 
             return True
@@ -229,7 +239,9 @@ if __name__ == "__main__":
             for viewIndex in range(NUM_VIEWS):
                 state = pyd.GraphicsState()
                 # Pick the right binding set for this view.
-                state.addBindingSet(self.bindingSets[viewIndex])
+                viewBindingSet = self.bindingSets[viewIndex]
+                assert viewBindingSet is not None
+                state.addBindingSet(viewBindingSet)
                 state.setIndexBuffer(self.indexBuffer, pyd.Format.R32_UINT, 0)
                 # Bind the vertex buffers in reverse order to test binding-slot handling,
                 # matching the C++ sample.
