@@ -19,6 +19,7 @@ from pydonut._pydonut import FramebufferInfo
 from pydonut._pydonut import DepthStencilState
 from pydonut._pydonut import RasterState
 from pydonut._pydonut import RenderState
+from pydonut._pydonut import VertexAttributeDesc
 from pydonut._pydonut import DrawArguments
 from pydonut._pydonut import GraphicsPipelineDesc
 from pydonut._pydonut import GraphicsState
@@ -30,6 +31,7 @@ from pydonut._pydonut import FramebufferAttachment
 from pydonut._pydonut import FramebufferDesc
 from pydonut._pydonut import BindingLayoutItem
 from pydonut._pydonut import BindingLayoutDesc
+from pydonut._pydonut import BufferRange
 from pydonut._pydonut import BindingSetItem
 from pydonut._pydonut import BindingSetDesc
 from pydonut._pydonut import BindlessLayoutDesc
@@ -46,6 +48,7 @@ from pydonut._pydonut import Framebuffer
 from pydonut._pydonut import Texture
 from pydonut._pydonut import Shader
 from pydonut._pydonut import ShaderLibrary
+from pydonut._pydonut import InputLayout
 from pydonut._pydonut import GraphicsPipeline
 from pydonut._pydonut import MeshletPipeline
 from pydonut._pydonut import RayTracingPipeline
@@ -103,6 +106,8 @@ from pydonut._pydonut import ClearColorAttachment
 from pydonut._pydonut import ClearDepthStencilAttachment
 from pydonut._pydonut import BuildBottomLevelAccelStruct
 from pydonut._pydonut import CreateVolatileConstantBufferDesc
+from pydonut._pydonut import CreateStaticConstantBufferDesc
+from pydonut._pydonut import ComputeRotatingViewProjMatrix
 from pydonut._pydonut import CreateBindingSetAndLayout
 from pydonut._pydonut import log
 
@@ -134,6 +139,7 @@ __all__ = (
     'DepthStencilState',
     'RasterState',
     'RenderState',
+    'VertexAttributeDesc',
     'DrawArguments',
     'GraphicsPipelineDesc',
     'GraphicsState',
@@ -145,6 +151,7 @@ __all__ = (
     'FramebufferDesc',
     'BindingLayoutItem',
     'BindingLayoutDesc',
+    'BufferRange',
     'BindingSetItem',
     'BindingSetDesc',
     'BindlessLayoutDesc',
@@ -161,6 +168,7 @@ __all__ = (
     'Texture',
     'Shader',
     'ShaderLibrary',
+    'InputLayout',
     'GraphicsPipeline',
     'MeshletPipeline',
     'RayTracingPipeline',
@@ -218,6 +226,8 @@ __all__ = (
     'ClearDepthStencilAttachment',
     'BuildBottomLevelAccelStruct',
     'CreateVolatileConstantBufferDesc',
+    'CreateStaticConstantBufferDesc',
+    'ComputeRotatingViewProjMatrix',
     'CreateBindingSetAndLayout',
     'log',
     'CompileShader',

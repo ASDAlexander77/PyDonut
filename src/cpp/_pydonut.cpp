@@ -716,6 +716,7 @@ PYBIND11_MODULE(_pydonut, m) {
     py::class_<nvrhi::rt::IShaderTable, std::shared_ptr<nvrhi::rt::IShaderTable>> shaderTable(m, "ShaderTable");
     py::class_<nvrhi::rt::IPipeline, std::shared_ptr<nvrhi::rt::IPipeline>> rtPipeline(m, "RayTracingPipeline");
     py::class_<nvrhi::IShaderLibrary, std::shared_ptr<nvrhi::IShaderLibrary>> shaderLibrary(m, "ShaderLibrary");
+    py::class_<nvrhi::IInputLayout, std::shared_ptr<nvrhi::IInputLayout>>(m, "InputLayout");
 
     py::class_<nvrhi::Color>(m, "Color")
         .def(py::init<>())
@@ -772,6 +773,16 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_readwrite("depthStencilState", &nvrhi::RenderState::depthStencilState)
         .def_readwrite("rasterState", &nvrhi::RenderState::rasterState);
 
+    py::class_<nvrhi::VertexAttributeDesc>(m, "VertexAttributeDesc")
+        .def(py::init<>())
+        .def_readwrite("name", &nvrhi::VertexAttributeDesc::name)
+        .def_readwrite("format", &nvrhi::VertexAttributeDesc::format)
+        .def_readwrite("arraySize", &nvrhi::VertexAttributeDesc::arraySize)
+        .def_readwrite("bufferIndex", &nvrhi::VertexAttributeDesc::bufferIndex)
+        .def_readwrite("offset", &nvrhi::VertexAttributeDesc::offset)
+        .def_readwrite("elementStride", &nvrhi::VertexAttributeDesc::elementStride)
+        .def_readwrite("isInstanced", &nvrhi::VertexAttributeDesc::isInstanced);
+
     py::class_<nvrhi::DrawArguments>(m, "DrawArguments")
         .def(py::init<>())
         .def_readwrite("vertexCount", &nvrhi::DrawArguments::vertexCount)
@@ -792,6 +803,10 @@ PYBIND11_MODULE(_pydonut, m) {
             [](const nvrhi::GraphicsPipelineDesc &d) -> nvrhi::IShader* { return d.PS.Get(); },
             [](nvrhi::GraphicsPipelineDesc &d, nvrhi::IShader* shader) { d.PS = shader; },
             py::return_value_policy::reference)
+        .def_property("inputLayout",
+            [](const nvrhi::GraphicsPipelineDesc &d) -> nvrhi::IInputLayout* { return d.inputLayout.Get(); },
+            [](nvrhi::GraphicsPipelineDesc &d, nvrhi::IInputLayout* layout) { d.inputLayout = layout; },
+            py::return_value_policy::reference)
         .def("addBindingLayout", [](nvrhi::GraphicsPipelineDesc &self, nvrhi::IBindingLayout* layout) {
             self.addBindingLayout(layout);
         }, py::arg("layout"));
@@ -809,7 +824,17 @@ PYBIND11_MODULE(_pydonut, m) {
             py::return_value_policy::reference)
         .def("addBindingSet", [](nvrhi::GraphicsState &self, nvrhi::IBindingSet* set) {
             self.addBindingSet(set);
-        }, py::arg("bindingSet"));
+        }, py::arg("bindingSet"))
+        // vertexBuffers is a fixed-capacity static_vector in nvrhi, not a std::vector, so it's
+        // appended to via this method rather than exposed as a plain read-write list.
+        .def("addVertexBuffer", [](nvrhi::GraphicsState &self, nvrhi::IBuffer* buffer, uint32_t slot, uint64_t offset) {
+            self.vertexBuffers.push_back(nvrhi::VertexBufferBinding{buffer, slot, offset});
+        }, py::arg("buffer"), py::arg("slot"), py::arg("offset") = 0)
+        .def("setIndexBuffer", [](nvrhi::GraphicsState &self, nvrhi::IBuffer* buffer, nvrhi::Format format, uint32_t offset) {
+            self.indexBuffer.buffer = buffer;
+            self.indexBuffer.format = format;
+            self.indexBuffer.offset = offset;
+        }, py::arg("buffer"), py::arg("format"), py::arg("offset") = 0);
 
     py::class_<nvrhi::MeshletPipelineDesc>(m, "MeshletPipelineDesc")
         .def(py::init<>())
@@ -908,9 +933,18 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_readwrite("visibility", &nvrhi::BindingLayoutDesc::visibility)
         .def_readwrite("bindings", &nvrhi::BindingLayoutDesc::bindings);
 
+    py::class_<nvrhi::BufferRange>(m, "BufferRange")
+        .def(py::init<>())
+        .def(py::init<uint64_t, uint64_t>(), py::arg("byteOffset"), py::arg("byteSize"))
+        .def_readwrite("byteOffset", &nvrhi::BufferRange::byteOffset)
+        .def_readwrite("byteSize", &nvrhi::BufferRange::byteSize);
+
     py::class_<nvrhi::BindingSetItem>(m, "BindingSetItem")
         .def_static("Texture_UAV", [](uint32_t slot, nvrhi::ITexture* texture) {
             return nvrhi::BindingSetItem::Texture_UAV(slot, texture);
+        }, py::arg("slot"), py::arg("texture"))
+        .def_static("Texture_SRV", [](uint32_t slot, nvrhi::ITexture* texture) {
+            return nvrhi::BindingSetItem::Texture_SRV(slot, texture);
         }, py::arg("slot"), py::arg("texture"))
         .def_static("RayTracingAccelStruct", [](uint32_t slot, nvrhi::rt::IAccelStruct* accelStruct) {
             return nvrhi::BindingSetItem::RayTracingAccelStruct(slot, accelStruct);
@@ -918,6 +952,11 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_static("ConstantBuffer", [](uint32_t slot, nvrhi::IBuffer* buffer) {
             return nvrhi::BindingSetItem::ConstantBuffer(slot, buffer);
         }, py::arg("slot"), py::arg("buffer"))
+        // Overload taking an explicit BufferRange, for binding one slice of a larger buffer
+        // (e.g. one entry of an array of same-sized constant buffer structs).
+        .def_static("ConstantBuffer", [](uint32_t slot, nvrhi::IBuffer* buffer, const nvrhi::BufferRange &range) {
+            return nvrhi::BindingSetItem::ConstantBuffer(slot, buffer, range);
+        }, py::arg("slot"), py::arg("buffer"), py::arg("range"))
         .def_static("StructuredBuffer_SRV", [](uint32_t slot, nvrhi::IBuffer* buffer) {
             return nvrhi::BindingSetItem::StructuredBuffer_SRV(slot, buffer);
         }, py::arg("slot"), py::arg("buffer"))
@@ -944,6 +983,9 @@ PYBIND11_MODULE(_pydonut, m) {
 
     m.def("CreateVolatileConstantBufferDesc", &nvrhi::utils::CreateVolatileConstantBufferDesc,
         py::arg("byteSize"), py::arg("debugName"), py::arg("maxVersions"));
+
+    m.def("CreateStaticConstantBufferDesc", &nvrhi::utils::CreateStaticConstantBufferDesc,
+        py::arg("byteSize"), py::arg("debugName"));
 
     // Mirrors nvrhi::utils::CreateBindingSetAndLayout: derives a matching BindingLayoutDesc
     // from the BindingSetDesc's items and creates both in one call.
@@ -1080,12 +1122,16 @@ PYBIND11_MODULE(_pydonut, m) {
     device.def("createBindlessLayout", [](nvrhi::IDevice &self, const nvrhi::BindlessLayoutDesc &desc) {
         return DetachToShared(self.createBindlessLayout(desc));
     }, py::arg("desc"));
+    device.def("createInputLayout", [](nvrhi::IDevice &self, const std::vector<nvrhi::VertexAttributeDesc> &attributes, nvrhi::IShader* vertexShader) {
+        return DetachToShared(self.createInputLayout(attributes.data(), uint32_t(attributes.size()), vertexShader));
+    }, py::arg("attributes"), py::arg("vertexShader"));
     device.def("waitForIdle", &nvrhi::IDevice::waitForIdle);
 
     commandList.def("open", &nvrhi::ICommandList::open);
     commandList.def("close", &nvrhi::ICommandList::close);
     commandList.def("setGraphicsState", &nvrhi::ICommandList::setGraphicsState, py::arg("state"));
     commandList.def("draw", &nvrhi::ICommandList::draw, py::arg("args"));
+    commandList.def("drawIndexed", &nvrhi::ICommandList::drawIndexed, py::arg("args"));
     commandList.def("setMeshletState", &nvrhi::ICommandList::setMeshletState, py::arg("state"));
     commandList.def("dispatchMesh", &nvrhi::ICommandList::dispatchMesh,
         py::arg("groupsX"), py::arg("groupsY") = 1, py::arg("groupsZ") = 1);
@@ -1484,6 +1530,24 @@ PYBIND11_MODULE(_pydonut, m) {
     }, py::arg("yawRadians"), py::arg("pitchRadians"), py::arg("distance"), py::arg("aspectRatio"),
        py::arg("fovYRadians"), py::arg("zNear"), py::arg("zFar"));
     planarView.def("UpdateCache", &donut::engine::PlanarView::UpdateCache);
+
+    // Standalone view*projection matrix computation for cases that don't go through
+    // PlanarView at all (e.g. vertex_buffer.py's four independently-rotating model views,
+    // uploaded straight into a constant buffer rather than driven by a View object): rotate
+    // by `rotationRadians` around an arbitrary (auto-normalized) axis, tilt down by
+    // `pitchRadians`, push back `distance`, then apply a regular D3D-style perspective
+    // projection. Returns the resulting float4x4 as raw bytes, ready for CommandList.writeBuffer.
+    m.def("ComputeRotatingViewProjMatrix", [](float axisX, float axisY, float axisZ, float rotationRadians,
+            float pitchRadians, float distance, float aspectRatio, float fovYRadians, float zNear, float zFar) {
+        donut::math::affine3 viewMatrix = donut::math::rotation(
+                donut::math::normalize(donut::math::float3(axisX, axisY, axisZ)), rotationRadians)
+            * donut::math::yawPitchRoll(0.f, pitchRadians, 0.f)
+            * donut::math::translation(donut::math::float3(0.f, 0.f, distance));
+        donut::math::float4x4 projMatrix = donut::math::perspProjD3DStyle(fovYRadians, aspectRatio, zNear, zFar);
+        donut::math::float4x4 viewProjMatrix = donut::math::affineToHomogeneous(viewMatrix) * projMatrix;
+        return py::bytes(reinterpret_cast<const char*>(&viewProjMatrix), sizeof(viewProjMatrix));
+    }, py::arg("axisX"), py::arg("axisY"), py::arg("axisZ"), py::arg("rotationRadians"), py::arg("pitchRadians"),
+       py::arg("distance"), py::arg("aspectRatio"), py::arg("fovYRadians"), py::arg("zNear"), py::arg("zFar"));
     planarView.def("GetViewportState", &donut::engine::PlanarView::GetViewportState);
     planarView.def("FillPlanarViewConstants", [](const donut::engine::PlanarView &self) {
         PlanarViewConstants constants{};
