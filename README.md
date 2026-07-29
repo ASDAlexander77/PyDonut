@@ -60,6 +60,26 @@ uv sync
 
 > Note: D3D12 is a Windows-only backend; on Linux the module builds with Vulkan support.
 
+### WSL
+
+A stock WSL2 Ubuntu distro has no GPU-accelerated Vulkan driver, so it silently falls back to
+Mesa's CPU software rasterizer (`llvmpipe`) — samples run far too slowly, and
+`bindless_rendering.py` specifically segfaults on it. See
+[`docs/WSL_GPU_SETUP.md`](docs/WSL_GPU_SETUP.md) for building and installing Mesa's `dzn`
+(Vulkan-on-D3D12) driver, which routes Vulkan through the host GPU instead.
+
+That setup depends on a small fix to the vendored Donut submodule: `dzn` doesn't implement
+`tessellationShader`, `dualSrcBlend`, or `maintenance4`, which Donut's Vulkan device manager
+requests unconditionally, so device creation fails with `VK_ERROR_FEATURE_NOT_PRESENT` without
+it. Apply it after checking out submodules:
+
+```sh
+git -C extern/donut apply ../../patches/DeviceManager_VK-wsl-dzn-fixes.patch
+```
+
+The patch is a no-op on native drivers (Windows, or Linux with a real Vulkan ICD) — those
+already support all three features — so it's safe to apply on every platform, not just WSL.
+
 ### 4. Enabling `pyd.CompileShader` (optional, both platforms)
 
 Install DXC and set `SHADERMAKE_DXC_PATH` to point at it before running `uv sync`, e.g.:
@@ -210,12 +230,15 @@ src/pydonut/             Python package (__init__.py, type stubs)
 include/pydonut/         C++ headers for the bindings
 shaders/                 HLSL shaders used by examples
 extern/donut/            Donut framework (git submodule)
+patches/                 Optional patches for the vendored extern/donut submodule (see WSL setup above)
 CMakeLists.txt           Native build configuration (invoked by scikit-build-core)
 ```
 
 ## Development
 
-Rebuild the native module after C++ changes by re-running `uv sync` (it's cached based on `src/**/*.{h,c,hpp,cpp}` and `CMakeLists.txt`, see `pyproject.toml`).
+Rebuild the native module after C++ changes by re-running `uv sync` (it's cached based on
+`src/**/*.{h,c,hpp,cpp}`, `CMakeLists.txt`, and `extern/donut`'s sources/headers/CMake files —
+see `[tool.uv].cache-keys` in `pyproject.toml`).
 
 Run tests with:
 

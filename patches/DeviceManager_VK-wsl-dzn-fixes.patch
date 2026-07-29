@@ -1,0 +1,46 @@
+diff --git a/src/app/vulkan/DeviceManager_VK.cpp b/src/app/vulkan/DeviceManager_VK.cpp
+index 7ab26a0..68d6d38 100644
+--- a/src/app/vulkan/DeviceManager_VK.cpp
++++ b/src/app/vulkan/DeviceManager_VK.cpp
+@@ -634,10 +634,14 @@ bool DeviceManager_VK::createDevice()
+     auto aftermathPhysicalFeatures = vk::PhysicalDeviceDiagnosticsConfigFeaturesNV();
+     // Determine support for mesh and task shaders
+     auto meshShaderFeatures = vk::PhysicalDeviceMeshShaderFeaturesEXT();
++    // Determine support for maintenance4 (not implemented by some layered drivers, e.g. Mesa's
++    // dzn Vulkan-on-D3D12 driver used for GPU access under WSL)
++    auto maintenance4PhysicalFeatures = vk::PhysicalDeviceMaintenance4Features();
+ 
+     // Put the user-provided extension structure at the end of the chain
+     pNext = m_DeviceParams.physicalDeviceFeatures2Extensions;
+     APPEND_EXTENSION(true, bufferDeviceAddressFeatures);
++    APPEND_EXTENSION(true, maintenance4PhysicalFeatures);
+     APPEND_EXTENSION(aftermathSupported, aftermathPhysicalFeatures);
+     APPEND_EXTENSION(meshShaderSupported, meshShaderFeatures);
+ 
+@@ -685,7 +689,7 @@ bool DeviceManager_VK::createDevice()
+     auto vulkan13features = vk::PhysicalDeviceVulkan13Features()
+         .setDynamicRendering(true)
+         .setSynchronization2(true)
+-        .setMaintenance4(true);
++        .setMaintenance4(maintenance4PhysicalFeatures.maintenance4);
+ #if DONUT_WITH_AFTERMATH
+     auto aftermathFeatures = vk::DeviceDiagnosticsConfigCreateInfoNV()
+         .setFlags(vk::DeviceDiagnosticsConfigFlagBitsNV::eEnableResourceTracking
+@@ -729,14 +733,15 @@ bool DeviceManager_VK::createDevice()
+     auto deviceFeatures = vk::PhysicalDeviceFeatures()
+         .setShaderImageGatherExtended(true)
+         .setSamplerAnisotropy(true)
+-        .setTessellationShader(true)
++        // Optional on layered drivers (e.g. dzn under WSL): request only if supported
++        .setTessellationShader(physicalDeviceFeatures2.features.tessellationShader)
+         .setTextureCompressionBC(true)
+         .setGeometryShader(true)
+         .setImageCubeArray(true)
+         .setShaderInt16(true)
+         .setFillModeNonSolid(true)
+         .setFragmentStoresAndAtomics(true)
+-        .setDualSrcBlend(true)
++        .setDualSrcBlend(physicalDeviceFeatures2.features.dualSrcBlend)
+         .setVertexPipelineStoresAndAtomics(true)
+         .setShaderInt64(true)
+         .setShaderStorageImageWriteWithoutFormat(true)

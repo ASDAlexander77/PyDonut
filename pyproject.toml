@@ -16,7 +16,19 @@ minimum-version = "build-system.requires"
 build-dir = "build/{wheel_tag}"
 
 [tool.uv]
-cache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*.{h,c,hpp,cpp}" }, { file = "CMakeLists.txt" }]
+# extern/donut is a vendored git submodule (itself containing nested submodules: nvrhi,
+# imgui, glfw, cgltf, ShaderMake). Its sources/headers/CMake files feed directly into the
+# pydonut native build, but local edits there (e.g. driver workarounds) don't touch anything
+# under src/ or the top-level CMakeLists.txt -- without tracking them here, uv silently
+# reuses a stale cached wheel that predates the submodule change.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "src/**/*.{h,c,hpp,cpp}" },
+    { file = "CMakeLists.txt" },
+    { file = "extern/donut/**/*.{h,c,hpp,cpp,cc,cxx}" },
+    { file = "extern/donut/**/CMakeLists.txt" },
+    { file = "extern/donut/**/*.cmake" },
+]
 
 [build-system]
 requires = ["scikit-build-core>=0.10", "pybind11"]
