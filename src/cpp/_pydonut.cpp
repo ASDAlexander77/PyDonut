@@ -99,6 +99,81 @@ public:
     }
 };
 
+// Trampoline class so Python subclasses of ApplicationBase can override its virtual methods
+// (including the IRenderPass ones ApplicationBase doesn't itself override) and LoadScene,
+// which ApplicationBase leaves pure virtual.
+class PyApplicationBase : public donut::app::ApplicationBase {
+public:
+    using ApplicationBase::ApplicationBase;
+
+    void SetLatewarpOptions() override {
+        PYBIND11_OVERRIDE(void, ApplicationBase, SetLatewarpOptions);
+    }
+    bool ShouldAnimateUnfocused() override {
+        PYBIND11_OVERRIDE(bool, ApplicationBase, ShouldAnimateUnfocused);
+    }
+    bool ShouldRenderUnfocused() override {
+        PYBIND11_OVERRIDE(bool, ApplicationBase, ShouldRenderUnfocused);
+    }
+    bool SupportsDepthBuffer() override {
+        PYBIND11_OVERRIDE(bool, ApplicationBase, SupportsDepthBuffer);
+    }
+    void Render(nvrhi::IFramebuffer* framebuffer) override {
+        PYBIND11_OVERRIDE(void, ApplicationBase, Render, framebuffer);
+    }
+    void RenderScene(nvrhi::IFramebuffer* framebuffer) override {
+        PYBIND11_OVERRIDE(void, ApplicationBase, RenderScene, framebuffer);
+    }
+    void RenderSplashScreen(nvrhi::IFramebuffer* framebuffer) override {
+        PYBIND11_OVERRIDE(void, ApplicationBase, RenderSplashScreen, framebuffer);
+    }
+    void BeginLoadingScene(std::shared_ptr<donut::vfs::IFileSystem> fs, const std::filesystem::path& sceneFileName) override {
+        PYBIND11_OVERRIDE(void, ApplicationBase, BeginLoadingScene, fs, sceneFileName);
+    }
+    bool LoadScene(std::shared_ptr<donut::vfs::IFileSystem> fs, const std::filesystem::path& sceneFileName) override {
+        PYBIND11_OVERRIDE_PURE(bool, ApplicationBase, LoadScene, fs, sceneFileName);
+    }
+    void SceneUnloading() override {
+        PYBIND11_OVERRIDE(void, ApplicationBase, SceneUnloading);
+    }
+    void SceneLoaded() override {
+        PYBIND11_OVERRIDE(void, ApplicationBase, SceneLoaded);
+    }
+    void Animate(float fElapsedTimeSeconds) override {
+        PYBIND11_OVERRIDE(void, ApplicationBase, Animate, fElapsedTimeSeconds);
+    }
+    void BackBufferResizing() override {
+        PYBIND11_OVERRIDE(void, ApplicationBase, BackBufferResizing);
+    }
+    void BackBufferResized(const uint32_t width, const uint32_t height, const uint32_t sampleCount) override {
+        PYBIND11_OVERRIDE(void, ApplicationBase, BackBufferResized, width, height, sampleCount);
+    }
+    void DisplayScaleChanged(float scaleX, float scaleY) override {
+        PYBIND11_OVERRIDE(void, ApplicationBase, DisplayScaleChanged, scaleX, scaleY);
+    }
+    bool KeyboardUpdate(int key, int scancode, int action, int mods) override {
+        PYBIND11_OVERRIDE(bool, ApplicationBase, KeyboardUpdate, key, scancode, action, mods);
+    }
+    bool KeyboardCharInput(unsigned int unicode, int mods) override {
+        PYBIND11_OVERRIDE(bool, ApplicationBase, KeyboardCharInput, unicode, mods);
+    }
+    bool MousePosUpdate(double xpos, double ypos) override {
+        PYBIND11_OVERRIDE(bool, ApplicationBase, MousePosUpdate, xpos, ypos);
+    }
+    bool MouseScrollUpdate(double xoffset, double yoffset) override {
+        PYBIND11_OVERRIDE(bool, ApplicationBase, MouseScrollUpdate, xoffset, yoffset);
+    }
+    bool MouseButtonUpdate(int button, int action, int mods) override {
+        PYBIND11_OVERRIDE(bool, ApplicationBase, MouseButtonUpdate, button, action, mods);
+    }
+    bool JoystickButtonUpdate(int button, bool pressed) override {
+        PYBIND11_OVERRIDE(bool, ApplicationBase, JoystickButtonUpdate, button, pressed);
+    }
+    bool JoystickAxisUpdate(int axis, float value) override {
+        PYBIND11_OVERRIDE(bool, ApplicationBase, JoystickAxisUpdate, axis, value);
+    }
+};
+
 // Transfers ownership of an nvrhi RefCountPtr's single reference into a std::shared_ptr,
 // releasing via nvrhi's own AddRef/Release rather than `delete` (nvrhi resources are refcounted).
 template <typename T>
@@ -1110,10 +1185,10 @@ PYBIND11_MODULE(_pydonut, m) {
 
     // Mirrors ApplicationBase::SceneLoaded()'s texture-finalization step (the part that runs
     // after LoadScene() returns on the synchronous path, i.e. SetAsynchronousLoadingEnabled(false)
-    // followed by BeginLoadingScene()). ApplicationBase itself isn't exposed to Python -- samples
-    // subclass IRenderPass directly -- so this stands in for that call. Must run after
-    // Scene.Load() and before Scene.FinishedLoading(): it finalizes each texture's bindless
-    // descriptor index, which FinishedLoading() then bakes into the material buffer.
+    // followed by BeginLoadingScene()), for samples that subclass IRenderPass directly instead
+    // of ApplicationBase. Must run after Scene.Load() and before Scene.FinishedLoading(): it
+    // finalizes each texture's bindless descriptor index, which FinishedLoading() then bakes
+    // into the material buffer.
     m.def("SceneLoaded", [](donut::engine::TextureCache& textureCache, donut::engine::CommonRenderPasses& commonPasses) {
         textureCache.ProcessRenderingThreadCommands(commonPasses, 0.f);
         textureCache.LoadingFinished();
@@ -1173,6 +1248,23 @@ PYBIND11_MODULE(_pydonut, m) {
     renderPass.def("GetDeviceManager", &donut::app::IRenderPass::GetDeviceManager, py::return_value_policy::reference);
     renderPass.def("GetDevice", &donut::app::IRenderPass::GetDevice, py::return_value_policy::reference);
     renderPass.def("GetFrameIndex", &donut::app::IRenderPass::GetFrameIndex);
+
+    py::class_<donut::app::ApplicationBase, donut::app::IRenderPass, PyApplicationBase> applicationBase(m, "ApplicationBase");
+    applicationBase.def(py::init<donut::app::DeviceManager*>(), py::arg("deviceManager"));
+    applicationBase.def("RenderScene", &donut::app::ApplicationBase::RenderScene, py::arg("framebuffer"));
+    applicationBase.def("RenderSplashScreen", &donut::app::ApplicationBase::RenderSplashScreen, py::arg("framebuffer"));
+    applicationBase.def("BeginLoadingScene", [](donut::app::ApplicationBase &self, std::shared_ptr<donut::vfs::IFileSystem> fs, const std::filesystem::path &sceneFileName) {
+        self.BeginLoadingScene(fs, sceneFileName);
+    }, py::arg("fs"), py::arg("sceneFileName"));
+    applicationBase.def("LoadScene", [](donut::app::ApplicationBase &self, std::shared_ptr<donut::vfs::IFileSystem> fs, const std::filesystem::path &sceneFileName) {
+        return self.LoadScene(fs, sceneFileName);
+    }, py::arg("fs"), py::arg("sceneFileName"));
+    applicationBase.def("SceneUnloading", &donut::app::ApplicationBase::SceneUnloading);
+    applicationBase.def("SceneLoaded", &donut::app::ApplicationBase::SceneLoaded);
+    applicationBase.def("SetAsynchronousLoadingEnabled", &donut::app::ApplicationBase::SetAsynchronousLoadingEnabled, py::arg("enabled"));
+    applicationBase.def("IsSceneLoading", &donut::app::ApplicationBase::IsSceneLoading);
+    applicationBase.def("IsSceneLoaded", &donut::app::ApplicationBase::IsSceneLoaded);
+    applicationBase.def("GetCommonPasses", &donut::app::ApplicationBase::GetCommonPasses);
 
     py::class_<donut::app::AdapterInfo>(m, "AdapterInfo")
         .def(py::init<>())

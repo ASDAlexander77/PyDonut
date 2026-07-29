@@ -15,7 +15,7 @@ if __name__ == "__main__":
         candidate = folder / "media" / "glTF-Sample-Assets" / "Models" / "Sponza" / "glTF" / "Sponza.gltf"
         return candidate if candidate.is_file() else None
 
-    class BindlessRendering(pyd.IRenderPass):
+    class BindlessRendering(pyd.ApplicationBase):
         def __init__(self: BindlessRendering, deviceManager: pyd.DeviceManager) -> None:
             super().__init__(deviceManager)
             self.vertexShader: pyd.Shader | None = None
@@ -26,7 +26,9 @@ if __name__ == "__main__":
             self.bindlessLayout: pyd.BindingLayout | None = None
             self.bindingSet: pyd.BindingSet | None = None
             self.viewConstantsBuffer: pyd.Buffer | None = None
+            self.shaderFactory: pyd.ShaderFactory | None = None
             self.descriptorTableManager: pyd.DescriptorTableManager | None = None
+            self.textureCache: pyd.TextureCache | None = None
             self.scene: pyd.Scene | None = None
             self.commonPasses: pyd.CommonRenderPasses | None = None
             self.bindingCache: pyd.BindingCache | None = None
@@ -34,6 +36,25 @@ if __name__ == "__main__":
             self.view = pyd.PlanarView()
             self.depthBuffer: pyd.Texture | None = None
             self.framebuffers: list[pyd.Framebuffer | None] = []
+
+        def LoadScene(self: BindlessRendering, fs: pyd.IFileSystem, sceneFileName: Path) -> bool:
+            assert self.shaderFactory is not None
+            assert self.textureCache is not None
+            assert self.descriptorTableManager is not None
+            device = self.GetDevice()
+            self.scene = pyd.Scene(device, self.shaderFactory, fs, self.textureCache, self.descriptorTableManager)
+            return self.scene.Load(sceneFileName)
+
+        def SceneLoaded(self: BindlessRendering) -> None:
+            assert self.textureCache is not None
+            assert self.commonPasses is not None
+            assert self.scene is not None
+            # Must run BEFORE Scene.FinishedLoading() -- it finalizes each texture's
+            # bindless descriptor index, which FinishedLoading() then bakes into the
+            # material buffer. Getting this backwards leaves every material's texture
+            # index unset (-1).
+            pyd.SceneLoaded(self.textureCache, self.commonPasses)
+            self.scene.FinishedLoading(self.GetFrameIndex())
 
         def Init(self: BindlessRendering) -> bool:
             device = self.GetDevice()
@@ -83,10 +104,10 @@ if __name__ == "__main__":
             frameworkShaderPath = folder / "bin" / "shaders" / "framework" / pyd.GetShaderTypeName(api)
             rootFS = pyd.RootFileSystem()
             rootFS.mount(Path("/shaders/donut"), frameworkShaderPath)
-            shaderFactory = pyd.ShaderFactory(device, rootFS, Path("/shaders"))
+            self.shaderFactory = pyd.ShaderFactory(device, rootFS, Path("/shaders"))
 
             self.bindingCache = pyd.BindingCache(device)
-            self.commonPasses = pyd.CommonRenderPasses(device, shaderFactory)
+            self.commonPasses = pyd.CommonRenderPasses(device, self.shaderFactory)
 
             bindlessLayoutDesc = pyd.BindlessLayoutDesc()
             bindlessLayoutDesc.visibility = pyd.ShaderType.All
@@ -99,22 +120,15 @@ if __name__ == "__main__":
             self.descriptorTableManager = pyd.DescriptorTableManager(device, self.bindlessLayout)
 
             nativeFS = pyd.NativeFileSystem()
-            textureCache = pyd.TextureCache(device, nativeFS, self.descriptorTableManager)
+            self.textureCache = pyd.TextureCache(device, nativeFS, self.descriptorTableManager)
 
             self.commandList = device.createCommandList()
 
-            self.scene = pyd.Scene(device, shaderFactory, nativeFS, textureCache, self.descriptorTableManager)
-            if not self.scene.Load(sceneFileName):
+            # Runs LoadScene() (below) synchronously, followed by SceneLoaded() (below).
+            self.SetAsynchronousLoadingEnabled(False)
+            self.BeginLoadingScene(nativeFS, sceneFileName)
+            if not self.IsSceneLoaded():
                 return False
-
-            # Mirrors the C++ sample's SetAsynchronousLoadingEnabled(false) +
-            # BeginLoadingScene(): this must run BEFORE Scene.FinishedLoading() -- it
-            # finalizes each texture's bindless descriptor index, which FinishedLoading()
-            # then bakes into the material buffer. Getting this backwards leaves every
-            # material's texture index unset (-1).
-            pyd.SceneLoaded(textureCache, self.commonPasses)
-
-            self.scene.FinishedLoading(self.GetFrameIndex())
 
             # The C++ sample's (0, 1.8, 0) -> (1, 1.8, 0) is tuned for a different Sponza
             # distribution; this glTF-Sample-Assets version applies a 0.008 root-node scale,

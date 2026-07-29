@@ -71,6 +71,7 @@ from pydonut._pydonut import FirstPersonCamera
 from pydonut._pydonut import PlanarView
 from pydonut._pydonut import AdapterInfo
 from pydonut._pydonut import IRenderPass
+from pydonut._pydonut import ApplicationBase
 from pydonut._pydonut import PipelineCallbacks
 from pydonut._pydonut import DeviceManager
 from pydonut._pydonut import DeviceCreationParameters
@@ -164,6 +165,7 @@ __all__ = (
     'PlanarView',
     'AdapterInfo',
     'IRenderPass',
+    'ApplicationBase',
     'PipelineCallbacks',
     'DeviceManager',
     'DeviceCreationParameters',
