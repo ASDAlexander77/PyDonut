@@ -1253,10 +1253,10 @@ PYBIND11_MODULE(_pydonut, m) {
     applicationBase.def(py::init<donut::app::DeviceManager*>(), py::arg("deviceManager"));
     applicationBase.def("RenderScene", &donut::app::ApplicationBase::RenderScene, py::arg("framebuffer"));
     applicationBase.def("RenderSplashScreen", &donut::app::ApplicationBase::RenderSplashScreen, py::arg("framebuffer"));
-    applicationBase.def("BeginLoadingScene", [](donut::app::ApplicationBase &self, std::shared_ptr<donut::vfs::IFileSystem> fs, const std::filesystem::path &sceneFileName) {
+    applicationBase.def("BeginLoadingScene", [](donut::app::ApplicationBase &self, std::shared_ptr<donut::vfs::IFileSystem> fs, std::string sceneFileName) {
         self.BeginLoadingScene(fs, sceneFileName);
     }, py::arg("fs"), py::arg("sceneFileName"));
-    applicationBase.def("LoadScene", [](donut::app::ApplicationBase &self, std::shared_ptr<donut::vfs::IFileSystem> fs, const std::filesystem::path &sceneFileName) {
+    applicationBase.def("LoadScene", [](donut::app::ApplicationBase &self, std::shared_ptr<donut::vfs::IFileSystem> fs, std::string sceneFileName) {
         return self.LoadScene(fs, sceneFileName);
     }, py::arg("fs"), py::arg("sceneFileName"));
     applicationBase.def("SceneUnloading", &donut::app::ApplicationBase::SceneUnloading);

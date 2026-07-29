@@ -37,25 +37,6 @@ if __name__ == "__main__":
             self.depthBuffer: pyd.Texture | None = None
             self.framebuffers: list[pyd.Framebuffer | None] = []
 
-        def LoadScene(self: BindlessRendering, fs: pyd.IFileSystem, sceneFileName: Path) -> bool:
-            assert self.shaderFactory is not None
-            assert self.textureCache is not None
-            assert self.descriptorTableManager is not None
-            device = self.GetDevice()
-            self.scene = pyd.Scene(device, self.shaderFactory, fs, self.textureCache, self.descriptorTableManager)
-            return self.scene.Load(sceneFileName)
-
-        def SceneLoaded(self: BindlessRendering) -> None:
-            assert self.textureCache is not None
-            assert self.commonPasses is not None
-            assert self.scene is not None
-            # Must run BEFORE Scene.FinishedLoading() -- it finalizes each texture's
-            # bindless descriptor index, which FinishedLoading() then bakes into the
-            # material buffer. Getting this backwards leaves every material's texture
-            # index unset (-1).
-            pyd.SceneLoaded(self.textureCache, self.commonPasses)
-            self.scene.FinishedLoading(self.GetFrameIndex())
-
         def Init(self: BindlessRendering) -> bool:
             device = self.GetDevice()
             api = device.getGraphicsAPI()
@@ -126,7 +107,7 @@ if __name__ == "__main__":
 
             # Runs LoadScene() (below) synchronously, followed by SceneLoaded() (below).
             self.SetAsynchronousLoadingEnabled(False)
-            self.BeginLoadingScene(nativeFS, sceneFileName)
+            self.BeginLoadingScene(nativeFS, str(sceneFileName))
             if not self.IsSceneLoaded():
                 return False
 
@@ -146,6 +127,8 @@ if __name__ == "__main__":
 
             device.waitForIdle()
 
+            assert self.scene is not None
+
             bindingSetDesc = pyd.BindingSetDesc()
             bindingSetDesc.bindings = [
                 pyd.BindingSetItem.ConstantBuffer(0, self.viewConstantsBuffer),
@@ -160,6 +143,25 @@ if __name__ == "__main__":
             )
 
             return True
+
+        def LoadScene(self: BindlessRendering, fs: pyd.IFileSystem, sceneFileName: str) -> bool:
+            assert self.shaderFactory is not None
+            assert self.textureCache is not None
+            assert self.descriptorTableManager is not None
+            device = self.GetDevice()
+            self.scene = pyd.Scene(device, self.shaderFactory, fs, self.textureCache, self.descriptorTableManager)
+            return self.scene.Load(sceneFileName)
+
+        def SceneLoaded(self: BindlessRendering) -> None:
+            assert self.textureCache is not None
+            assert self.commonPasses is not None
+            assert self.scene is not None
+            # Must run BEFORE Scene.FinishedLoading() -- it finalizes each texture's
+            # bindless descriptor index, which FinishedLoading() then bakes into the
+            # material buffer. Getting this backwards leaves every material's texture
+            # index unset (-1).
+            pyd.SceneLoaded(self.textureCache, self.commonPasses)
+            self.scene.FinishedLoading(self.GetFrameIndex())
 
         def KeyboardUpdate(self: BindlessRendering, key: int, scancode: int, action: int, mods: int) -> bool:
             self.camera.KeyboardUpdate(key, scancode, action, mods)
