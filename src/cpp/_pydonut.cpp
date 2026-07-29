@@ -553,15 +553,14 @@ PYBIND11_MODULE(_pydonut, m) {
         // TODO:
     )pbdoc");
 
-    // nvrhi swap-chain resources: owned by the DeviceManager, never by Python. py::nodelete
-    // keeps pybind11 from ever trying to destroy an object it doesn't own.
-    py::class_<nvrhi::IFramebuffer, std::unique_ptr<nvrhi::IFramebuffer, py::nodelete>> framebuffer(m, "Framebuffer");
     py::class_<nvrhi::IDevice, std::unique_ptr<nvrhi::IDevice, py::nodelete>> device(m, "Device");
 
-    // ITexture instances can be either borrowed (swap-chain textures, returned by raw pointer
-    // with return_value_policy::reference below) or owned (created via Device.createTexture,
-    // via DetachToShared); shared_ptr as the holder supports both without conflating lifetimes.
+    // ITexture/IFramebuffer instances can be either borrowed (swap-chain resources, returned
+    // by raw pointer with return_value_policy::reference below) or owned (created via
+    // Device.createTexture/createFramebuffer, via DetachToShared); shared_ptr as the holder
+    // supports both without conflating lifetimes.
     py::class_<nvrhi::ITexture, std::shared_ptr<nvrhi::ITexture>> texture(m, "Texture");
+    py::class_<nvrhi::IFramebuffer, std::shared_ptr<nvrhi::IFramebuffer>> framebuffer(m, "Framebuffer");
 
     // nvrhi objects created through factory calls below: each create*() call returns one
     // owning reference, handed to Python as a std::shared_ptr that Releases() on collection.
@@ -745,8 +744,15 @@ PYBIND11_MODULE(_pydonut, m) {
             py::return_value_policy::reference);
 
     py::class_<nvrhi::FramebufferDesc>(m, "FramebufferDesc")
+        .def(py::init<>())
         .def("getColorAttachment", [](const nvrhi::FramebufferDesc &self, size_t index) { return self.colorAttachments[index]; },
-            py::arg("index"));
+            py::arg("index"))
+        .def("addColorAttachment", [](nvrhi::FramebufferDesc &self, const nvrhi::FramebufferAttachment &attachment) {
+            self.addColorAttachment(attachment);
+        }, py::arg("attachment"))
+        .def("setDepthAttachment", [](nvrhi::FramebufferDesc &self, nvrhi::ITexture* texture) {
+            self.setDepthAttachment(texture);
+        }, py::arg("texture"));
 
     // BindingLayoutItem/BindingSetItem pack a bitfield + union that pybind11 can't expose as
     // plain properties; Python only ever obtains instances through these static factories,
@@ -913,6 +919,9 @@ PYBIND11_MODULE(_pydonut, m) {
     device.def("createTexture", [](nvrhi::IDevice &self, const nvrhi::TextureDesc &desc) {
         return DetachToShared(self.createTexture(desc));
     }, py::arg("desc"));
+    device.def("createFramebuffer", [](nvrhi::IDevice &self, const nvrhi::FramebufferDesc &desc) {
+        return DetachToShared(self.createFramebuffer(desc));
+    }, py::arg("desc"));
     device.def("createBindingLayout", [](nvrhi::IDevice &self, const nvrhi::BindingLayoutDesc &desc) {
         return DetachToShared(self.createBindingLayout(desc));
     }, py::arg("desc"));
@@ -950,6 +959,13 @@ PYBIND11_MODULE(_pydonut, m) {
         py::buffer_info info = data.request();
         self.setPushConstants(info.ptr, static_cast<size_t>(info.size * info.itemsize));
     }, py::arg("data"));
+    commandList.def("clearTextureFloat", [](nvrhi::ICommandList &self, nvrhi::ITexture* texture, const nvrhi::Color &clearColor) {
+        self.clearTextureFloat(texture, nvrhi::AllSubresources, clearColor);
+    }, py::arg("texture"), py::arg("clearColor"));
+    commandList.def("clearDepthStencilTexture", [](nvrhi::ICommandList &self, nvrhi::ITexture* texture,
+            bool clearDepth, float depth, bool clearStencil, uint8_t stencil) {
+        self.clearDepthStencilTexture(texture, nvrhi::AllSubresources, clearDepth, depth, clearStencil, stencil);
+    }, py::arg("texture"), py::arg("clearDepth"), py::arg("depth"), py::arg("clearStencil"), py::arg("stencil"));
 
     m.def("ClearColorAttachment", &nvrhi::utils::ClearColorAttachment,
         py::arg("commandList"), py::arg("framebuffer"), py::arg("attachmentIndex"), py::arg("color"));

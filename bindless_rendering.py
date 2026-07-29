@@ -11,16 +11,9 @@ if __name__ == "__main__":
 
     def FindSponzaGltf() -> Path | None:
         # The C++ sample resolves this via GetDirectoryWithExecutable().parent_path() /
-        # "media/...", i.e. a media/ folder that ships alongside the built samples. This
-        # repo doesn't vendor that (multi-GB) asset tree, so look for it locally first and
-        # fall back to the sibling Donut-Samples checkout this was ported from.
-        candidates = [
-            folder / "media" / "glTF-Sample-Assets" / "Models" / "Sponza" / "glTF" / "Sponza.gltf",
-        ]
-        for candidate in candidates:
-            if candidate.is_file():
-                return candidate
-        return None
+        # "media/...", i.e. a media/ folder that ships alongside the built samples.
+        candidate = folder / "media" / "glTF-Sample-Assets" / "Models" / "Sponza" / "glTF" / "Sponza.gltf"
+        return candidate if candidate.is_file() else None
 
     class BindlessRendering(pyd.IRenderPass):
         def __init__(self: BindlessRendering, deviceManager: pyd.DeviceManager) -> None:
@@ -39,9 +32,8 @@ if __name__ == "__main__":
             self.bindingCache: pyd.BindingCache | None = None
             self.camera = pyd.FirstPersonCamera()
             self.view = pyd.PlanarView()
-
-        def SupportsDepthBuffer(self: BindlessRendering) -> bool:
-            return True
+            self.depthBuffer: pyd.Texture | None = None
+            self.framebuffers: list[pyd.Framebuffer | None] = []
 
         def Init(self: BindlessRendering) -> bool:
             device = self.GetDevice()
@@ -49,10 +41,7 @@ if __name__ == "__main__":
 
             sceneFileName = FindSponzaGltf()
             if sceneFileName is None:
-                pyd.log.fatal(
-                    "Could not find Sponza.gltf under media/glTF-Sample-Assets/ "
-                    "(checked the local media/ folder and the sibling Donut-Samples checkout)."
-                )
+                pyd.log.fatal("Could not find Sponza.gltf under media/glTF-Sample-Assets/")
                 return False
 
             shaderPath = folder / "shaders" / "bindless_rendering" / "bindless_rendering.hlsl"
@@ -125,8 +114,15 @@ if __name__ == "__main__":
             textureCache.ProcessRenderingThreadCommands(self.commonPasses, 0.0)
             textureCache.LoadingFinished()
 
-            self.camera.LookAt(0.0, 1.8, 0.0, 1.0, 1.8, 0.0)
-            self.camera.SetMoveSpeed(3.0)
+            # The C++ sample's (0, 1.8, 0) -> (1, 1.8, 0) is tuned for a different Sponza
+            # distribution; this glTF-Sample-Assets version applies a 0.008 root-node scale,
+            # putting its world-space bounds at roughly x:[-15,14] y:[-1,11] z:[-9,9] (an
+            # elongated hall along X). An eye-height start point inside those bounds risks
+            # landing inside a wall/column, so start well above and outside the building
+            # looking down and in -- guaranteed clear of geometry -- and fly the rest of the
+            # way in with WASD + mouse look (wired up via KeyboardUpdate/MousePosUpdate below).
+            self.camera.LookAt(0.0, 15.0, 40.0, 0.0, 3.0, 0.0)
+            self.camera.SetMoveSpeed(6.0)
 
             viewConstantsSize = len(self.view.FillPlanarViewConstants())
             viewConstantsBufferDesc = pyd.BufferDesc()
@@ -167,6 +163,8 @@ if __name__ == "__main__":
             return True
 
         def BackBufferResizing(self: BindlessRendering):
+            self.depthBuffer = None
+            self.framebuffers = []
             self.pipeline = None
             assert self.bindingCache is not None
             self.bindingCache.Clear()
@@ -185,6 +183,36 @@ if __name__ == "__main__":
             assert self.bindingSet is not None
             assert self.viewConstantsBuffer is not None
 
+            fbinfo = framebuffer.getFramebufferInfo()
+
+            if not self.depthBuffer:
+                textureDesc = pyd.TextureDesc()
+                textureDesc.format = pyd.Format.D24S8
+                textureDesc.isRenderTarget = True
+                textureDesc.initialState = pyd.ResourceStates.DepthWrite
+                textureDesc.keepInitialState = True
+                textureDesc.clearValue = pyd.Color(0.0)
+                textureDesc.useClearValue = True
+                textureDesc.debugName = "DepthBuffer"
+                textureDesc.width = fbinfo.width
+                textureDesc.height = fbinfo.height
+
+                self.depthBuffer = device.createTexture(textureDesc)
+
+            backBufferCount = self.GetDeviceManager().GetBackBufferCount()
+            if len(self.framebuffers) != backBufferCount:
+                self.framebuffers = [None] * backBufferCount
+
+            fbindex = self.GetDeviceManager().GetCurrentBackBufferIndex()
+            if not self.framebuffers[fbindex]:
+                framebufferDesc = pyd.FramebufferDesc()
+                framebufferDesc.addColorAttachment(framebuffer.getDesc().getColorAttachment(0))
+                framebufferDesc.setDepthAttachment(self.depthBuffer)
+                self.framebuffers[fbindex] = device.createFramebuffer(framebufferDesc)
+
+            renderFramebuffer = self.framebuffers[fbindex]
+            assert renderFramebuffer is not None
+
             if not self.pipeline:
                 psoDesc = pyd.GraphicsPipelineDesc()
                 psoDesc.VS = self.vertexShader
@@ -197,10 +225,9 @@ if __name__ == "__main__":
                 psoDesc.renderState.rasterState.frontCounterClockwise = True
 
                 self.pipeline = device.createGraphicsPipeline(
-                    psoDesc, framebuffer.getFramebufferInfo()
+                    psoDesc, renderFramebuffer.getFramebufferInfo()
                 )
 
-            fbinfo = framebuffer.getFramebufferInfo()
             windowViewport = pyd.Viewport(float(fbinfo.width), float(fbinfo.height))
             self.view.SetViewport(windowViewport)
             self.view.SetMatricesFromCamera(
@@ -210,14 +237,16 @@ if __name__ == "__main__":
 
             self.commandList.open()
 
-            pyd.ClearColorAttachment(self.commandList, framebuffer, 0, pyd.Color(0.0))
-            pyd.ClearDepthStencilAttachment(self.commandList, framebuffer, 0.0, 0)
+            colorBuffer = framebuffer.getDesc().getColorAttachment(0).texture
+            assert colorBuffer is not None
+            self.commandList.clearTextureFloat(colorBuffer, pyd.Color(0.0))
+            self.commandList.clearDepthStencilTexture(self.depthBuffer, True, 0.0, True, 0)
 
             self.commandList.writeBuffer(self.viewConstantsBuffer, self.view.FillPlanarViewConstants())
 
             state = pyd.GraphicsState()
             state.pipeline = self.pipeline
-            state.framebuffer = framebuffer
+            state.framebuffer = renderFramebuffer
             state.addBindingSet(self.bindingSet)
             state.addBindingSet(self.descriptorTableManager.GetDescriptorTable())
             state.viewport = self.view.GetViewportState()
@@ -255,9 +284,6 @@ if __name__ == "__main__":
         print("DeviceManager created successfully.")
 
     deviceParams = pyd.DeviceCreationParameters()
-    # DeviceManager only allocates a depth buffer (and hands one to Render() via
-    # IRenderPass.SupportsDepthBuffer) when a format is requested here.
-    deviceParams.depthBufferFormat = pyd.Format.D24S8
     if is_debug:
         print("Debug mode is enabled.")
         deviceParams.enableDebugRuntime = True
