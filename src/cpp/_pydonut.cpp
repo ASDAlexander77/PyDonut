@@ -802,6 +802,9 @@ PYBIND11_MODULE(_pydonut, m) {
             self.addRegisterSpace(item);
         }, py::arg("item"));
 
+    m.def("CreateVolatileConstantBufferDesc", &nvrhi::utils::CreateVolatileConstantBufferDesc,
+        py::arg("byteSize"), py::arg("debugName"), py::arg("maxVersions"));
+
     // Mirrors nvrhi::utils::CreateBindingSetAndLayout: derives a matching BindingLayoutDesc
     // from the BindingSetDesc's items and creates both in one call.
     m.def("CreateBindingSetAndLayout", [](nvrhi::IDevice* device, nvrhi::ShaderType visibility, uint32_t registerSpace, const nvrhi::BindingSetDesc &bindingSetDesc) {
@@ -1104,6 +1107,17 @@ PYBIND11_MODULE(_pydonut, m) {
         }
         return items;
     });
+
+    // Mirrors ApplicationBase::SceneLoaded()'s texture-finalization step (the part that runs
+    // after LoadScene() returns on the synchronous path, i.e. SetAsynchronousLoadingEnabled(false)
+    // followed by BeginLoadingScene()). ApplicationBase itself isn't exposed to Python -- samples
+    // subclass IRenderPass directly -- so this stands in for that call. Must run after
+    // Scene.Load() and before Scene.FinishedLoading(): it finalizes each texture's bindless
+    // descriptor index, which FinishedLoading() then bakes into the material buffer.
+    m.def("SceneLoaded", [](donut::engine::TextureCache& textureCache, donut::engine::CommonRenderPasses& commonPasses) {
+        textureCache.ProcessRenderingThreadCommands(commonPasses, 0.f);
+        textureCache.LoadingFinished();
+    }, py::arg("textureCache"), py::arg("commonPasses"));
 
     // FirstPersonCamera's matrices (dm::affine3/float4x4) aren't exposed to Python --
     // SetMatricesFromCamera on PlanarView below consumes them internally instead.

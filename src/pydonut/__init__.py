@@ -66,6 +66,7 @@ from pydonut._pydonut import CommonRenderPasses
 from pydonut._pydonut import DescriptorTableManager
 from pydonut._pydonut import TextureCache
 from pydonut._pydonut import Scene
+from pydonut._pydonut import SceneLoaded
 from pydonut._pydonut import FirstPersonCamera
 from pydonut._pydonut import PlanarView
 from pydonut._pydonut import AdapterInfo
@@ -79,6 +80,7 @@ from pydonut._pydonut import GetShaderTypeName
 from pydonut._pydonut import ClearColorAttachment
 from pydonut._pydonut import ClearDepthStencilAttachment
 from pydonut._pydonut import BuildBottomLevelAccelStruct
+from pydonut._pydonut import CreateVolatileConstantBufferDesc
 from pydonut._pydonut import CreateBindingSetAndLayout
 from pydonut._pydonut import log
 
@@ -157,6 +159,7 @@ __all__ = (
     'DescriptorTableManager',
     'TextureCache',
     'Scene',
+    'SceneLoaded',
     'FirstPersonCamera',
     'PlanarView',
     'AdapterInfo',
@@ -170,6 +173,7 @@ __all__ = (
     'ClearColorAttachment',
     'ClearDepthStencilAttachment',
     'BuildBottomLevelAccelStruct',
+    'CreateVolatileConstantBufferDesc',
     'CreateBindingSetAndLayout',
     'log',
     'CompileShader',

@@ -107,13 +107,12 @@ if __name__ == "__main__":
             if not self.scene.Load(sceneFileName):
                 return False
 
-            # Mirrors ApplicationBase::SceneLoaded(): flushes texture uploads/mip generation
-            # queued by Scene.Load() onto the render thread. This must run BEFORE
-            # Scene.FinishedLoading() -- that's what finalizes each texture's bindless
-            # descriptor index, which FinishedLoading() then bakes into the material buffer.
-            # Getting this backwards leaves every material's texture index unset (-1).
-            textureCache.ProcessRenderingThreadCommands(self.commonPasses, 0.0)
-            textureCache.LoadingFinished()
+            # Mirrors the C++ sample's SetAsynchronousLoadingEnabled(false) +
+            # BeginLoadingScene(): this must run BEFORE Scene.FinishedLoading() -- it
+            # finalizes each texture's bindless descriptor index, which FinishedLoading()
+            # then bakes into the material buffer. Getting this backwards leaves every
+            # material's texture index unset (-1).
+            pyd.SceneLoaded(textureCache, self.commonPasses)
 
             self.scene.FinishedLoading(self.GetFrameIndex())
 
@@ -128,12 +127,7 @@ if __name__ == "__main__":
             self.camera.SetMoveSpeed(6.0)
 
             viewConstantsSize = len(self.view.FillPlanarViewConstants())
-            viewConstantsBufferDesc = pyd.BufferDesc()
-            viewConstantsBufferDesc.byteSize = viewConstantsSize
-            viewConstantsBufferDesc.debugName = "ViewConstants"
-            viewConstantsBufferDesc.isConstantBuffer = True
-            viewConstantsBufferDesc.isVolatile = True
-            viewConstantsBufferDesc.maxVersions = 16
+            viewConstantsBufferDesc = pyd.CreateVolatileConstantBufferDesc(viewConstantsSize, "ViewConstants", 16)
             self.viewConstantsBuffer = device.createBuffer(viewConstantsBufferDesc)
 
             device.waitForIdle()
