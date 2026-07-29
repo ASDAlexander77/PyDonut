@@ -26,6 +26,12 @@
 #include <donut/engine/SceneGraph.h>
 #include <donut/engine/TextureCache.h>
 #include <donut/engine/DescriptorTableManager.h>
+#include <donut/engine/FramebufferFactory.h>
+#include <donut/render/GBuffer.h>
+#include <donut/render/GBufferFillPass.h>
+#include <donut/render/DeferredLightingPass.h>
+#include <donut/render/GeometryPasses.h>
+#include <donut/render/DrawStrategy.h>
 #include <nvrhi/utils.h>
 
 #if PYDONUT_HAVE_DXC
@@ -39,6 +45,7 @@
 // must also sit at global scope for the two declarations to refer to the same type.
 using namespace donut::math;
 #include <donut/shaders/view_cb.h>
+#include <donut/shaders/material_cb.h>
 
 namespace py = pybind11;
 
@@ -171,6 +178,64 @@ public:
     }
     bool JoystickAxisUpdate(int axis, float value) override {
         PYBIND11_OVERRIDE(bool, ApplicationBase, JoystickAxisUpdate, axis, value);
+    }
+};
+
+// PassthroughDrawStrategy::SetData() only stores a raw pointer to the DrawItem it's given --
+// it doesn't own it. This wrapper gives the strategy its own DrawItem plus shared_ptr
+// references to everything the item points at, so the item stays valid for as long as the
+// strategy object (spanning the SetSingleItem() call and the later RenderView() call) lives,
+// without requiring the Python caller to separately keep those objects alive.
+struct PyPassthroughDrawStrategy : donut::render::PassthroughDrawStrategy {
+    donut::render::DrawItem item{};
+    std::shared_ptr<donut::engine::MeshInstance> instanceRef;
+    std::shared_ptr<donut::engine::MeshInfo> meshRef;
+    std::shared_ptr<donut::engine::MeshGeometry> geometryRef;
+    std::shared_ptr<donut::engine::Material> materialRef;
+    std::shared_ptr<donut::engine::BufferGroup> buffersRef;
+
+    void SetSingleItem(
+        std::shared_ptr<donut::engine::MeshInstance> instance,
+        std::shared_ptr<donut::engine::MeshInfo> mesh,
+        std::shared_ptr<donut::engine::MeshGeometry> geometry,
+        std::shared_ptr<donut::engine::Material> material,
+        std::shared_ptr<donut::engine::BufferGroup> buffers,
+        float distanceToCamera,
+        nvrhi::RasterCullMode cullMode)
+    {
+        instanceRef = std::move(instance);
+        meshRef = std::move(mesh);
+        geometryRef = std::move(geometry);
+        materialRef = std::move(material);
+        buffersRef = std::move(buffers);
+
+        item.instance = instanceRef.get();
+        item.mesh = meshRef.get();
+        item.geometry = geometryRef.get();
+        item.material = materialRef.get();
+        item.buffers = buffersRef.get();
+        item.distanceToCamera = distanceToCamera;
+        item.cullMode = cullMode;
+
+        SetData(&item, 1);
+    }
+};
+
+// DeferredLightingPass::Inputs::lights is a non-owning pointer to a vector -- this wrapper
+// gives it an owned vector to point at, so a Python list of lights survives past the call
+// that sets it. SetAmbientColors collapses the two dm::float3 fields into a flat-float call,
+// consistent with this module's convention of not exposing math vector types to Python.
+struct PyDeferredLightingInputs : donut::render::DeferredLightingPass::Inputs {
+    std::vector<std::shared_ptr<donut::engine::Light>> ownedLights;
+
+    void SetLights(std::vector<std::shared_ptr<donut::engine::Light>> newLights) {
+        ownedLights = std::move(newLights);
+        lights = &ownedLights;
+    }
+
+    void SetAmbientColors(float topR, float topG, float topB, float bottomR, float bottomG, float bottomB) {
+        ambientColorTop = donut::math::float3(topR, topG, topB);
+        ambientColorBottom = donut::math::float3(bottomR, bottomG, bottomB);
     }
 };
 
@@ -1194,6 +1259,193 @@ PYBIND11_MODULE(_pydonut, m) {
         textureCache.LoadingFinished();
     }, py::arg("textureCache"), py::arg("commonPasses"));
 
+    textureCache.def("LoadTextureFromFile", [](donut::engine::TextureCache &self, const std::filesystem::path &path, bool sRGB,
+            donut::engine::CommonRenderPasses* passes, nvrhi::ICommandList* commandList) {
+        return self.LoadTextureFromFile(path, sRGB, passes, commandList);
+    }, py::arg("path"), py::arg("sRGB"), py::arg("passes") = nullptr, py::arg("commandList"));
+
+    py::class_<donut::engine::LoadedTexture, std::shared_ptr<donut::engine::LoadedTexture>>(m, "LoadedTexture")
+        .def_property_readonly("texture", [](const donut::engine::LoadedTexture &self) -> nvrhi::ITexture* {
+            return self.texture.Get();
+        }, py::return_value_policy::reference_internal);
+
+    // VertexAttribute/BufferGroup/Material/MeshGeometry/MeshInfo/MeshInstance/SceneGraphNode/
+    // SceneGraph/Light/DirectionalLight below are bound just deep enough to build a manual
+    // scene graph by hand (see deferred_shading.py) -- matching what Scene already builds
+    // internally for glTF-loaded scenes, but assembled a few pieces at a time from Python.
+    pybind11::native_enum<donut::engine::VertexAttribute>(m, "VertexAttribute", "enum.Enum")
+        .value("Position", donut::engine::VertexAttribute::Position)
+        .value("TexCoord1", donut::engine::VertexAttribute::TexCoord1)
+        .value("Normal", donut::engine::VertexAttribute::Normal)
+        .value("Tangent", donut::engine::VertexAttribute::Tangent)
+        .finalize();
+
+    py::class_<donut::engine::BufferGroup, std::shared_ptr<donut::engine::BufferGroup>>(m, "BufferGroup")
+        .def(py::init<>())
+        .def_property("indexBuffer",
+            [](const donut::engine::BufferGroup &self) -> nvrhi::IBuffer* { return self.indexBuffer.Get(); },
+            [](donut::engine::BufferGroup &self, nvrhi::IBuffer* b) { self.indexBuffer = b; },
+            py::return_value_policy::reference)
+        .def_property("vertexBuffer",
+            [](const donut::engine::BufferGroup &self) -> nvrhi::IBuffer* { return self.vertexBuffer.Get(); },
+            [](donut::engine::BufferGroup &self, nvrhi::IBuffer* b) { self.vertexBuffer = b; },
+            py::return_value_policy::reference)
+        .def_property("instanceBuffer",
+            [](const donut::engine::BufferGroup &self) -> nvrhi::IBuffer* { return self.instanceBuffer.Get(); },
+            [](donut::engine::BufferGroup &self, nvrhi::IBuffer* b) { self.instanceBuffer = b; },
+            py::return_value_policy::reference)
+        .def("setVertexBufferRange", [](donut::engine::BufferGroup &self, donut::engine::VertexAttribute attr,
+                uint64_t byteOffset, uint64_t byteSize) {
+            nvrhi::BufferRange &range = self.getVertexBufferRange(attr);
+            range.byteOffset = byteOffset;
+            range.byteSize = byteSize;
+        }, py::arg("attr"), py::arg("byteOffset"), py::arg("byteSize"));
+
+    py::class_<donut::engine::Material, std::shared_ptr<donut::engine::Material>>(m, "Material")
+        .def(py::init<>())
+        .def_readwrite("name", &donut::engine::Material::name)
+        .def_readwrite("useSpecularGlossModel", &donut::engine::Material::useSpecularGlossModel)
+        .def_readwrite("enableBaseOrDiffuseTexture", &donut::engine::Material::enableBaseOrDiffuseTexture)
+        .def_readwrite("baseOrDiffuseTexture", &donut::engine::Material::baseOrDiffuseTexture)
+        .def_property("materialConstants",
+            [](const donut::engine::Material &self) -> nvrhi::IBuffer* { return self.materialConstants.Get(); },
+            [](donut::engine::Material &self, nvrhi::IBuffer* b) { self.materialConstants = b; },
+            py::return_value_policy::reference);
+
+    // Wraps Material::FillConstantBuffer(), which fills the generated MaterialConstants
+    // shader-cbuffer struct -- not otherwise exposed to Python, same rationale as
+    // PlanarView.FillPlanarViewConstants() returning raw bytes instead of a bound struct.
+    m.def("CreateMaterialConstantBuffer", [](nvrhi::IDevice* device, nvrhi::ICommandList* commandList, const donut::engine::Material &material) {
+        nvrhi::BufferDesc bufferDesc;
+        bufferDesc.byteSize = sizeof(MaterialConstants);
+        bufferDesc.debugName = material.name;
+        bufferDesc.isConstantBuffer = true;
+        bufferDesc.initialState = nvrhi::ResourceStates::ConstantBuffer;
+        bufferDesc.keepInitialState = true;
+        nvrhi::BufferHandle buffer = device->createBuffer(bufferDesc);
+
+        MaterialConstants constants{};
+        material.FillConstantBuffer(constants);
+        commandList->writeBuffer(buffer, &constants, sizeof(constants));
+
+        return DetachToShared(std::move(buffer));
+    }, py::arg("device"), py::arg("commandList"), py::arg("material"));
+
+    py::class_<donut::engine::MeshGeometry, std::shared_ptr<donut::engine::MeshGeometry>>(m, "MeshGeometry")
+        .def(py::init<>())
+        .def_readwrite("material", &donut::engine::MeshGeometry::material)
+        .def_readwrite("numIndices", &donut::engine::MeshGeometry::numIndices)
+        .def_readwrite("numVertices", &donut::engine::MeshGeometry::numVertices);
+
+    py::class_<donut::engine::MeshInfo, std::shared_ptr<donut::engine::MeshInfo>>(m, "MeshInfo")
+        .def(py::init<>())
+        .def_readwrite("name", &donut::engine::MeshInfo::name)
+        .def_readwrite("buffers", &donut::engine::MeshInfo::buffers)
+        .def_readwrite("totalIndices", &donut::engine::MeshInfo::totalIndices)
+        .def_readwrite("totalVertices", &donut::engine::MeshInfo::totalVertices)
+        .def_readwrite("geometries", &donut::engine::MeshInfo::geometries)
+        .def("SetObjectSpaceBounds", [](donut::engine::MeshInfo &self,
+                float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
+            self.objectSpaceBounds = donut::math::box3(
+                donut::math::float3(minX, minY, minZ), donut::math::float3(maxX, maxY, maxZ));
+        }, py::arg("minX"), py::arg("minY"), py::arg("minZ"), py::arg("maxX"), py::arg("maxY"), py::arg("maxZ"));
+
+    // SceneGraphLeaf is abstract (pure virtual Clone()) -- bound base-only, for MeshInstance/
+    // Light/DirectionalLight below to derive from and for SetLeaf()/AttachLeafNode() to accept.
+    py::class_<donut::engine::SceneGraphLeaf, std::shared_ptr<donut::engine::SceneGraphLeaf>>(m, "SceneGraphLeaf")
+        .def("SetName", [](const donut::engine::SceneGraphLeaf &self, const std::string &name) { self.SetName(name); }, py::arg("name"));
+
+    py::class_<donut::engine::MeshInstance, donut::engine::SceneGraphLeaf, std::shared_ptr<donut::engine::MeshInstance>>(m, "MeshInstance")
+        .def(py::init<std::shared_ptr<donut::engine::MeshInfo>>(), py::arg("mesh"))
+        .def("GetMesh", &donut::engine::MeshInstance::GetMesh);
+
+    // Light is abstract (pure virtual GetLightType()) -- bound base-only, so
+    // SceneGraph.GetLights() can return a homogeneous list regardless of light subtype.
+    py::class_<donut::engine::Light, donut::engine::SceneGraphLeaf, std::shared_ptr<donut::engine::Light>>(m, "Light")
+        .def("SetDirection", [](const donut::engine::Light &self, double x, double y, double z) {
+            self.SetDirection(donut::math::double3(x, y, z));
+        }, py::arg("x"), py::arg("y"), py::arg("z"));
+
+    py::class_<donut::engine::DirectionalLight, donut::engine::Light, std::shared_ptr<donut::engine::DirectionalLight>>(m, "DirectionalLight")
+        .def(py::init<>())
+        .def_readwrite("irradiance", &donut::engine::DirectionalLight::irradiance)
+        .def_readwrite("angularSize", &donut::engine::DirectionalLight::angularSize);
+
+    py::class_<donut::engine::SceneGraphNode, std::shared_ptr<donut::engine::SceneGraphNode>>(m, "SceneGraphNode")
+        .def(py::init<>())
+        .def("SetLeaf", &donut::engine::SceneGraphNode::SetLeaf, py::arg("leaf"))
+        .def("SetName", &donut::engine::SceneGraphNode::SetName, py::arg("name"));
+
+    py::class_<donut::engine::SceneGraph, std::shared_ptr<donut::engine::SceneGraph>>(m, "SceneGraph")
+        .def(py::init<>())
+        .def("SetRootNode", &donut::engine::SceneGraph::SetRootNode, py::arg("root"))
+        .def("AttachLeafNode", &donut::engine::SceneGraph::AttachLeafNode, py::arg("parent"), py::arg("leaf"))
+        .def("Refresh", &donut::engine::SceneGraph::Refresh, py::arg("frameIndex"))
+        .def("GetLights", &donut::engine::SceneGraph::GetLights);
+
+    // GBufferRenderTargets/GBufferFillPass/DeferredLightingPass/PassthroughDrawStrategy/
+    // RenderView below implement Donut's deferred-shading pipeline: fill a G-buffer from
+    // scene geometry, then run a compute shader that reads it and lights the scene.
+    py::class_<donut::render::GBufferRenderTargets, std::shared_ptr<donut::render::GBufferRenderTargets>>(m, "GBufferRenderTargets")
+        .def(py::init<>())
+        .def("Init", [](donut::render::GBufferRenderTargets &self, nvrhi::IDevice* device, uint32_t width, uint32_t height,
+                uint32_t sampleCount, bool enableMotionVectors, bool useReverseProjection) {
+            self.Init(device, donut::math::uint2(width, height), sampleCount, enableMotionVectors, useReverseProjection);
+        }, py::arg("device"), py::arg("width"), py::arg("height"), py::arg("sampleCount"),
+           py::arg("enableMotionVectors"), py::arg("useReverseProjection"))
+        .def("Clear", &donut::render::GBufferRenderTargets::Clear, py::arg("commandList"))
+        .def_property_readonly("width", [](const donut::render::GBufferRenderTargets &self) { return self.GetSize().x; })
+        .def_property_readonly("height", [](const donut::render::GBufferRenderTargets &self) { return self.GetSize().y; })
+        // Wraps GBufferFramebuffer->GetFramebuffer(view) -- FramebufferFactory itself isn't
+        // separately bound since this is its only use from Python.
+        .def("GetFramebuffer", [](donut::render::GBufferRenderTargets &self, donut::engine::PlanarView &view) -> nvrhi::IFramebuffer* {
+            return self.GBufferFramebuffer->GetFramebuffer(view);
+        }, py::arg("view"), py::return_value_policy::reference_internal);
+
+    py::class_<donut::render::GBufferFillPass::CreateParameters>(m, "GBufferFillPassCreateParameters")
+        .def(py::init<>());
+
+    py::class_<donut::render::GBufferFillPass::Context>(m, "GBufferFillPassContext")
+        .def(py::init<>());
+
+    py::class_<donut::render::GBufferFillPass, std::shared_ptr<donut::render::GBufferFillPass>>(m, "GBufferFillPass")
+        .def(py::init<nvrhi::IDevice*, std::shared_ptr<donut::engine::CommonRenderPasses>>(), py::arg("device"), py::arg("commonPasses"))
+        .def("Init", &donut::render::GBufferFillPass::Init, py::arg("shaderFactory"), py::arg("params"))
+        .def("ResetBindingCache", &donut::render::GBufferFillPass::ResetBindingCache);
+
+    py::class_<PyPassthroughDrawStrategy>(m, "PassthroughDrawStrategy")
+        .def(py::init<>())
+        .def("SetSingleItem", &PyPassthroughDrawStrategy::SetSingleItem,
+            py::arg("instance"), py::arg("mesh"), py::arg("geometry"), py::arg("material"), py::arg("buffers"),
+            py::arg("distanceToCamera"), py::arg("cullMode"));
+
+    py::class_<PyDeferredLightingInputs>(m, "DeferredLightingPassInputs")
+        .def(py::init<>())
+        .def("SetGBuffer", &PyDeferredLightingInputs::SetGBuffer, py::arg("targets"))
+        .def("SetAmbientColors", &PyDeferredLightingInputs::SetAmbientColors,
+            py::arg("topR"), py::arg("topG"), py::arg("topB"), py::arg("bottomR"), py::arg("bottomG"), py::arg("bottomB"))
+        .def("SetLights", &PyDeferredLightingInputs::SetLights, py::arg("lights"))
+        .def_property("output",
+            [](const PyDeferredLightingInputs &self) -> nvrhi::ITexture* { return self.output; },
+            [](PyDeferredLightingInputs &self, nvrhi::ITexture* tex) { self.output = tex; },
+            py::return_value_policy::reference);
+
+    py::class_<donut::render::DeferredLightingPass, std::shared_ptr<donut::render::DeferredLightingPass>>(m, "DeferredLightingPass")
+        .def(py::init<nvrhi::IDevice*, std::shared_ptr<donut::engine::CommonRenderPasses>>(), py::arg("device"), py::arg("commonPasses"))
+        .def("Init", &donut::render::DeferredLightingPass::Init, py::arg("shaderFactory"))
+        .def("Render", [](donut::render::DeferredLightingPass &self, nvrhi::ICommandList* commandList,
+                donut::engine::PlanarView &view, const PyDeferredLightingInputs &inputs) {
+            self.Render(commandList, view, inputs);
+        }, py::arg("commandList"), py::arg("view"), py::arg("inputs"))
+        .def("ResetBindingCache", &donut::render::DeferredLightingPass::ResetBindingCache);
+
+    m.def("RenderView", [](nvrhi::ICommandList* commandList, donut::engine::PlanarView &view, donut::engine::PlanarView &viewPrev,
+            nvrhi::IFramebuffer* framebuffer, PyPassthroughDrawStrategy &drawStrategy, donut::render::GBufferFillPass &pass,
+            donut::render::GBufferFillPass::Context &context, bool materialEvents) {
+        donut::render::RenderView(commandList, &view, &viewPrev, framebuffer, drawStrategy, pass, context, materialEvents);
+    }, py::arg("commandList"), py::arg("view"), py::arg("viewPrev"), py::arg("framebuffer"), py::arg("drawStrategy"),
+       py::arg("pass"), py::arg("context"), py::arg("materialEvents") = false);
+
     // FirstPersonCamera's matrices (dm::affine3/float4x4) aren't exposed to Python --
     // SetMatricesFromCamera on PlanarView below consumes them internally instead.
     py::class_<donut::app::FirstPersonCamera> firstPersonCamera(m, "FirstPersonCamera");
@@ -1219,6 +1471,18 @@ PYBIND11_MODULE(_pydonut, m) {
             float aspectRatio, float verticalFovRadians, float zNear) {
         self.SetMatrices(camera.GetWorldToViewMatrix(), donut::math::perspProjD3DStyleReverse(verticalFovRadians, aspectRatio, zNear));
     }, py::arg("camera"), py::arg("aspectRatio"), py::arg("verticalFovRadians") = donut::math::PI_f * 0.25f, py::arg("zNear") = 0.1f);
+    // Non-camera, non-reverse-Z view setup for static/orbiting subjects (see
+    // deferred_shading.py): a combined yaw+pitch rotation, pushed back `distance` along
+    // its own Z axis, with a regular (not reversed) D3D-style perspective projection.
+    planarView.def("SetMatricesOrbit", [](donut::engine::PlanarView &self, float yawRadians, float pitchRadians, float distance,
+            float aspectRatio, float fovYRadians, float zNear, float zFar) {
+        donut::math::affine3 viewMatrix = donut::math::yawPitchRoll(yawRadians, 0.f, 0.f)
+            * donut::math::yawPitchRoll(0.f, pitchRadians, 0.f)
+            * donut::math::translation(donut::math::float3(0.f, 0.f, distance));
+        donut::math::float4x4 projection = donut::math::perspProjD3DStyle(fovYRadians, aspectRatio, zNear, zFar);
+        self.SetMatrices(viewMatrix, projection);
+    }, py::arg("yawRadians"), py::arg("pitchRadians"), py::arg("distance"), py::arg("aspectRatio"),
+       py::arg("fovYRadians"), py::arg("zNear"), py::arg("zFar"));
     planarView.def("UpdateCache", &donut::engine::PlanarView::UpdateCache);
     planarView.def("GetViewportState", &donut::engine::PlanarView::GetViewportState);
     planarView.def("FillPlanarViewConstants", [](const donut::engine::PlanarView &self) {

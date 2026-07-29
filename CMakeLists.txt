@@ -72,7 +72,8 @@ target_include_directories(_pydonut PRIVATE
 
 target_link_libraries(_pydonut PRIVATE
     donut_app
-    donut_engine)
+    donut_engine
+    donut_render)
 
 # ---------------------------------------
 # DXC (in-process HLSL -> DXIL/SPIR-V compilation, for pyd.CompileShader)

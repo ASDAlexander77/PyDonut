@@ -65,10 +65,31 @@ from pydonut._pydonut import BindingCache
 from pydonut._pydonut import CommonRenderPasses
 from pydonut._pydonut import DescriptorTableManager
 from pydonut._pydonut import TextureCache
+from pydonut._pydonut import LoadedTexture
+from pydonut._pydonut import VertexAttribute
+from pydonut._pydonut import BufferGroup
+from pydonut._pydonut import Material
+from pydonut._pydonut import CreateMaterialConstantBuffer
+from pydonut._pydonut import MeshGeometry
+from pydonut._pydonut import MeshInfo
+from pydonut._pydonut import SceneGraphLeaf
+from pydonut._pydonut import MeshInstance
+from pydonut._pydonut import Light
+from pydonut._pydonut import DirectionalLight
+from pydonut._pydonut import SceneGraphNode
+from pydonut._pydonut import SceneGraph
 from pydonut._pydonut import Scene
 from pydonut._pydonut import SceneLoaded
 from pydonut._pydonut import FirstPersonCamera
 from pydonut._pydonut import PlanarView
+from pydonut._pydonut import GBufferRenderTargets
+from pydonut._pydonut import GBufferFillPassCreateParameters
+from pydonut._pydonut import GBufferFillPassContext
+from pydonut._pydonut import GBufferFillPass
+from pydonut._pydonut import PassthroughDrawStrategy
+from pydonut._pydonut import DeferredLightingPassInputs
+from pydonut._pydonut import DeferredLightingPass
+from pydonut._pydonut import RenderView
 from pydonut._pydonut import AdapterInfo
 from pydonut._pydonut import IRenderPass
 from pydonut._pydonut import ApplicationBase
@@ -159,10 +180,31 @@ __all__ = (
     'CommonRenderPasses',
     'DescriptorTableManager',
     'TextureCache',
+    'LoadedTexture',
+    'VertexAttribute',
+    'BufferGroup',
+    'Material',
+    'CreateMaterialConstantBuffer',
+    'MeshGeometry',
+    'MeshInfo',
+    'SceneGraphLeaf',
+    'MeshInstance',
+    'Light',
+    'DirectionalLight',
+    'SceneGraphNode',
+    'SceneGraph',
     'Scene',
     'SceneLoaded',
     'FirstPersonCamera',
     'PlanarView',
+    'GBufferRenderTargets',
+    'GBufferFillPassCreateParameters',
+    'GBufferFillPassContext',
+    'GBufferFillPass',
+    'PassthroughDrawStrategy',
+    'DeferredLightingPassInputs',
+    'DeferredLightingPass',
+    'RenderView',
     'AdapterInfo',
     'IRenderPass',
     'ApplicationBase',
