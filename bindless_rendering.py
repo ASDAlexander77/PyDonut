@@ -107,12 +107,15 @@ if __name__ == "__main__":
             if not self.scene.Load(sceneFileName):
                 return False
 
-            self.scene.FinishedLoading(self.GetFrameIndex())
-
             # Mirrors ApplicationBase::SceneLoaded(): flushes texture uploads/mip generation
-            # queued by Scene.Load() onto the render thread.
+            # queued by Scene.Load() onto the render thread. This must run BEFORE
+            # Scene.FinishedLoading() -- that's what finalizes each texture's bindless
+            # descriptor index, which FinishedLoading() then bakes into the material buffer.
+            # Getting this backwards leaves every material's texture index unset (-1).
             textureCache.ProcessRenderingThreadCommands(self.commonPasses, 0.0)
             textureCache.LoadingFinished()
+
+            self.scene.FinishedLoading(self.GetFrameIndex())
 
             # The C++ sample's (0, 1.8, 0) -> (1, 1.8, 0) is tuned for a different Sponza
             # distribution; this glTF-Sample-Assets version applies a 0.008 root-node scale,
