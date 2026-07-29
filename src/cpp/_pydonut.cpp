@@ -30,6 +30,8 @@
 #include <donut/render/GBuffer.h>
 #include <donut/render/GBufferFillPass.h>
 #include <donut/render/DeferredLightingPass.h>
+#include <donut/render/ForwardShadingPass.h>
+#include <donut/render/TemporalAntiAliasingPass.h>
 #include <donut/render/GeometryPasses.h>
 #include <donut/render/DrawStrategy.h>
 #include <nvrhi/utils.h>
@@ -658,6 +660,37 @@ PYBIND11_MODULE(_pydonut, m) {
         .value("ConvertCoopVecMatrixOutput", nvrhi::ResourceStates::ConvertCoopVecMatrixOutput)
         .finalize();
 
+    pybind11::native_enum<nvrhi::TextureDimension>(m, "TextureDimension", "enum.Enum")
+        .value("Unknown", nvrhi::TextureDimension::Unknown)
+        .value("Texture1D", nvrhi::TextureDimension::Texture1D)
+        .value("Texture1DArray", nvrhi::TextureDimension::Texture1DArray)
+        .value("Texture2D", nvrhi::TextureDimension::Texture2D)
+        .value("Texture2DArray", nvrhi::TextureDimension::Texture2DArray)
+        .value("TextureCube", nvrhi::TextureDimension::TextureCube)
+        .value("TextureCubeArray", nvrhi::TextureDimension::TextureCubeArray)
+        .value("Texture2DMS", nvrhi::TextureDimension::Texture2DMS)
+        .value("Texture2DMSArray", nvrhi::TextureDimension::Texture2DMSArray)
+        .value("Texture3D", nvrhi::TextureDimension::Texture3D)
+        .finalize();
+
+    pybind11::native_enum<nvrhi::VariableShadingRate>(m, "VariableShadingRate", "enum.Enum")
+        .value("e1x1", nvrhi::VariableShadingRate::e1x1)
+        .value("e1x2", nvrhi::VariableShadingRate::e1x2)
+        .value("e2x1", nvrhi::VariableShadingRate::e2x1)
+        .value("e2x2", nvrhi::VariableShadingRate::e2x2)
+        .value("e2x4", nvrhi::VariableShadingRate::e2x4)
+        .value("e4x2", nvrhi::VariableShadingRate::e4x2)
+        .value("e4x4", nvrhi::VariableShadingRate::e4x4)
+        .finalize();
+
+    pybind11::native_enum<nvrhi::ShadingRateCombiner>(m, "ShadingRateCombiner", "enum.Enum")
+        .value("Passthrough", nvrhi::ShadingRateCombiner::Passthrough)
+        .value("Override", nvrhi::ShadingRateCombiner::Override)
+        .value("Min", nvrhi::ShadingRateCombiner::Min)
+        .value("Max", nvrhi::ShadingRateCombiner::Max)
+        .value("ApplyRelative", nvrhi::ShadingRateCombiner::ApplyRelative)
+        .finalize();
+
     pybind11::native_enum<nvrhi::rt::GeometryFlags>(m, "GeometryFlags", "enum.Enum")
         .value("None_", nvrhi::rt::GeometryFlags::None)
         .value("Opaque", nvrhi::rt::GeometryFlags::Opaque)
@@ -707,6 +740,7 @@ PYBIND11_MODULE(_pydonut, m) {
     py::class_<nvrhi::IShader, std::shared_ptr<nvrhi::IShader>>(m, "Shader");
     py::class_<nvrhi::IGraphicsPipeline, std::shared_ptr<nvrhi::IGraphicsPipeline>>(m, "GraphicsPipeline");
     py::class_<nvrhi::IMeshletPipeline, std::shared_ptr<nvrhi::IMeshletPipeline>>(m, "MeshletPipeline");
+    py::class_<nvrhi::IComputePipeline, std::shared_ptr<nvrhi::IComputePipeline>>(m, "ComputePipeline");
     py::class_<nvrhi::ICommandList, std::shared_ptr<nvrhi::ICommandList>> commandList(m, "CommandList");
     py::class_<nvrhi::IBuffer, std::shared_ptr<nvrhi::IBuffer>> buffer(m, "Buffer");
     py::class_<nvrhi::IBindingLayout, std::shared_ptr<nvrhi::IBindingLayout>> bindingLayout(m, "BindingLayout");
@@ -865,6 +899,36 @@ PYBIND11_MODULE(_pydonut, m) {
             [](nvrhi::MeshletState &s, nvrhi::IFramebuffer* fb) { s.framebuffer = fb; },
             py::return_value_policy::reference);
 
+    py::class_<nvrhi::VariableRateShadingState>(m, "VariableRateShadingState")
+        .def(py::init<>())
+        .def_readwrite("enabled", &nvrhi::VariableRateShadingState::enabled)
+        .def_readwrite("shadingRate", &nvrhi::VariableRateShadingState::shadingRate)
+        .def_readwrite("pipelinePrimitiveCombiner", &nvrhi::VariableRateShadingState::pipelinePrimitiveCombiner)
+        .def_readwrite("imageCombiner", &nvrhi::VariableRateShadingState::imageCombiner);
+
+    py::class_<nvrhi::VariableRateShadingFeatureInfo>(m, "VariableRateShadingFeatureInfo")
+        .def_readonly("shadingRateImageTileSize", &nvrhi::VariableRateShadingFeatureInfo::shadingRateImageTileSize);
+
+    py::class_<nvrhi::ComputePipelineDesc>(m, "ComputePipelineDesc")
+        .def(py::init<>())
+        .def_property("CS",
+            [](const nvrhi::ComputePipelineDesc &d) -> nvrhi::IShader* { return d.CS.Get(); },
+            [](nvrhi::ComputePipelineDesc &d, nvrhi::IShader* shader) { d.CS = shader; },
+            py::return_value_policy::reference)
+        .def("addBindingLayout", [](nvrhi::ComputePipelineDesc &self, nvrhi::IBindingLayout* layout) {
+            self.addBindingLayout(layout);
+        }, py::arg("layout"));
+
+    py::class_<nvrhi::ComputeState>(m, "ComputeState")
+        .def(py::init<>())
+        .def_property("pipeline",
+            [](const nvrhi::ComputeState &s) -> nvrhi::IComputePipeline* { return s.pipeline; },
+            [](nvrhi::ComputeState &s, nvrhi::IComputePipeline* p) { s.pipeline = p; },
+            py::return_value_policy::reference)
+        .def("addBindingSet", [](nvrhi::ComputeState &self, nvrhi::IBindingSet* set) {
+            self.addBindingSet(set);
+        }, py::arg("bindingSet"));
+
     py::class_<nvrhi::BufferDesc>(m, "BufferDesc")
         .def(py::init<>())
         .def_readwrite("byteSize", &nvrhi::BufferDesc::byteSize)
@@ -899,6 +963,9 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_readwrite("isShaderResource", &nvrhi::TextureDesc::isShaderResource)
         .def_readwrite("isRenderTarget", &nvrhi::TextureDesc::isRenderTarget)
         .def_readwrite("isUAV", &nvrhi::TextureDesc::isUAV)
+        .def_readwrite("isTypeless", &nvrhi::TextureDesc::isTypeless)
+        .def_readwrite("isShadingRateSurface", &nvrhi::TextureDesc::isShadingRateSurface)
+        .def_readwrite("dimension", &nvrhi::TextureDesc::dimension)
         .def_readwrite("clearValue", &nvrhi::TextureDesc::clearValue)
         .def_readwrite("useClearValue", &nvrhi::TextureDesc::useClearValue)
         .def_readwrite("initialState", &nvrhi::TextureDesc::initialState)
@@ -943,9 +1010,17 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_static("Texture_UAV", [](uint32_t slot, nvrhi::ITexture* texture) {
             return nvrhi::BindingSetItem::Texture_UAV(slot, texture);
         }, py::arg("slot"), py::arg("texture"))
+        // Overload with an explicit format, for typed UAV/SRV views that override the
+        // texture's own (possibly typeless) format -- e.g. a shading-rate surface.
+        .def_static("Texture_UAV", [](uint32_t slot, nvrhi::ITexture* texture, nvrhi::Format format) {
+            return nvrhi::BindingSetItem::Texture_UAV(slot, texture, format);
+        }, py::arg("slot"), py::arg("texture"), py::arg("format"))
         .def_static("Texture_SRV", [](uint32_t slot, nvrhi::ITexture* texture) {
             return nvrhi::BindingSetItem::Texture_SRV(slot, texture);
         }, py::arg("slot"), py::arg("texture"))
+        .def_static("Texture_SRV", [](uint32_t slot, nvrhi::ITexture* texture, nvrhi::Format format) {
+            return nvrhi::BindingSetItem::Texture_SRV(slot, texture, format);
+        }, py::arg("slot"), py::arg("texture"), py::arg("format"))
         .def_static("RayTracingAccelStruct", [](uint32_t slot, nvrhi::rt::IAccelStruct* accelStruct) {
             return nvrhi::BindingSetItem::RayTracingAccelStruct(slot, accelStruct);
         }, py::arg("slot"), py::arg("accelStruct"))
@@ -1125,6 +1200,16 @@ PYBIND11_MODULE(_pydonut, m) {
     device.def("createInputLayout", [](nvrhi::IDevice &self, const std::vector<nvrhi::VertexAttributeDesc> &attributes, nvrhi::IShader* vertexShader) {
         return DetachToShared(self.createInputLayout(attributes.data(), uint32_t(attributes.size()), vertexShader));
     }, py::arg("attributes"), py::arg("vertexShader"));
+    device.def("createComputePipeline", [](nvrhi::IDevice &self, const nvrhi::ComputePipelineDesc &desc) {
+        return DetachToShared(self.createComputePipeline(desc));
+    }, py::arg("desc"));
+    // Wraps the queryFeatureSupport(Feature, void*, size_t) overload for VariableRateShading
+    // specifically, which reports the hardware's shading-rate-image tile size.
+    device.def("queryVariableRateShadingInfo", [](nvrhi::IDevice &self) {
+        nvrhi::VariableRateShadingFeatureInfo info{};
+        self.queryFeatureSupport(nvrhi::Feature::VariableRateShading, &info, sizeof(info));
+        return info;
+    });
     device.def("waitForIdle", &nvrhi::IDevice::waitForIdle);
 
     commandList.def("open", &nvrhi::ICommandList::open);
@@ -1133,6 +1218,9 @@ PYBIND11_MODULE(_pydonut, m) {
     commandList.def("draw", &nvrhi::ICommandList::draw, py::arg("args"));
     commandList.def("drawIndexed", &nvrhi::ICommandList::drawIndexed, py::arg("args"));
     commandList.def("setMeshletState", &nvrhi::ICommandList::setMeshletState, py::arg("state"));
+    commandList.def("setComputeState", &nvrhi::ICommandList::setComputeState, py::arg("state"));
+    commandList.def("dispatch", &nvrhi::ICommandList::dispatch,
+        py::arg("groupsX"), py::arg("groupsY") = 1, py::arg("groupsZ") = 1);
     commandList.def("dispatchMesh", &nvrhi::ICommandList::dispatchMesh,
         py::arg("groupsX"), py::arg("groupsY") = 1, py::arg("groupsZ") = 1);
     commandList.def("writeBuffer", [](nvrhi::ICommandList &self, nvrhi::IBuffer* buffer, py::buffer data, uint64_t destOffsetBytes) {
@@ -1278,6 +1366,10 @@ PYBIND11_MODULE(_pydonut, m) {
     scene.def("GetInstanceBuffer", [](donut::engine::Scene &self) -> nvrhi::IBuffer* { return self.GetInstanceBuffer(); }, py::return_value_policy::reference_internal);
     scene.def("GetGeometryBuffer", [](donut::engine::Scene &self) -> nvrhi::IBuffer* { return self.GetGeometryBuffer(); }, py::return_value_policy::reference_internal);
     scene.def("GetMaterialBuffer", [](donut::engine::Scene &self) -> nvrhi::IBuffer* { return self.GetMaterialBuffer(); }, py::return_value_policy::reference_internal);
+    // For samples that need to walk the graph directly (attach their own lights, use
+    // RenderCompositeView with the real root node) rather than just driving simple draw calls
+    // via GetDrawItems().
+    scene.def("GetSceneGraph", &donut::engine::Scene::GetSceneGraph);
     // Flattens GetSceneGraph()->GetMeshInstances() -> each geometry into (instanceIndex,
     // geometryIndexInMesh, numIndices) tuples, sparing Python from needing bindings for
     // SceneGraph/MeshInstance/MeshInfo/MeshGeometry just to drive per-geometry draw calls.
@@ -1425,13 +1517,27 @@ PYBIND11_MODULE(_pydonut, m) {
     py::class_<donut::engine::SceneGraph, std::shared_ptr<donut::engine::SceneGraph>>(m, "SceneGraph")
         .def(py::init<>())
         .def("SetRootNode", &donut::engine::SceneGraph::SetRootNode, py::arg("root"))
+        .def("GetRootNode", &donut::engine::SceneGraph::GetRootNode)
         .def("AttachLeafNode", &donut::engine::SceneGraph::AttachLeafNode, py::arg("parent"), py::arg("leaf"))
         .def("Refresh", &donut::engine::SceneGraph::Refresh, py::arg("frameIndex"))
         .def("GetLights", &donut::engine::SceneGraph::GetLights);
 
-    // GBufferRenderTargets/GBufferFillPass/DeferredLightingPass/PassthroughDrawStrategy/
-    // RenderView below implement Donut's deferred-shading pipeline: fill a G-buffer from
-    // scene geometry, then run a compute shader that reads it and lights the scene.
+    // GBufferRenderTargets/GBufferFillPass/DeferredLightingPass/ForwardShadingPass/
+    // TemporalAntiAliasingPass/draw strategies/RenderView/RenderCompositeView below implement
+    // Donut's two rendering pipelines (deferred and forward+TAA) and the scene-traversal
+    // machinery they share. IDrawStrategy/IGeometryPass/GeometryPassContext are registered as
+    // real polymorphic bases -- rather than binding RenderView/RenderCompositeView against one
+    // fixed concrete strategy/pass/context each -- since both pipelines now contribute a second
+    // concrete implementation of each (PassthroughDrawStrategy + InstancedOpaqueDrawStrategy +
+    // TransparentDrawStrategy; GBufferFillPass + ForwardShadingPass), and a fixed-overload
+    // approach would multiply combinatorially.
+    py::class_<donut::render::IDrawStrategy, std::shared_ptr<donut::render::IDrawStrategy>>(m, "IDrawStrategy");
+    py::class_<donut::render::IGeometryPass, std::shared_ptr<donut::render::IGeometryPass>>(m, "IGeometryPass");
+    // GeometryPassContext subclasses are always freshly constructed and passed by reference
+    // for the duration of one RenderView/RenderCompositeView call, never independently shared,
+    // so (unlike the two hierarchies above) this one doesn't need a shared_ptr holder.
+    py::class_<donut::render::GeometryPassContext>(m, "GeometryPassContext");
+
     py::class_<donut::render::GBufferRenderTargets, std::shared_ptr<donut::render::GBufferRenderTargets>>(m, "GBufferRenderTargets")
         .def(py::init<>())
         .def("Init", [](donut::render::GBufferRenderTargets &self, nvrhi::IDevice* device, uint32_t width, uint32_t height,
@@ -1443,7 +1549,9 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_property_readonly("width", [](const donut::render::GBufferRenderTargets &self) { return self.GetSize().x; })
         .def_property_readonly("height", [](const donut::render::GBufferRenderTargets &self) { return self.GetSize().y; })
         // Wraps GBufferFramebuffer->GetFramebuffer(view) -- FramebufferFactory itself isn't
-        // separately bound since this is its only use from Python.
+        // needed here since this is its only use from Python for this specific render target
+        // bundle (contrast RenderTargets in variable_shading.py, which builds its own
+        // FramebufferFactory instances directly, since it needs more control over them).
         .def("GetFramebuffer", [](donut::render::GBufferRenderTargets &self, donut::engine::PlanarView &view) -> nvrhi::IFramebuffer* {
             return self.GBufferFramebuffer->GetFramebuffer(view);
         }, py::arg("view"), py::return_value_policy::reference_internal);
@@ -1451,19 +1559,27 @@ PYBIND11_MODULE(_pydonut, m) {
     py::class_<donut::render::GBufferFillPass::CreateParameters>(m, "GBufferFillPassCreateParameters")
         .def(py::init<>());
 
-    py::class_<donut::render::GBufferFillPass::Context>(m, "GBufferFillPassContext")
+    py::class_<donut::render::GBufferFillPass::Context, donut::render::GeometryPassContext>(m, "GBufferFillPassContext")
         .def(py::init<>());
 
-    py::class_<donut::render::GBufferFillPass, std::shared_ptr<donut::render::GBufferFillPass>>(m, "GBufferFillPass")
+    py::class_<donut::render::GBufferFillPass, donut::render::IGeometryPass, std::shared_ptr<donut::render::GBufferFillPass>>(m, "GBufferFillPass")
         .def(py::init<nvrhi::IDevice*, std::shared_ptr<donut::engine::CommonRenderPasses>>(), py::arg("device"), py::arg("commonPasses"))
         .def("Init", &donut::render::GBufferFillPass::Init, py::arg("shaderFactory"), py::arg("params"))
         .def("ResetBindingCache", &donut::render::GBufferFillPass::ResetBindingCache);
 
-    py::class_<PyPassthroughDrawStrategy>(m, "PassthroughDrawStrategy")
+    py::class_<PyPassthroughDrawStrategy, donut::render::IDrawStrategy, std::shared_ptr<PyPassthroughDrawStrategy>>(m, "PassthroughDrawStrategy")
         .def(py::init<>())
         .def("SetSingleItem", &PyPassthroughDrawStrategy::SetSingleItem,
             py::arg("instance"), py::arg("mesh"), py::arg("geometry"), py::arg("material"), py::arg("buffers"),
             py::arg("distanceToCamera"), py::arg("cullMode"));
+
+    py::class_<donut::render::InstancedOpaqueDrawStrategy, donut::render::IDrawStrategy, std::shared_ptr<donut::render::InstancedOpaqueDrawStrategy>>(
+        m, "InstancedOpaqueDrawStrategy")
+        .def(py::init<>());
+
+    py::class_<donut::render::TransparentDrawStrategy, donut::render::IDrawStrategy, std::shared_ptr<donut::render::TransparentDrawStrategy>>(
+        m, "TransparentDrawStrategy")
+        .def(py::init<>());
 
     py::class_<PyDeferredLightingInputs>(m, "DeferredLightingPassInputs")
         .def(py::init<>())
@@ -1485,12 +1601,118 @@ PYBIND11_MODULE(_pydonut, m) {
         }, py::arg("commandList"), py::arg("view"), py::arg("inputs"))
         .def("ResetBindingCache", &donut::render::DeferredLightingPass::ResetBindingCache);
 
+    py::class_<donut::render::ForwardShadingPass::CreateParameters>(m, "ForwardShadingPassCreateParameters")
+        .def(py::init<>());
+
+    py::class_<donut::render::ForwardShadingPass::Context, donut::render::GeometryPassContext>(m, "ForwardShadingPassContext")
+        .def(py::init<>());
+
+    py::class_<donut::render::ForwardShadingPass, donut::render::IGeometryPass, std::shared_ptr<donut::render::ForwardShadingPass>>(m, "ForwardShadingPass")
+        .def(py::init<nvrhi::IDevice*, std::shared_ptr<donut::engine::CommonRenderPasses>>(), py::arg("device"), py::arg("commonPasses"))
+        .def("Init", &donut::render::ForwardShadingPass::Init, py::arg("shaderFactory"), py::arg("params"))
+        .def("ResetBindingCache", &donut::render::ForwardShadingPass::ResetBindingCache)
+        // lightProbes is always empty here -- not otherwise exposed to Python (nothing in
+        // this codebase builds one), matching every current sample's usage of this call.
+        .def("PrepareLights", [](donut::render::ForwardShadingPass &self, donut::render::ForwardShadingPass::Context &context,
+                nvrhi::ICommandList* commandList, const std::vector<std::shared_ptr<donut::engine::Light>> &lights,
+                float topR, float topG, float topB, float bottomR, float bottomG, float bottomB) {
+            self.PrepareLights(context, commandList, lights,
+                donut::math::float3(topR, topG, topB), donut::math::float3(bottomR, bottomG, bottomB), {});
+        }, py::arg("context"), py::arg("commandList"), py::arg("lights"),
+           py::arg("topR"), py::arg("topG"), py::arg("topB"), py::arg("bottomR"), py::arg("bottomG"), py::arg("bottomB"));
+
+    py::class_<donut::render::TemporalAntiAliasingParameters>(m, "TemporalAntiAliasingParameters")
+        .def(py::init<>())
+        .def_readwrite("newFrameWeight", &donut::render::TemporalAntiAliasingParameters::newFrameWeight)
+        .def_readwrite("clampingFactor", &donut::render::TemporalAntiAliasingParameters::clampingFactor)
+        .def_readwrite("maxRadiance", &donut::render::TemporalAntiAliasingParameters::maxRadiance)
+        .def_readwrite("enableHistoryClamping", &donut::render::TemporalAntiAliasingParameters::enableHistoryClamping)
+        .def_readwrite("useHistoryClampRelax", &donut::render::TemporalAntiAliasingParameters::useHistoryClampRelax);
+
+    // CreateParameters' texture fields are raw nvrhi::ITexture* (not RefCountPtr), so they're
+    // plain pointer properties rather than the .Get()/assign pattern used for TextureHandle
+    // fields elsewhere. historyClampRelax is intentionally left unbound: nothing in this
+    // codebase builds the mask texture it expects, matching useHistoryClampRelax always false.
+    py::class_<donut::render::TemporalAntiAliasingPass::CreateParameters>(m, "TemporalAntiAliasingCreateParameters")
+        .def(py::init<>())
+        .def_property("sourceDepth",
+            [](const donut::render::TemporalAntiAliasingPass::CreateParameters &p) -> nvrhi::ITexture* { return p.sourceDepth; },
+            [](donut::render::TemporalAntiAliasingPass::CreateParameters &p, nvrhi::ITexture* t) { p.sourceDepth = t; },
+            py::return_value_policy::reference)
+        .def_property("motionVectors",
+            [](const donut::render::TemporalAntiAliasingPass::CreateParameters &p) -> nvrhi::ITexture* { return p.motionVectors; },
+            [](donut::render::TemporalAntiAliasingPass::CreateParameters &p, nvrhi::ITexture* t) { p.motionVectors = t; },
+            py::return_value_policy::reference)
+        .def_property("unresolvedColor",
+            [](const donut::render::TemporalAntiAliasingPass::CreateParameters &p) -> nvrhi::ITexture* { return p.unresolvedColor; },
+            [](donut::render::TemporalAntiAliasingPass::CreateParameters &p, nvrhi::ITexture* t) { p.unresolvedColor = t; },
+            py::return_value_policy::reference)
+        .def_property("resolvedColor",
+            [](const donut::render::TemporalAntiAliasingPass::CreateParameters &p) -> nvrhi::ITexture* { return p.resolvedColor; },
+            [](donut::render::TemporalAntiAliasingPass::CreateParameters &p, nvrhi::ITexture* t) { p.resolvedColor = t; },
+            py::return_value_policy::reference)
+        .def_property("feedback1",
+            [](const donut::render::TemporalAntiAliasingPass::CreateParameters &p) -> nvrhi::ITexture* { return p.feedback1; },
+            [](donut::render::TemporalAntiAliasingPass::CreateParameters &p, nvrhi::ITexture* t) { p.feedback1 = t; },
+            py::return_value_policy::reference)
+        .def_property("feedback2",
+            [](const donut::render::TemporalAntiAliasingPass::CreateParameters &p) -> nvrhi::ITexture* { return p.feedback2; },
+            [](donut::render::TemporalAntiAliasingPass::CreateParameters &p, nvrhi::ITexture* t) { p.feedback2 = t; },
+            py::return_value_policy::reference)
+        .def_readwrite("useCatmullRomFilter", &donut::render::TemporalAntiAliasingPass::CreateParameters::useCatmullRomFilter)
+        .def_readwrite("motionVectorStencilMask", &donut::render::TemporalAntiAliasingPass::CreateParameters::motionVectorStencilMask)
+        .def_readwrite("numConstantBufferVersions", &donut::render::TemporalAntiAliasingPass::CreateParameters::numConstantBufferVersions);
+
+    py::class_<donut::render::TemporalAntiAliasingPass, std::shared_ptr<donut::render::TemporalAntiAliasingPass>>(m, "TemporalAntiAliasingPass")
+        .def(py::init([](nvrhi::IDevice* device, std::shared_ptr<donut::engine::ShaderFactory> shaderFactory,
+                std::shared_ptr<donut::engine::CommonRenderPasses> commonPasses, donut::engine::PlanarView &compositeView,
+                const donut::render::TemporalAntiAliasingPass::CreateParameters &params) {
+            return new donut::render::TemporalAntiAliasingPass(device, shaderFactory, commonPasses, compositeView, params);
+        }), py::arg("device"), py::arg("shaderFactory"), py::arg("commonPasses"), py::arg("compositeView"), py::arg("params"))
+        .def("RenderMotionVectors", [](donut::render::TemporalAntiAliasingPass &self, nvrhi::ICommandList* commandList,
+                donut::engine::PlanarView &compositeView, donut::engine::PlanarView &compositeViewPrevious) {
+            self.RenderMotionVectors(commandList, compositeView, compositeViewPrevious);
+        }, py::arg("commandList"), py::arg("compositeView"), py::arg("compositeViewPrevious"))
+        .def("TemporalResolve", [](donut::render::TemporalAntiAliasingPass &self, nvrhi::ICommandList* commandList,
+                const donut::render::TemporalAntiAliasingParameters &params, bool feedbackIsValid,
+                donut::engine::PlanarView &compositeViewInput, donut::engine::PlanarView &compositeViewOutput) {
+            self.TemporalResolve(commandList, params, feedbackIsValid, compositeViewInput, compositeViewOutput);
+        }, py::arg("commandList"), py::arg("params"), py::arg("feedbackIsValid"), py::arg("compositeViewInput"), py::arg("compositeViewOutput"));
+
+    py::class_<donut::engine::FramebufferFactory, std::shared_ptr<donut::engine::FramebufferFactory>>(m, "FramebufferFactory")
+        .def(py::init<nvrhi::IDevice*>(), py::arg("device"))
+        .def("SetRenderTargets", [](donut::engine::FramebufferFactory &self, std::vector<nvrhi::ITexture*> targets) {
+            self.RenderTargets.clear();
+            for (nvrhi::ITexture* t : targets)
+                self.RenderTargets.push_back(t);
+        }, py::arg("targets"))
+        .def_property("depthTarget",
+            [](const donut::engine::FramebufferFactory &self) -> nvrhi::ITexture* { return self.DepthTarget.Get(); },
+            [](donut::engine::FramebufferFactory &self, nvrhi::ITexture* t) { self.DepthTarget = t; },
+            py::return_value_policy::reference)
+        .def_property("shadingRateSurface",
+            [](const donut::engine::FramebufferFactory &self) -> nvrhi::ITexture* { return self.ShadingRateSurface.Get(); },
+            [](donut::engine::FramebufferFactory &self, nvrhi::ITexture* t) { self.ShadingRateSurface = t; },
+            py::return_value_policy::reference)
+        .def("GetFramebuffer", [](donut::engine::FramebufferFactory &self, donut::engine::PlanarView &view) -> nvrhi::IFramebuffer* {
+            return self.GetFramebuffer(view);
+        }, py::arg("view"), py::return_value_policy::reference_internal);
+
     m.def("RenderView", [](nvrhi::ICommandList* commandList, donut::engine::PlanarView &view, donut::engine::PlanarView &viewPrev,
-            nvrhi::IFramebuffer* framebuffer, PyPassthroughDrawStrategy &drawStrategy, donut::render::GBufferFillPass &pass,
-            donut::render::GBufferFillPass::Context &context, bool materialEvents) {
+            nvrhi::IFramebuffer* framebuffer, donut::render::IDrawStrategy &drawStrategy, donut::render::IGeometryPass &pass,
+            donut::render::GeometryPassContext &context, bool materialEvents) {
         donut::render::RenderView(commandList, &view, &viewPrev, framebuffer, drawStrategy, pass, context, materialEvents);
     }, py::arg("commandList"), py::arg("view"), py::arg("viewPrev"), py::arg("framebuffer"), py::arg("drawStrategy"),
        py::arg("pass"), py::arg("context"), py::arg("materialEvents") = false);
+
+    m.def("RenderCompositeView", [](nvrhi::ICommandList* commandList, donut::engine::PlanarView &view, donut::engine::PlanarView &viewPrev,
+            donut::engine::FramebufferFactory &framebufferFactory, std::shared_ptr<donut::engine::SceneGraphNode> rootNode,
+            donut::render::IDrawStrategy &drawStrategy, donut::render::IGeometryPass &pass,
+            donut::render::GeometryPassContext &passContext, bool materialEvents) {
+        donut::render::RenderCompositeView(commandList, &view, &viewPrev, framebufferFactory, rootNode,
+            drawStrategy, pass, passContext, nullptr, materialEvents);
+    }, py::arg("commandList"), py::arg("view"), py::arg("viewPrev"), py::arg("framebufferFactory"), py::arg("rootNode"),
+       py::arg("drawStrategy"), py::arg("pass"), py::arg("passContext"), py::arg("materialEvents") = false);
 
     // FirstPersonCamera's matrices (dm::affine3/float4x4) aren't exposed to Python --
     // SetMatricesFromCamera on PlanarView below consumes them internally instead.
@@ -1510,9 +1732,15 @@ PYBIND11_MODULE(_pydonut, m) {
 
     py::class_<donut::engine::PlanarView> planarView(m, "PlanarView");
     planarView.def(py::init<>());
+    // Copy constructor: PlanarView has no Python-visible identity beyond its cached state, so
+    // this is how Python takes a snapshot of "this frame's view" to keep around as "last
+    // frame's view" (e.g. for TemporalAntiAliasingPass, which needs both) -- mirrors the
+    // C++ pattern of plain copy-assigning one PlanarView into another.
+    planarView.def(py::init<const donut::engine::PlanarView&>(), py::arg("other"));
     planarView.def("SetViewport", [](donut::engine::PlanarView &self, const nvrhi::Viewport &viewport) {
         self.SetViewport(viewport);
     }, py::arg("viewport"));
+    planarView.def("SetVariableRateShadingState", &donut::engine::PlanarView::SetVariableRateShadingState, py::arg("state"));
     planarView.def("SetMatricesFromCamera", [](donut::engine::PlanarView &self, const donut::app::FirstPersonCamera &camera,
             float aspectRatio, float verticalFovRadians, float zNear) {
         self.SetMatrices(camera.GetWorldToViewMatrix(), donut::math::perspProjD3DStyleReverse(verticalFovRadians, aspectRatio, zNear));

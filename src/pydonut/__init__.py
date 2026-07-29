@@ -10,6 +10,9 @@ from pydonut._pydonut import RasterCullMode
 from pydonut._pydonut import CommandQueue
 from pydonut._pydonut import Feature
 from pydonut._pydonut import ResourceStates
+from pydonut._pydonut import TextureDimension
+from pydonut._pydonut import VariableShadingRate
+from pydonut._pydonut import ShadingRateCombiner
 from pydonut._pydonut import GeometryFlags
 from pydonut._pydonut import InstanceFlags
 from pydonut._pydonut import Color
@@ -25,6 +28,10 @@ from pydonut._pydonut import GraphicsPipelineDesc
 from pydonut._pydonut import GraphicsState
 from pydonut._pydonut import MeshletPipelineDesc
 from pydonut._pydonut import MeshletState
+from pydonut._pydonut import VariableRateShadingState
+from pydonut._pydonut import VariableRateShadingFeatureInfo
+from pydonut._pydonut import ComputePipelineDesc
+from pydonut._pydonut import ComputeState
 from pydonut._pydonut import BufferDesc
 from pydonut._pydonut import TextureDesc
 from pydonut._pydonut import FramebufferAttachment
@@ -51,6 +58,7 @@ from pydonut._pydonut import ShaderLibrary
 from pydonut._pydonut import InputLayout
 from pydonut._pydonut import GraphicsPipeline
 from pydonut._pydonut import MeshletPipeline
+from pydonut._pydonut import ComputePipeline
 from pydonut._pydonut import RayTracingPipeline
 from pydonut._pydonut import ShaderTable
 from pydonut._pydonut import CommandList
@@ -85,14 +93,27 @@ from pydonut._pydonut import Scene
 from pydonut._pydonut import SceneLoaded
 from pydonut._pydonut import FirstPersonCamera
 from pydonut._pydonut import PlanarView
+from pydonut._pydonut import IDrawStrategy
+from pydonut._pydonut import IGeometryPass
+from pydonut._pydonut import GeometryPassContext
 from pydonut._pydonut import GBufferRenderTargets
 from pydonut._pydonut import GBufferFillPassCreateParameters
 from pydonut._pydonut import GBufferFillPassContext
 from pydonut._pydonut import GBufferFillPass
 from pydonut._pydonut import PassthroughDrawStrategy
+from pydonut._pydonut import InstancedOpaqueDrawStrategy
+from pydonut._pydonut import TransparentDrawStrategy
 from pydonut._pydonut import DeferredLightingPassInputs
 from pydonut._pydonut import DeferredLightingPass
+from pydonut._pydonut import ForwardShadingPassCreateParameters
+from pydonut._pydonut import ForwardShadingPassContext
+from pydonut._pydonut import ForwardShadingPass
+from pydonut._pydonut import TemporalAntiAliasingParameters
+from pydonut._pydonut import TemporalAntiAliasingCreateParameters
+from pydonut._pydonut import TemporalAntiAliasingPass
+from pydonut._pydonut import FramebufferFactory
 from pydonut._pydonut import RenderView
+from pydonut._pydonut import RenderCompositeView
 from pydonut._pydonut import AdapterInfo
 from pydonut._pydonut import IRenderPass
 from pydonut._pydonut import ApplicationBase
@@ -130,6 +151,9 @@ __all__ = (
     'CommandQueue',
     'Feature',
     'ResourceStates',
+    'TextureDimension',
+    'VariableShadingRate',
+    'ShadingRateCombiner',
     'GeometryFlags',
     'InstanceFlags',
     'Color',
@@ -145,6 +169,10 @@ __all__ = (
     'GraphicsState',
     'MeshletPipelineDesc',
     'MeshletState',
+    'VariableRateShadingState',
+    'VariableRateShadingFeatureInfo',
+    'ComputePipelineDesc',
+    'ComputeState',
     'BufferDesc',
     'TextureDesc',
     'FramebufferAttachment',
@@ -171,6 +199,7 @@ __all__ = (
     'InputLayout',
     'GraphicsPipeline',
     'MeshletPipeline',
+    'ComputePipeline',
     'RayTracingPipeline',
     'ShaderTable',
     'CommandList',
@@ -205,14 +234,27 @@ __all__ = (
     'SceneLoaded',
     'FirstPersonCamera',
     'PlanarView',
+    'IDrawStrategy',
+    'IGeometryPass',
+    'GeometryPassContext',
     'GBufferRenderTargets',
     'GBufferFillPassCreateParameters',
     'GBufferFillPassContext',
     'GBufferFillPass',
     'PassthroughDrawStrategy',
+    'InstancedOpaqueDrawStrategy',
+    'TransparentDrawStrategy',
     'DeferredLightingPassInputs',
     'DeferredLightingPass',
+    'ForwardShadingPassCreateParameters',
+    'ForwardShadingPassContext',
+    'ForwardShadingPass',
+    'TemporalAntiAliasingParameters',
+    'TemporalAntiAliasingCreateParameters',
+    'TemporalAntiAliasingPass',
+    'FramebufferFactory',
     'RenderView',
+    'RenderCompositeView',
     'AdapterInfo',
     'IRenderPass',
     'ApplicationBase',
