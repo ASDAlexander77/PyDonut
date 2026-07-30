@@ -71,7 +71,9 @@ Mesa's CPU software rasterizer (`llvmpipe`) — samples run far too slowly, and
 That setup depends on a small fix to the vendored Donut submodule: `dzn` doesn't implement
 `tessellationShader`, `dualSrcBlend`, or `maintenance4`, which Donut's Vulkan device manager
 requests unconditionally, so device creation fails with `VK_ERROR_FEATURE_NOT_PRESENT` without
-it. Apply it after checking out submodules:
+it. Unlike the joystick-input patch below, this one is **not** applied automatically by CMake
+(kept manual on purpose, since it's WSL-specific rather than something every platform wants by
+default) — apply it yourself after checking out submodules:
 
 ```sh
 git -C extern/donut apply ../../patches/DeviceManager_VK-wsl-dzn-fixes.patch
@@ -88,7 +90,11 @@ synchronous DirectInput device enumeration, which can stall for tens of seconds 
 HID/gamepad driver is installed and responds slowly — observed with the Oculus/Meta runtime's
 "Virtual Gamepad Emulation Bus" and Razer Synapse's virtual controller devices. None of the
 PyDonut examples read joystick input, so this is disabled by default via a small patch that adds
-an opt-in `enableJoystickInput` flag to `DeviceCreationParameters`:
+an opt-in `enableJoystickInput` flag to `DeviceCreationParameters`. **CMake applies this patch
+automatically** (see `CMakeLists.txt`, right before `add_subdirectory(extern/donut)`) — it
+checks whether the patch is already applied and skips it if so, and only warns (doesn't fail
+the build) if it can't be applied cleanly, so there's nothing you need to do manually. The
+equivalent manual command, if you ever need it (e.g. to apply it without running CMake):
 
 ```sh
 git -C extern/donut apply ../../patches/DeviceManager-skip-joystick-init-by-default.patch

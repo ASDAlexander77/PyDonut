@@ -36,6 +36,70 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 set(DONUT_SHADERS_OUTPUT_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/framework")
 
+# ---------------------------------------
+# Local patches to the vendored extern/donut submodule, applied here before
+# add_subdirectory() below picks up donut's sources. Idempotent and non-fatal: a patch
+# already applied is detected and skipped, and a patch that plain doesn't apply only warns
+# rather than failing the whole configure, so a hand-edited or already-patched submodule
+# tree doesn't break every subsequent cmake run.
+#
+# Explicit allowlist, NOT every file under patches/ -- some patches there (currently
+# DeviceManager_VK-wsl-dzn-fixes.patch, for Mesa's dzn Vulkan-on-D3D12 driver under WSL) are
+# kept for reference/manual `git -C extern/donut apply` use but deliberately not auto-applied.
+set(PYDONUT_DONUT_PATCHES
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/DeviceManager-skip-joystick-init-by-default.patch"
+)
+
+find_program(GIT_EXECUTABLE git)
+if (GIT_EXECUTABLE)
+    # Ensure extern/donut (and its own nested submodules, e.g. NVRHI/GLFW/ImGui) is actually
+    # checked out before trying to patch or add_subdirectory() it -- a fresh clone without
+    # --recurse-submodules leaves it an empty directory, which would otherwise fail later with
+    # a much less obvious error. Safe/cheap to run on every configure: a no-op when already
+    # up to date.
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" submodule update --init --recursive
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        RESULT_VARIABLE PYDONUT_SUBMODULE_UPDATE_RESULT)
+    if (NOT PYDONUT_SUBMODULE_UPDATE_RESULT EQUAL 0)
+        message(FATAL_ERROR "pydonut: 'git submodule update --init --recursive' failed -- "
+                             "cannot configure without extern/donut checked out.")
+    endif()
+
+    foreach(PATCH_FILE ${PYDONUT_DONUT_PATCHES})
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" apply --check "${PATCH_FILE}"
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/extern/donut"
+            RESULT_VARIABLE PYDONUT_PATCH_CHECK
+            OUTPUT_QUIET ERROR_QUIET)
+        if (PYDONUT_PATCH_CHECK EQUAL 0)
+            message(STATUS "pydonut: applying patch to extern/donut: ${PATCH_FILE}")
+            execute_process(
+                COMMAND "${GIT_EXECUTABLE}" apply "${PATCH_FILE}"
+                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/extern/donut"
+                RESULT_VARIABLE PYDONUT_PATCH_APPLY)
+            if (NOT PYDONUT_PATCH_APPLY EQUAL 0)
+                message(WARNING "pydonut: failed to apply patch: ${PATCH_FILE}")
+            endif()
+        else()
+            # Not applicable as a forward patch -- check whether it's already applied (reverse
+            # patch would apply cleanly) before warning.
+            execute_process(
+                COMMAND "${GIT_EXECUTABLE}" apply --check --reverse "${PATCH_FILE}"
+                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/extern/donut"
+                RESULT_VARIABLE PYDONUT_PATCH_REVERSE_CHECK
+                OUTPUT_QUIET ERROR_QUIET)
+            if (PYDONUT_PATCH_REVERSE_CHECK EQUAL 0)
+                message(STATUS "pydonut: patch already applied to extern/donut: ${PATCH_FILE}")
+            else()
+                message(WARNING "pydonut: patch does not apply cleanly to extern/donut (skipped): ${PATCH_FILE}")
+            endif()
+        endif()
+    endforeach()
+else()
+    message(WARNING "pydonut: git not found -- skipping donut patch application")
+endif()
+
 add_subdirectory(extern/donut)
 
 if (NVRHI_WITH_DX12)
