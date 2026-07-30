@@ -1135,6 +1135,11 @@ class ApplicationBase(IRenderPass):
     def IsSceneLoading(self: ApplicationBase) -> bool: ...
     def IsSceneLoaded(self: ApplicationBase) -> bool: ...
     def GetCommonPasses(self: ApplicationBase) -> CommonRenderPasses: ...
+    # Wire a Python-created TextureCache/CommonRenderPasses into the base so the inherited
+    # SceneLoaded() finalizes it correctly, instead of a null cache doing nothing.
+    m_TextureCache: TextureCache
+    m_CommonPasses: CommonRenderPasses
+    m_IsAsyncLoad: bool
 
 class PipelineCallbacks():
     beforeFrame: Optional[Callable[[DeviceManager, int], None]]

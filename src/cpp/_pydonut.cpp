@@ -116,6 +116,27 @@ class PyApplicationBase : public donut::app::ApplicationBase {
 public:
     using ApplicationBase::ApplicationBase;
 
+    // m_TextureCache/m_CommonPasses/m_IsAsyncLoad are protected on ApplicationBase, so a
+    // Python subclass has no way to read/wire them -- without SetTextureCache/SetCommonPasses,
+    // the inherited SceneLoaded() finalizes a null texture cache and does nothing, forcing
+    // every sample to duplicate its logic via the free-function pyd.SceneLoaded(). These back
+    // the m_TextureCache/m_CommonPasses/m_IsAsyncLoad properties bound below.
+    // (m_SceneLoadingThread is intentionally not exposed: it's a std::unique_ptr<std::thread>
+    // owned and joined entirely by BeginLoadingScene()/Render(), with no meaningful Python-side
+    // use.)
+    void SetTextureCache(std::shared_ptr<donut::engine::TextureCache> textureCache) {
+        m_TextureCache = std::move(textureCache);
+    }
+    std::shared_ptr<donut::engine::TextureCache> GetTextureCache() const {
+        return m_TextureCache;
+    }
+    void SetCommonPasses(std::shared_ptr<donut::engine::CommonRenderPasses> commonPasses) {
+        m_CommonPasses = std::move(commonPasses);
+    }
+    bool GetIsAsyncLoad() const {
+        return m_IsAsyncLoad;
+    }
+
     void SetLatewarpOptions() override {
         PYBIND11_OVERRIDE(void, ApplicationBase, SetLatewarpOptions);
     }
@@ -2214,6 +2235,28 @@ PYBIND11_MODULE(_pydonut, m) {
     applicationBase.def("IsSceneLoading", &donut::app::ApplicationBase::IsSceneLoading);
     applicationBase.def("IsSceneLoaded", &donut::app::ApplicationBase::IsSceneLoaded);
     applicationBase.def("GetCommonPasses", &donut::app::ApplicationBase::GetCommonPasses);
+    // Actual instances are always the PyApplicationBase trampoline, so these downcasts are
+    // safe; they're needed because the backing members are protected on ApplicationBase
+    // itself. Named/cased to match the m_-prefixed properties this module already exposes
+    // for other classes' public fields (e.g. CommonRenderPasses.m_WhiteTexture).
+    applicationBase.def_property("m_TextureCache",
+        [](donut::app::ApplicationBase &self) {
+            return static_cast<PyApplicationBase&>(self).GetTextureCache();
+        },
+        [](donut::app::ApplicationBase &self, std::shared_ptr<donut::engine::TextureCache> textureCache) {
+            static_cast<PyApplicationBase&>(self).SetTextureCache(std::move(textureCache));
+        });
+    applicationBase.def_property("m_CommonPasses",
+        &donut::app::ApplicationBase::GetCommonPasses,
+        [](donut::app::ApplicationBase &self, std::shared_ptr<donut::engine::CommonRenderPasses> commonPasses) {
+            static_cast<PyApplicationBase&>(self).SetCommonPasses(std::move(commonPasses));
+        });
+    // Read-only: the real setter is SetAsynchronousLoadingEnabled(), which BeginLoadingScene()
+    // reads on the next scene load; there's no corresponding C++ getter, so this mirrors the
+    // field directly, matching the other m_-prefixed properties in this module.
+    applicationBase.def_property_readonly("m_IsAsyncLoad", [](donut::app::ApplicationBase &self) {
+        return static_cast<PyApplicationBase&>(self).GetIsAsyncLoad();
+    });
 
     py::class_<donut::app::AdapterInfo>(m, "AdapterInfo")
         .def(py::init<>())

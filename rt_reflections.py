@@ -143,25 +143,24 @@ if __name__ == "__main__":
             rootFS.mount(Path("/shaders/donut"), frameworkShaderPath)
             self.shaderFactory = pyd.ShaderFactory(device, rootFS, Path("/shaders"))
             self.commonPasses = pyd.CommonRenderPasses(device, self.shaderFactory)
+            self.m_CommonPasses = self.commonPasses
             self.bindingCache = pyd.BindingCache(device)
 
             nativeFS = pyd.NativeFileSystem()
             self.textureCache = pyd.TextureCache(device, nativeFS, None)
+            self.m_TextureCache = self.textureCache
 
             # Runs LoadScene() (below) synchronously, followed by the base ApplicationBase's
             # default SceneLoaded() (texture-cache finalization only -- this class doesn't
             # override SceneLoaded(), matching the C++ original, which calls
-            # scene->FinishedLoading() itself below instead of from an override).
+            # scene->FinishedLoading() itself below instead of from an override). Wiring the
+            # cache/passes into the base above lets that inherited SceneLoaded() finalize
+            # queued texture uploads itself, same as the C++ original.
             self.SetAsynchronousLoadingEnabled(False)
             self.BeginLoadingScene(nativeFS, sceneFileName)
             if not self.IsSceneLoaded():
                 return False
             assert self.scene is not None
-
-            # The C++ sample stores this cache on ApplicationBase, which finalizes queued
-            # texture uploads during scene loading. The Python attribute is not that base
-            # member, so do the same work explicitly before material bindings are baked.
-            pyd.SceneLoaded(self.textureCache, self.commonPasses)
 
             sceneGraph = self.scene.GetSceneGraph()
             self.sunLight = pyd.DirectionalLight()
