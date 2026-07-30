@@ -140,7 +140,7 @@ if __name__ == "__main__":
 
             # Runs LoadScene() (below) synchronously, followed by SceneLoaded() (below).
             self.SetAsynchronousLoadingEnabled(False)
-            self.BeginLoadingScene(nativeFS, str(sceneFileName))
+            self.BeginLoadingScene(nativeFS, sceneFileName)
             if not self.IsSceneLoaded():
                 return False
 
@@ -160,7 +160,7 @@ if __name__ == "__main__":
 
             return True
 
-        def LoadScene(self: VariableShading, fs: pyd.IFileSystem, sceneFileName: str) -> bool:
+        def LoadScene(self: VariableShading, fs: pyd.IFileSystem, sceneFileName: Path) -> bool:
             assert self.shaderFactory is not None
             assert self.textureCache is not None
             device = self.GetDevice()
@@ -304,6 +304,7 @@ if __name__ == "__main__":
 
             computeState = pyd.ComputeState()
             computeState.pipeline = self.pipeline
+            assert self.bindingSet is not None
             computeState.addBindingSet(self.bindingSet)
             self.commandList.setComputeState(computeState)
 

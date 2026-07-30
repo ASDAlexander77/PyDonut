@@ -315,6 +315,7 @@ if __name__ == "__main__":
 
             self.deferredLightingPass.Render(self.commandList, self.view, deferredInputs)
 
+            assert self.shadedColor is not None
             self.commonPasses.BlitTexture(self.commandList, framebuffer, self.shadedColor, self.bindingCache)
 
             self.commandList.close()
