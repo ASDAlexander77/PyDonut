@@ -242,6 +242,7 @@ if __name__ == "__main__":
             assert self.scene is not None
 
             sceneGraph = self.scene.GetSceneGraph()
+            assert self.particleInstance is not None
             sceneGraph.AttachLeafNode(sceneGraph.GetRootNode(), self.particleInstance)
             self.scene.RefreshSceneGraph(0)
 
@@ -408,6 +409,8 @@ if __name__ == "__main__":
             if numParticles > 0:
                 positionRange = self.particleBuffers.getVertexBufferRange(pyd.VertexAttribute.Position)
                 texcoordRange = self.particleBuffers.getVertexBufferRange(pyd.VertexAttribute.TexCoord1)
+                assert self.particleBuffers.indexBuffer is not None
+                assert self.particleBuffers.vertexBuffer is not None
                 commandList.writeBuffer(self.particleBuffers.indexBuffer, struct.pack(f"<{len(indices)}I", *indices))
                 commandList.writeBuffer(self.particleBuffers.vertexBuffer, struct.pack(f"<{len(positions)}f", *positions), positionRange.byteOffset)
                 commandList.writeBuffer(self.particleBuffers.vertexBuffer, struct.pack(f"<{len(texcoords)}f", *texcoords), texcoordRange.byteOffset)
@@ -479,18 +482,18 @@ if __name__ == "__main__":
             assert self.shaderFactory is not None
             return self.shaderFactory
 
-        def Animate(self: "RayTracedParticles", fElapsedTimeSeconds: float) -> None:
-            self.camera.Animate(fElapsedTimeSeconds)
+        def Animate(self: "RayTracedParticles", elapsedTimeSeconds: float) -> None:
+            self.camera.Animate(elapsedTimeSeconds)
 
             if self.IsSceneLoaded() and self.ui.enableAnimations:
-                self.wallclockTime += fElapsedTimeSeconds
+                self.wallclockTime += elapsedTimeSeconds
 
                 # Animate the live particles, also find the index of the first empty particle
                 # slot for spawning later.
                 firstEmptyParticle = -1
                 for i, particle in enumerate(self.particles):
                     if particle.active:
-                        particle.Animate(fElapsedTimeSeconds)
+                        particle.Animate(elapsedTimeSeconds)
                     if not particle.active and firstEmptyParticle < 0:
                         firstEmptyParticle = i
 
@@ -630,6 +633,7 @@ if __name__ == "__main__":
 
                 particleIndex += 1
 
+            assert self.topLevelAS is not None
             commandList.buildTopLevelAccelStruct(self.topLevelAS, instances)
 
         def BackBufferResizing(self: "RayTracedParticles") -> None:
@@ -661,6 +665,11 @@ if __name__ == "__main__":
                 desc.initialState = pyd.ResourceStates.UnorderedAccess
                 desc.debugName = "ColorBuffer"
                 self.colorBuffer = self.GetDevice().createTexture(desc)
+
+                assert self.constantBuffer is not None
+                assert self.topLevelAS is not None
+                assert self.particleInfoBuffer is not None
+                assert self.bindingLayout is not None
 
                 bindingSetDesc = pyd.BindingSetDesc()
                 bindingSetDesc.bindings = [
@@ -697,12 +706,17 @@ if __name__ == "__main__":
             environmentMapTextureIndex = self.environmentMap.bindlessDescriptorIndex if self.environmentMap is not None else -1
             constants = self.view.FillPlanarViewConstants() + struct.pack(
                 "<f I I I i",
-                verticalFovRadians / float(windowViewport.height()),
+                verticalFovRadians / windowViewport.height(),
                 1 if self.ui.reorientParticlesInPrimaryRays else 0,
                 1 if self.ui.reorientParticlesInSecondaryRays else 0,
                 self.ui.orientationMode,
                 environmentMapTextureIndex,
             )
+
+            assert self.constantBuffer is not None
+            assert self.bindingSet is not None
+            assert self.descriptorTableManager is not None
+
             self.commandList.writeBuffer(self.constantBuffer, constants)
 
             state = pyd.ComputeState()
