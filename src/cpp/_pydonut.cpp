@@ -15,6 +15,8 @@
 #include <donut/app/DeviceManager.h>
 #include <donut/app/ApplicationBase.h>
 #include <donut/app/Camera.h>
+#include <donut/app/imgui_renderer.h>
+#include <imgui.h>
 #include <donut/core/log.h>
 #include <donut/core/vfs/VFS.h>
 #include <donut/core/math/math.h>
@@ -204,6 +206,26 @@ public:
         PYBIND11_OVERRIDE(bool, ApplicationBase, JoystickAxisUpdate, axis, value);
     }
 };
+
+// Trampoline so Python subclasses of ImGui_Renderer can implement its one pure virtual,
+// buildUI() (see rt_particles.py's UserInterface). Everything else (KeyboardUpdate, Render,
+// Animate, ...) is already implemented by ImGui_Renderer itself and isn't overridden by any
+// sample, so unlike PyApplicationBase above, no other virtuals need PYBIND11_OVERRIDE hooks.
+class PyImGuiRenderer : public donut::app::ImGui_Renderer {
+public:
+    using ImGui_Renderer::ImGui_Renderer;
+
+    void buildUI() override {
+        PYBIND11_OVERRIDE_PURE(void, ImGui_Renderer, buildUI);
+    }
+};
+
+// Empty tag type so the raw ImGui:: functions below can be grouped as static methods under
+// a "pyd.ImGui" class-as-namespace, matching this module's existing py::class_<Log>(m, "log")
+// convention -- and so their generic names (Text, Begin, Combo, ...) don't collide with
+// anything at the top level of the pydonut module. Only the subset rt_particles.py's
+// UserInterface actually calls is bound.
+struct ImGuiNS {};
 
 // PassthroughDrawStrategy::SetData() only stores a raw pointer to the DrawItem it's given --
 // it doesn't own it. This wrapper gives the strategy its own DrawItem plus shared_ptr
@@ -657,7 +679,11 @@ PYBIND11_MODULE(_pydonut, m) {
         .value("EnhancedBarriers", nvrhi::Feature::EnhancedBarriers)
         .finalize();
 
-    pybind11::native_enum<nvrhi::ResourceStates>(m, "ResourceStates", "enum.Enum")
+    // enum.IntFlag, not enum.Enum -- ResourceStates is a real C++ bitmask (see nvrhi.h's
+    // operator| overloads), and some resources need combined states, e.g. a buffer that's both
+    // read by shaders and used to build an accel struct needs
+    // ShaderResource | AccelStructBuildInput (see rt_particles.py).
+    pybind11::native_enum<nvrhi::ResourceStates>(m, "ResourceStates", "enum.IntFlag")
         .value("Unknown", nvrhi::ResourceStates::Unknown)
         .value("Common", nvrhi::ResourceStates::Common)
         .value("ConstantBuffer", nvrhi::ResourceStates::ConstantBuffer)
@@ -1038,6 +1064,7 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_static("Texture_UAV", &nvrhi::BindingLayoutItem::Texture_UAV, py::arg("slot"))
         .def_static("Texture_SRV", &nvrhi::BindingLayoutItem::Texture_SRV, py::arg("slot"))
         .def_static("RawBuffer_SRV", &nvrhi::BindingLayoutItem::RawBuffer_SRV, py::arg("slot"))
+        .def_static("StructuredBuffer_SRV", &nvrhi::BindingLayoutItem::StructuredBuffer_SRV, py::arg("slot"))
         .def_static("TypedBuffer_SRV", &nvrhi::BindingLayoutItem::TypedBuffer_SRV, py::arg("slot"))
         .def_static("TypedBuffer_UAV", &nvrhi::BindingLayoutItem::TypedBuffer_UAV, py::arg("slot"))
         .def_static("ConstantBuffer", &nvrhi::BindingLayoutItem::ConstantBuffer, py::arg("slot"))
@@ -1088,6 +1115,12 @@ PYBIND11_MODULE(_pydonut, m) {
         }, py::arg("slot"), py::arg("buffer"), py::arg("range"))
         .def_static("StructuredBuffer_SRV", [](uint32_t slot, nvrhi::IBuffer* buffer) {
             return nvrhi::BindingSetItem::StructuredBuffer_SRV(slot, buffer);
+        }, py::arg("slot"), py::arg("buffer"))
+        // Registers a ByteAddressBuffer SRV in the bindless descriptor table (see
+        // DescriptorTableManager.CreateDescriptorHandle) -- rt_particles.py uses this for its
+        // dynamic particle index/vertex buffers.
+        .def_static("RawBuffer_SRV", [](uint32_t slot, nvrhi::IBuffer* buffer) {
+            return nvrhi::BindingSetItem::RawBuffer_SRV(slot, buffer);
         }, py::arg("slot"), py::arg("buffer"))
         .def_static("TypedBuffer_SRV", [](uint32_t slot, nvrhi::IBuffer* buffer) {
             return nvrhi::BindingSetItem::TypedBuffer_SRV(slot, buffer);
@@ -1219,7 +1252,16 @@ PYBIND11_MODULE(_pydonut, m) {
         // existing convention (see PlanarView.SetMatricesFromCamera).
         .def("setTransformFromNode", [](nvrhi::rt::InstanceDesc &self, const donut::engine::SceneGraphNode &node) {
             donut::math::affineToColumnMajor(node.GetLocalToWorldTransformFloat(), self.transform);
-        }, py::arg("node"));
+        }, py::arg("node"))
+        // Fills the row-major instance transform as scale-then-translate, for instances with
+        // no scene graph node of their own (e.g. rt_particles.py's one intersection-BLAS
+        // instance per particle, scaled to its radius and translated to its position).
+        .def("setTransformScaleTranslation", [](nvrhi::rt::InstanceDesc &self,
+                float sx, float sy, float sz, float tx, float ty, float tz) {
+            const donut::math::affine3 transform = donut::math::scaling(donut::math::float3(sx, sy, sz))
+                * donut::math::translation(donut::math::float3(tx, ty, tz));
+            donut::math::affineToColumnMajor(transform, self.transform);
+        }, py::arg("sx"), py::arg("sy"), py::arg("sz"), py::arg("tx"), py::arg("ty"), py::arg("tz"));
 
     py::class_<nvrhi::rt::PipelineShaderDesc>(m, "PipelineShaderDesc")
         .def(py::init<>())
@@ -1635,6 +1677,14 @@ PYBIND11_MODULE(_pydonut, m) {
         return self.Load(sceneFileName);
     }, py::arg("sceneFileName"));
     scene.def("FinishedLoading", &donut::engine::Scene::FinishedLoading, py::arg("frameIndex"));
+    // Distinct from SceneGraph.Refresh(frameIndex) (bound below): this also captures the scene
+    // graph's pending structure/transform-change flags onto the Scene itself, which
+    // Scene.Refresh()'s buffer rebuild (below) depends on to notice a newly-attached mesh
+    // instance and rebuild GPU buffers for it -- calling SceneGraph.Refresh() directly would
+    // skip that and silently leave the new instance's data out of the GPU buffers. Needed right
+    // after attaching a hand-built mesh instance to the graph, before the first Scene.Refresh()
+    // (see rt_particles.py's procedural particle mesh).
+    scene.def("RefreshSceneGraph", &donut::engine::Scene::RefreshSceneGraph, py::arg("frameIndex"));
     // Uploads any per-frame-dynamic scene GPU buffer changes (e.g. a mesh whose vertex/index
     // data or material was updated this frame) -- distinct from RefreshSceneGraph/Refresh(0),
     // which is only for static scene-graph-transform bookkeeping. Needed by scenes with
@@ -1739,9 +1789,21 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_readwrite("indexBufferDescriptor", &donut::engine::BufferGroup::indexBufferDescriptor)
         .def_readwrite("vertexBufferDescriptor", &donut::engine::BufferGroup::vertexBufferDescriptor);
 
+    // Only the domains this module's samples actually set (rt_particles.py's procedural
+    // particle material) plus Opaque (the default) -- matching the "only bind what's needed"
+    // convention used throughout.
+    pybind11::native_enum<donut::engine::MaterialDomain>(m, "MaterialDomain", "enum.Enum")
+        .value("Opaque", donut::engine::MaterialDomain::Opaque)
+        .value("AlphaBlended", donut::engine::MaterialDomain::AlphaBlended)
+        .finalize();
+
     py::class_<donut::engine::Material, std::shared_ptr<donut::engine::Material>>(m, "Material")
         .def(py::init<>())
         .def_readwrite("name", &donut::engine::Material::name)
+        .def_readwrite("domain", &donut::engine::Material::domain)
+        // Set by the app to make Scene.Refresh()/FinishedLoading() re-upload the material's
+        // constant buffer -- e.g. after swapping baseOrDiffuseTexture (see rt_particles.py).
+        .def_readwrite("dirty", &donut::engine::Material::dirty)
         .def_readwrite("useSpecularGlossModel", &donut::engine::Material::useSpecularGlossModel)
         .def_readwrite("enableBaseOrDiffuseTexture", &donut::engine::Material::enableBaseOrDiffuseTexture)
         .def_readwrite("baseOrDiffuseTexture", &donut::engine::Material::baseOrDiffuseTexture)
@@ -2087,7 +2149,17 @@ PYBIND11_MODULE(_pydonut, m) {
     // (dm::affine3/float4x4) aren't exposed to Python -- SetMatricesFromCamera consumes them
     // internally instead.
     py::class_<donut::app::BaseCamera>(m, "BaseCamera")
-        .def("SetMoveSpeed", &donut::app::BaseCamera::SetMoveSpeed, py::arg("value"));
+        .def("SetMoveSpeed", &donut::app::BaseCamera::SetMoveSpeed, py::arg("value"))
+        // (x, y, z) -- math types aren't exposed to Python. Needed for camera-facing particle
+        // billboard orientation (see rt_particles.py).
+        .def("GetDir", [](const donut::app::BaseCamera &self) {
+            const donut::math::float3 &d = self.GetDir();
+            return py::make_tuple(d.x, d.y, d.z);
+        })
+        .def("GetUp", [](const donut::app::BaseCamera &self) {
+            const donut::math::float3 &u = self.GetUp();
+            return py::make_tuple(u.x, u.y, u.z);
+        });
 
     py::class_<donut::app::FirstPersonCamera, donut::app::BaseCamera> firstPersonCamera(m, "FirstPersonCamera");
     firstPersonCamera.def(py::init<>());
@@ -2257,6 +2329,64 @@ PYBIND11_MODULE(_pydonut, m) {
     applicationBase.def_property_readonly("m_IsAsyncLoad", [](donut::app::ApplicationBase &self) {
         return static_cast<PyApplicationBase&>(self).GetIsAsyncLoad();
     });
+
+    py::class_<donut::app::ImGui_Renderer, donut::app::IRenderPass, PyImGuiRenderer> imguiRenderer(m, "ImGui_Renderer");
+    imguiRenderer.def(py::init<donut::app::DeviceManager*>(), py::arg("deviceManager"));
+    imguiRenderer.def("Init", [](donut::app::ImGui_Renderer &self, std::shared_ptr<donut::engine::ShaderFactory> shaderFactory) {
+        return self.Init(shaderFactory);
+    }, py::arg("shaderFactory"));
+
+    // Only the ImGui:: entry points rt_particles.py's UserInterface.buildUI() actually calls.
+    // Out-params (bool*, float*, int*) become (changed, newValue...) return tuples -- Python
+    // has no pointers, so the caller re-assigns its own state from the tuple, e.g.
+    // changed, ui.enableAnimations = pyd.ImGui.Checkbox("...", ui.enableAnimations).
+    py::class_<ImGuiNS>(m, "ImGui")
+        // Disables ImGui's automatic imgui.ini window-layout persistence, which would
+        // otherwise write that file into the process's working directory on exit (see
+        // rt_particles.py's UserInterface, matching the C++ original's
+        // ImGui::GetIO().IniFilename = nullptr).
+        .def_static("DisableIniFile", []() { ImGui::GetIO().IniFilename = nullptr; })
+        .def_static("SetNextWindowPos", [](float x, float y, int cond) {
+            ImGui::SetNextWindowPos(ImVec2(x, y), cond);
+        }, py::arg("x"), py::arg("y"), py::arg("cond") = 0)
+        // p_open is always null in this codebase's usage (no closable windows).
+        .def_static("Begin", [](const std::string &name, int flags) {
+            return ImGui::Begin(name.c_str(), nullptr, flags);
+        }, py::arg("name"), py::arg("flags") = 0)
+        .def_static("End", &ImGui::End)
+        .def_static("Checkbox", [](const std::string &label, bool value) {
+            bool changed = ImGui::Checkbox(label.c_str(), &value);
+            return py::make_tuple(changed, value);
+        }, py::arg("label"), py::arg("value"))
+        .def_static("Separator", &ImGui::Separator)
+        // TextUnformatted, not Text -- Text() parses its argument as a printf format string,
+        // which would let arbitrary Python string content control formatting.
+        .def_static("Text", [](const std::string &text) {
+            ImGui::TextUnformatted(text.c_str());
+        }, py::arg("text"))
+        .def_static("Indent", []() { ImGui::Indent(); })
+        .def_static("Unindent", []() { ImGui::Unindent(); })
+        // items are joined into ImGui's own "item1\0item2\0" combo format internally.
+        .def_static("Combo", [](const std::string &label, int currentItem, const std::vector<std::string> &items) {
+            std::string joined;
+            for (const auto &item : items) { joined += item; joined += '\0'; }
+            bool changed = ImGui::Combo(label.c_str(), &currentItem, joined.c_str());
+            return py::make_tuple(changed, currentItem);
+        }, py::arg("label"), py::arg("currentItem"), py::arg("items"))
+        .def_static("PushItemWidth", &ImGui::PushItemWidth, py::arg("width"))
+        .def_static("PopItemWidth", []() { ImGui::PopItemWidth(); })
+        .def_static("BeginCombo", [](const std::string &label, const std::string &previewValue) {
+            return ImGui::BeginCombo(label.c_str(), previewValue.c_str());
+        }, py::arg("label"), py::arg("previewValue"))
+        .def_static("Selectable", [](const std::string &label, bool selected) {
+            return ImGui::Selectable(label.c_str(), selected);
+        }, py::arg("label"), py::arg("selected") = false)
+        .def_static("EndCombo", []() { ImGui::EndCombo(); })
+        .def_static("DragFloat3", [](const std::string &label, float x, float y, float z, float speed) {
+            float v[3] = { x, y, z };
+            bool changed = ImGui::DragFloat3(label.c_str(), v, speed);
+            return py::make_tuple(changed, v[0], v[1], v[2]);
+        }, py::arg("label"), py::arg("x"), py::arg("y"), py::arg("z"), py::arg("speed") = 1.0f);
 
     py::class_<donut::app::AdapterInfo>(m, "AdapterInfo")
         .def(py::init<>())

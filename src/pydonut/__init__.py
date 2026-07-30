@@ -15,6 +15,7 @@ from pydonut._pydonut import TextureDimension
 from pydonut._pydonut import VariableShadingRate
 from pydonut._pydonut import ShadingRateCombiner
 from pydonut._pydonut import GeometryFlags
+from pydonut._pydonut import AccelStructBuildFlags
 from pydonut._pydonut import InstanceFlags
 from pydonut._pydonut import ShaderSpecialization
 from pydonut._pydonut import Color
@@ -45,6 +46,8 @@ from pydonut._pydonut import BindingSetItem
 from pydonut._pydonut import BindingSetDesc
 from pydonut._pydonut import BindlessLayoutDesc
 from pydonut._pydonut import GeometryTriangles
+from pydonut._pydonut import GeometryAABB
+from pydonut._pydonut import GeometryAABBs
 from pydonut._pydonut import GeometryDesc
 from pydonut._pydonut import AccelStructDesc
 from pydonut._pydonut import InstanceDesc
@@ -78,11 +81,13 @@ from pydonut._pydonut import ShaderFactory
 from pydonut._pydonut import BindingCache
 from pydonut._pydonut import BlitParameters
 from pydonut._pydonut import CommonRenderPasses
+from pydonut._pydonut import DescriptorHandle
 from pydonut._pydonut import DescriptorTableManager
 from pydonut._pydonut import TextureCache
 from pydonut._pydonut import LoadedTexture
 from pydonut._pydonut import VertexAttribute
 from pydonut._pydonut import BufferGroup
+from pydonut._pydonut import MaterialDomain
 from pydonut._pydonut import Material
 from pydonut._pydonut import CreateMaterialConstantBuffer
 from pydonut._pydonut import MeshGeometry
@@ -95,7 +100,9 @@ from pydonut._pydonut import SceneGraphNode
 from pydonut._pydonut import SceneGraph
 from pydonut._pydonut import Scene
 from pydonut._pydonut import SceneLoaded
+from pydonut._pydonut import BaseCamera
 from pydonut._pydonut import FirstPersonCamera
+from pydonut._pydonut import ThirdPersonCamera
 from pydonut._pydonut import PlanarView
 from pydonut._pydonut import CubemapView
 from pydonut._pydonut import IDrawStrategy
@@ -122,6 +129,8 @@ from pydonut._pydonut import RenderCompositeView
 from pydonut._pydonut import AdapterInfo
 from pydonut._pydonut import IRenderPass
 from pydonut._pydonut import ApplicationBase
+from pydonut._pydonut import ImGui_Renderer
+from pydonut._pydonut import ImGui
 from pydonut._pydonut import PipelineCallbacks
 from pydonut._pydonut import DeviceManager
 from pydonut._pydonut import DeviceCreationParameters
@@ -162,6 +171,7 @@ __all__ = (
     'VariableShadingRate',
     'ShadingRateCombiner',
     'GeometryFlags',
+    'AccelStructBuildFlags',
     'InstanceFlags',
     'ShaderSpecialization',
     'Color',
@@ -192,6 +202,8 @@ __all__ = (
     'BindingSetDesc',
     'BindlessLayoutDesc',
     'GeometryTriangles',
+    'GeometryAABB',
+    'GeometryAABBs',
     'GeometryDesc',
     'AccelStructDesc',
     'InstanceDesc',
@@ -225,11 +237,13 @@ __all__ = (
     'BindingCache',
     'BlitParameters',
     'CommonRenderPasses',
+    'DescriptorHandle',
     'DescriptorTableManager',
     'TextureCache',
     'LoadedTexture',
     'VertexAttribute',
     'BufferGroup',
+    'MaterialDomain',
     'Material',
     'CreateMaterialConstantBuffer',
     'MeshGeometry',
@@ -242,7 +256,9 @@ __all__ = (
     'SceneGraph',
     'Scene',
     'SceneLoaded',
+    'BaseCamera',
     'FirstPersonCamera',
+    'ThirdPersonCamera',
     'PlanarView',
     'CubemapView',
     'IDrawStrategy',
@@ -269,6 +285,8 @@ __all__ = (
     'AdapterInfo',
     'IRenderPass',
     'ApplicationBase',
+    'ImGui_Renderer',
+    'ImGui',
     'PipelineCallbacks',
     'DeviceManager',
     'DeviceCreationParameters',
