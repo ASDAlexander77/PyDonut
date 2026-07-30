@@ -99,7 +99,7 @@ uv run main.py
 
 Useful flags:
 
-- `--debug` / `-d` — enables the graphics debug runtime and NVRHI validation layer.
+- `-debug` — enables the graphics debug runtime and NVRHI validation layer.
 - Pass a backend flag to select the graphics API (parsed by `pyd.GetGraphicsAPIFromCommandLine`): `-vk` / `-vulkan` for Vulkan, or `-d3d12` / `-dx12` for D3D12 (Windows only). E.g. `uv run main.py -vk` or `uv run main.py -d3d12`. With no flag, it defaults to D3D12 on Windows and Vulkan on Linux.
 
 | Windows (D3D12) | Linux (Vulkan) |

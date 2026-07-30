@@ -1307,12 +1307,12 @@ PYBIND11_MODULE(_pydonut, m) {
         .def(py::init<>());
     py::class_<donut::vfs::RootFileSystem, donut::vfs::IFileSystem, std::shared_ptr<donut::vfs::RootFileSystem>>(m, "RootFileSystem")
         .def(py::init<>())
-        .def("mount", [](donut::vfs::RootFileSystem &self, const std::filesystem::path &path, const std::filesystem::path &nativePath) {
+        .def("mount", [](donut::vfs::RootFileSystem &self, std::string path, std::string nativePath) {
             self.mount(path, nativePath);
         }, py::arg("path"), py::arg("nativePath"));
 
     py::class_<donut::engine::ShaderFactory, std::shared_ptr<donut::engine::ShaderFactory>> shaderFactory(m, "ShaderFactory");
-    shaderFactory.def(py::init([](nvrhi::IDevice* device, std::shared_ptr<donut::vfs::IFileSystem> fs, const std::filesystem::path& basePath) {
+    shaderFactory.def(py::init([](nvrhi::IDevice* device, std::shared_ptr<donut::vfs::IFileSystem> fs, std::string basePath) {
         return new donut::engine::ShaderFactory(nvrhi::DeviceHandle(device), fs, basePath);
     }), py::arg("device"), py::arg("fs"), py::arg("basePath"));
     shaderFactory.def("CreateShader", [](donut::engine::ShaderFactory &self, const std::string &fileName, const std::string &entryName, nvrhi::ShaderType shaderType) {
@@ -1359,7 +1359,7 @@ PYBIND11_MODULE(_pydonut, m) {
             std::shared_ptr<donut::engine::TextureCache> textureCache, std::shared_ptr<donut::engine::DescriptorTableManager> descriptorTable) {
         return new donut::engine::Scene(device, shaderFactory, fs, textureCache, descriptorTable, nullptr);
     }), py::arg("device"), py::arg("shaderFactory"), py::arg("fs"), py::arg("textureCache"), py::arg("descriptorTable"));
-    scene.def("Load", [](donut::engine::Scene &self, const std::filesystem::path &sceneFileName) {
+    scene.def("Load", [](donut::engine::Scene &self, std::string sceneFileName) {
         return self.Load(sceneFileName);
     }, py::arg("sceneFileName"));
     scene.def("FinishedLoading", &donut::engine::Scene::FinishedLoading, py::arg("frameIndex"));
@@ -1397,7 +1397,7 @@ PYBIND11_MODULE(_pydonut, m) {
         textureCache.LoadingFinished();
     }, py::arg("textureCache"), py::arg("commonPasses"));
 
-    textureCache.def("LoadTextureFromFile", [](donut::engine::TextureCache &self, const std::filesystem::path &path, bool sRGB,
+    textureCache.def("LoadTextureFromFile", [](donut::engine::TextureCache &self, std::string path, bool sRGB,
             donut::engine::CommonRenderPasses* passes, nvrhi::ICommandList* commandList) {
         return self.LoadTextureFromFile(path, sRGB, passes, commandList);
     }, py::arg("path"), py::arg("sRGB"), py::arg("passes") = nullptr, py::arg("commandList"));
