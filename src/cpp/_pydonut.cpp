@@ -2074,6 +2074,7 @@ PYBIND11_MODULE(_pydonut, m) {
     deviceCreationParameters.def_readwrite("enableRayTracingExtensions", &donut::app::DeviceCreationParameters::enableRayTracingExtensions);
     deviceCreationParameters.def_readwrite("enableComputeQueue", &donut::app::DeviceCreationParameters::enableComputeQueue);
     deviceCreationParameters.def_readwrite("enableCopyQueue", &donut::app::DeviceCreationParameters::enableCopyQueue);
+    deviceCreationParameters.def_readwrite("enableJoystickInput", &donut::app::DeviceCreationParameters::enableJoystickInput);
     deviceCreationParameters.def_readwrite("adapterIndex", &donut::app::DeviceCreationParameters::adapterIndex);
     deviceCreationParameters.def_readwrite("supportExplicitDisplayScaling", &donut::app::DeviceCreationParameters::supportExplicitDisplayScaling);
     deviceCreationParameters.def_readwrite("resizeWindowWithDisplayScale", &donut::app::DeviceCreationParameters::resizeWindowWithDisplayScale);

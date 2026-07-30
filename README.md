@@ -80,6 +80,24 @@ git -C extern/donut apply ../../patches/DeviceManager_VK-wsl-dzn-fixes.patch
 The patch is a no-op on native drivers (Windows, or Linux with a real Vulkan ICD) — those
 already support all three features — so it's safe to apply on every platform, not just WSL.
 
+### Windows: slow example startup (~40s) from virtual gamepad drivers
+
+Donut's `DeviceManager` unconditionally registers GLFW's joystick callback and enumerates
+connected joysticks on startup. On Windows, the first call into GLFW's joystick API triggers a
+synchronous DirectInput device enumeration, which can stall for tens of seconds if a virtual
+HID/gamepad driver is installed and responds slowly — observed with the Oculus/Meta runtime's
+"Virtual Gamepad Emulation Bus" and Razer Synapse's virtual controller devices. None of the
+PyDonut examples read joystick input, so this is disabled by default via a small patch that adds
+an opt-in `enableJoystickInput` flag to `DeviceCreationParameters`:
+
+```sh
+git -C extern/donut apply ../../patches/DeviceManager-skip-joystick-init-by-default.patch
+```
+
+Apps that do want joystick input can set `deviceParams.enableJoystickInput = True` before calling
+`CreateWindowDeviceAndSwapChain`. Like the `dzn` patch above, this is safe to apply on every
+platform — it only changes a default from "always on" to "opt-in".
+
 ### 4. Enabling `pyd.CompileShader` (optional, both platforms)
 
 Install DXC and set `SHADERMAKE_DXC_PATH` to point at it before running `uv sync`, e.g.:

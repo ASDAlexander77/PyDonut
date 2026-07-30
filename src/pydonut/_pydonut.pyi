@@ -1034,6 +1034,7 @@ class DeviceCreationParameters():
     enableRayTracingExtensions: bool
     enableComputeQueue: bool
     enableCopyQueue: bool
+    enableJoystickInput: bool
     adapterIndex: int
     supportExplicitDisplayScaling: bool
     resizeWindowWithDisplayScale: bool
