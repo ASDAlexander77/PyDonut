@@ -79,7 +79,7 @@ if __name__ == "__main__":
         return (a[0] / length, a[1] / length, a[2] / length) if length > 0.0 else a
 
     class ParticleEntity:
-        def __init__(self: "ParticleEntity") -> None:
+        def __init__(self: ParticleEntity) -> None:
             self.active = False
             self.position: tuple[float, float, float] = (0.0, 0.0, 0.0)
             self.velocity: tuple[float, float, float] = (0.0, 0.0, 0.0)
@@ -89,7 +89,7 @@ if __name__ == "__main__":
             self.opacity = 1.0
             self.rotation = 0.0
 
-        def Emit(self: "ParticleEntity", emitterPosition: tuple[float, float, float]) -> None:
+        def Emit(self: ParticleEntity, emitterPosition: tuple[float, float, float]) -> None:
             self.active = True
             self.position = emitterPosition
             vx, vy, vz = RandomFloat3()
@@ -101,7 +101,7 @@ if __name__ == "__main__":
             self.color = (cx * 0.5 + 0.1, cy * 0.5 + 0.1, cz * 0.5 + 0.1)
             self.rotation = RandomFloat() * 6.28
 
-        def Animate(self: "ParticleEntity", time: float) -> None:
+        def Animate(self: ParticleEntity, time: float) -> None:
             lifeTime = 2.0
             px, py, pz = self.position
             vx, vy, vz = self.velocity
@@ -114,7 +114,7 @@ if __name__ == "__main__":
                 self.active = False
 
     class UIData:
-        def __init__(self: "UIData") -> None:
+        def __init__(self: UIData) -> None:
             self.updatePipeline = True
             self.enableAnimations = True
             self.alwaysUpdateOrientation = True
@@ -126,7 +126,7 @@ if __name__ == "__main__":
             self.emitterPosition: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     class RayTracedParticles(pyd.ApplicationBase):
-        def __init__(self: "RayTracedParticles", deviceManager: pyd.DeviceManager, ui: UIData) -> None:
+        def __init__(self: RayTracedParticles, deviceManager: pyd.DeviceManager, ui: UIData) -> None:
             super().__init__(deviceManager)
             self.ui = ui
 
@@ -168,7 +168,7 @@ if __name__ == "__main__":
             self.wallclockTime = 0.0
             self.lastEmitTime = 0.0
 
-        def Init(self: "RayTracedParticles") -> bool:
+        def Init(self: RayTracedParticles) -> bool:
             device = self.GetDevice()
             api = device.getGraphicsAPI()
 
@@ -276,7 +276,7 @@ if __name__ == "__main__":
 
         # Creates the buffers and initializes engine structures to attach a procedural particle
         # mesh to the scene.
-        def CreateParticleMesh(self: "RayTracedParticles") -> None:
+        def CreateParticleMesh(self: RayTracedParticles) -> None:
             assert self.descriptorTableManager is not None
             device = self.GetDevice()
 
@@ -338,7 +338,7 @@ if __name__ == "__main__":
             self.particleInfoBuffer = device.createBuffer(bufferDesc)
 
         # Updates particle geometry -- called before rendering every frame.
-        def BuildParticleGeometry(self: "RayTracedParticles", commandList: pyd.CommandList) -> None:
+        def BuildParticleGeometry(self: RayTracedParticles, commandList: pyd.CommandList) -> None:
             assert self.particleBuffers is not None
             assert self.particleGeometry is not None
             assert self.particleMesh is not None
@@ -421,7 +421,7 @@ if __name__ == "__main__":
             assert self.particleMesh.accelStruct is not None
             pyd.BuildBottomLevelAccelStruct(commandList, self.particleMesh.accelStruct, blasDesc)
 
-        def BuildParticleIntersectionBLAS(self: "RayTracedParticles", commandList: pyd.CommandList) -> None:
+        def BuildParticleIntersectionBLAS(self: RayTracedParticles, commandList: pyd.CommandList) -> None:
             # Only need to create and build the BLAS once, it's immutable.
             if self.particleIntersectionBLAS is not None:
                 return
@@ -448,7 +448,7 @@ if __name__ == "__main__":
             self.particleIntersectionBLAS = self.GetDevice().createAccelStruct(blasDesc)
             pyd.BuildBottomLevelAccelStruct(commandList, self.particleIntersectionBLAS, blasDesc)
 
-        def LoadScene(self: "RayTracedParticles", fs: pyd.IFileSystem, sceneFileName: Path) -> bool:
+        def LoadScene(self: RayTracedParticles, fs: pyd.IFileSystem, sceneFileName: Path) -> bool:
             assert self.shaderFactory is not None
             assert self.textureCache is not None
             assert self.descriptorTableManager is not None
@@ -459,30 +459,30 @@ if __name__ == "__main__":
                 return True
             return False
 
-        def KeyboardUpdate(self: "RayTracedParticles", key: int, scancode: int, action: int, mods: int) -> bool:
+        def KeyboardUpdate(self: RayTracedParticles, key: int, scancode: int, action: int, mods: int) -> bool:
             self.camera.KeyboardUpdate(key, scancode, action, mods)
             if key == 32 and action == 1:  # GLFW_KEY_SPACE, GLFW_PRESS
                 self.ui.enableAnimations = not self.ui.enableAnimations
                 return True
             return True
 
-        def MousePosUpdate(self: "RayTracedParticles", xpos: float, ypos: float) -> bool:
+        def MousePosUpdate(self: RayTracedParticles, xpos: float, ypos: float) -> bool:
             self.camera.MousePosUpdate(xpos, ypos)
             return True
 
-        def MouseButtonUpdate(self: "RayTracedParticles", button: int, action: int, mods: int) -> bool:
+        def MouseButtonUpdate(self: RayTracedParticles, button: int, action: int, mods: int) -> bool:
             self.camera.MouseButtonUpdate(button, action, mods)
             return True
 
-        def MouseScrollUpdate(self: "RayTracedParticles", xoffset: float, yoffset: float) -> bool:
+        def MouseScrollUpdate(self: RayTracedParticles, xoffset: float, yoffset: float) -> bool:
             self.camera.MouseScrollUpdate(xoffset, yoffset)
             return True
 
-        def GetShaderFactory(self: "RayTracedParticles") -> pyd.ShaderFactory:
+        def GetShaderFactory(self: RayTracedParticles) -> pyd.ShaderFactory:
             assert self.shaderFactory is not None
             return self.shaderFactory
 
-        def Animate(self: "RayTracedParticles", elapsedTimeSeconds: float) -> None:
+        def Animate(self: RayTracedParticles, elapsedTimeSeconds: float) -> None:
             self.camera.Animate(elapsedTimeSeconds)
 
             if self.IsSceneLoaded() and self.ui.enableAnimations:
@@ -507,7 +507,7 @@ if __name__ == "__main__":
 
             self.GetDeviceManager().SetInformativeWindowTitle(WINDOW_TITLE)
 
-        def CreateComputePipeline(self: "RayTracedParticles", shaderFactory: pyd.ShaderFactory) -> bool:
+        def CreateComputePipeline(self: RayTracedParticles, shaderFactory: pyd.ShaderFactory) -> bool:
             device = self.GetDevice()
             api = device.getGraphicsAPI()
 
@@ -544,7 +544,7 @@ if __name__ == "__main__":
 
             return self.computePipeline is not None
 
-        def GetMeshBlasDesc(self: "RayTracedParticles", mesh: pyd.MeshInfo, blasDesc: pyd.AccelStructDesc) -> None:
+        def GetMeshBlasDesc(self: RayTracedParticles, mesh: pyd.MeshInfo, blasDesc: pyd.AccelStructDesc) -> None:
             assert mesh.buffers is not None
             blasDesc.isTopLevel = False
             blasDesc.debugName = mesh.name
@@ -572,7 +572,7 @@ if __name__ == "__main__":
             blasDesc.bottomLevelGeometries = geometryDescs
             blasDesc.buildFlags = pyd.AccelStructBuildFlags.PreferFastTrace
 
-        def CreateAccelStructs(self: "RayTracedParticles", commandList: pyd.CommandList) -> None:
+        def CreateAccelStructs(self: RayTracedParticles, commandList: pyd.CommandList) -> None:
             assert self.scene is not None
             for mesh in self.scene.GetSceneGraph().GetMeshes():
                 blasDesc = pyd.AccelStructDesc()
@@ -596,7 +596,7 @@ if __name__ == "__main__":
             tlasDesc.topLevelMaxInstances = numSceneInstances + _MAX_PARTICLES
             self.topLevelAS = self.GetDevice().createAccelStruct(tlasDesc)
 
-        def BuildTLAS(self: "RayTracedParticles", commandList: pyd.CommandList, frameIndex: int) -> None:
+        def BuildTLAS(self: RayTracedParticles, commandList: pyd.CommandList, frameIndex: int) -> None:
             assert self.scene is not None
             assert self.particleIntersectionBLAS is not None
             instances: list[pyd.InstanceDesc] = []
@@ -636,12 +636,12 @@ if __name__ == "__main__":
             assert self.topLevelAS is not None
             commandList.buildTopLevelAccelStruct(self.topLevelAS, instances)
 
-        def BackBufferResizing(self: "RayTracedParticles") -> None:
+        def BackBufferResizing(self: RayTracedParticles) -> None:
             self.colorBuffer = None
             assert self.bindingCache is not None
             self.bindingCache.Clear()
 
-        def Render(self: "RayTracedParticles", framebuffer: pyd.Framebuffer) -> None:
+        def Render(self: RayTracedParticles, framebuffer: pyd.Framebuffer) -> None:
             assert self.commandList is not None
             assert self.scene is not None
             assert self.commonPasses is not None
@@ -736,12 +736,12 @@ if __name__ == "__main__":
             self.GetDevice().executeCommandList(self.commandList)
 
     class UserInterface(pyd.ImGui_Renderer):
-        def __init__(self: "UserInterface", deviceManager: pyd.DeviceManager, ui: UIData) -> None:
+        def __init__(self: UserInterface, deviceManager: pyd.DeviceManager, ui: UIData) -> None:
             super().__init__(deviceManager)
             self.ui = ui
             pyd.ImGui.DisableIniFile()
 
-        def buildUI(self: "UserInterface") -> None:
+        def buildUI(self: UserInterface) -> None:
             pyd.ImGui.SetNextWindowPos(10.0, 10.0)
             pyd.ImGui.Begin("Settings", _IMGUI_WINDOW_FLAGS_ALWAYS_AUTO_RESIZE)
 
