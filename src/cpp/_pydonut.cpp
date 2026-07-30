@@ -1151,10 +1151,22 @@ PYBIND11_MODULE(_pydonut, m) {
 
     texture.def("getDesc", [](nvrhi::ITexture &self) { return self.getDesc(); });
 
+    py::class_<nvrhi::CommandListParameters>(m, "CommandListParameters")
+        .def(py::init<>())
+        .def("setEnableImmediateExecution", [](nvrhi::CommandListParameters &self, bool value) -> nvrhi::CommandListParameters& {
+            return self.setEnableImmediateExecution(value);
+        }, py::arg("value"), py::return_value_policy::reference);
+
     device.def("getGraphicsAPI", &nvrhi::IDevice::getGraphicsAPI);
-    device.def("createCommandList", [](nvrhi::IDevice &self) {
-        return DetachToShared(self.createCommandList());
-    });
+    device.def("createCommandList", [](nvrhi::IDevice &self, const nvrhi::CommandListParameters &params) {
+        return DetachToShared(self.createCommandList(params));
+    }, py::arg("params") = nvrhi::CommandListParameters());
+    // Batched, atomic submission of multiple command lists in one call -- used by examples
+    // that record several command lists (e.g. one per thread) and submit them together, as
+    // opposed to executeCommandList's one-at-a-time submission.
+    device.def("executeCommandLists", [](nvrhi::IDevice &self, const std::vector<nvrhi::ICommandList*> &commandLists, nvrhi::CommandQueue executionQueue) {
+        return self.executeCommandLists(commandLists.data(), commandLists.size(), executionQueue);
+    }, py::arg("commandLists"), py::arg("executionQueue") = nvrhi::CommandQueue::Graphics);
     device.def("createGraphicsPipeline", [](nvrhi::IDevice &self, const nvrhi::GraphicsPipelineDesc &desc, const nvrhi::FramebufferInfoEx &framebufferInfo) {
         return DetachToShared(self.createGraphicsPipeline(desc, framebufferInfo));
     }, py::arg("desc"), py::arg("framebufferInfo"));
@@ -1212,8 +1224,13 @@ PYBIND11_MODULE(_pydonut, m) {
     });
     device.def("waitForIdle", &nvrhi::IDevice::waitForIdle);
 
-    commandList.def("open", &nvrhi::ICommandList::open);
-    commandList.def("close", &nvrhi::ICommandList::close);
+    // open/close and the calls below marked with gil_scoped_release are the ones
+    // threaded_rendering.py's worker threads call concurrently while recording independent
+    // per-face command lists; releasing the GIL here is what lets Python's threading actually
+    // run them in parallel instead of just interleaving under the GIL. No other CommandList
+    // methods release the GIL -- this is intentionally scoped to what that example needs.
+    commandList.def("open", &nvrhi::ICommandList::open, py::call_guard<py::gil_scoped_release>());
+    commandList.def("close", &nvrhi::ICommandList::close, py::call_guard<py::gil_scoped_release>());
     commandList.def("setGraphicsState", &nvrhi::ICommandList::setGraphicsState, py::arg("state"));
     commandList.def("draw", &nvrhi::ICommandList::draw, py::arg("args"));
     commandList.def("drawIndexed", &nvrhi::ICommandList::drawIndexed, py::arg("args"));
@@ -1239,10 +1256,32 @@ PYBIND11_MODULE(_pydonut, m) {
     commandList.def("clearTextureFloat", [](nvrhi::ICommandList &self, nvrhi::ITexture* texture, const nvrhi::Color &clearColor) {
         self.clearTextureFloat(texture, nvrhi::AllSubresources, clearColor);
     }, py::arg("texture"), py::arg("clearColor"));
+    // View-scoped overload: clears only the subresources `view` covers (e.g. one face's array
+    // slice of a shared cube texture) instead of every subresource. Needed when several views
+    // share one texture and each must be cleared independently of the others.
+    commandList.def("clearTextureFloat", [](nvrhi::ICommandList &self, nvrhi::ITexture* texture,
+            const nvrhi::Color &clearColor, const donut::engine::PlanarView &view) {
+        self.clearTextureFloat(texture, view.GetSubresources(), clearColor);
+    }, py::arg("texture"), py::arg("clearColor"), py::arg("view"), py::call_guard<py::gil_scoped_release>());
     commandList.def("clearDepthStencilTexture", [](nvrhi::ICommandList &self, nvrhi::ITexture* texture,
             bool clearDepth, float depth, bool clearStencil, uint8_t stencil) {
         self.clearDepthStencilTexture(texture, nvrhi::AllSubresources, clearDepth, depth, clearStencil, stencil);
     }, py::arg("texture"), py::arg("clearDepth"), py::arg("depth"), py::arg("clearStencil"), py::arg("stencil"));
+    commandList.def("clearDepthStencilTexture", [](nvrhi::ICommandList &self, nvrhi::ITexture* texture,
+            bool clearDepth, float depth, bool clearStencil, uint8_t stencil, const donut::engine::PlanarView &view) {
+        self.clearDepthStencilTexture(texture, view.GetSubresources(), clearDepth, depth, clearStencil, stencil);
+    }, py::arg("texture"), py::arg("clearDepth"), py::arg("depth"), py::arg("clearStencil"), py::arg("stencil"), py::arg("view"),
+       py::call_guard<py::gil_scoped_release>());
+    // Manual barrier control: disables nvrhi's automatic per-command-list resource-state
+    // tracking so multiple command lists can be recorded concurrently against one shared
+    // resource (e.g. different array slices of one cube texture) without each one guessing at
+    // stale state left by the others. setResourceStatesForFramebuffer declares the states this
+    // command list's framebuffer writes need; commitBarriers submits the resulting barriers.
+    commandList.def("setEnableAutomaticBarriers", &nvrhi::ICommandList::setEnableAutomaticBarriers,
+        py::arg("enable"), py::call_guard<py::gil_scoped_release>());
+    commandList.def("setResourceStatesForFramebuffer", &nvrhi::ICommandList::setResourceStatesForFramebuffer,
+        py::arg("framebuffer"), py::call_guard<py::gil_scoped_release>());
+    commandList.def("commitBarriers", &nvrhi::ICommandList::commitBarriers, py::call_guard<py::gil_scoped_release>());
 
     m.def("ClearColorAttachment", &nvrhi::utils::ClearColorAttachment,
         py::arg("commandList"), py::arg("framebuffer"), py::arg("attachmentIndex"), py::arg("color"));
@@ -1326,12 +1365,36 @@ PYBIND11_MODULE(_pydonut, m) {
         .def(py::init<nvrhi::IDevice*>(), py::arg("device"))
         .def("Clear", &donut::engine::BindingCache::Clear);
 
+    // Only the fields threaded_rendering.py needs are bound (target framebuffer/viewport,
+    // source texture/array slice) -- targetBox/sourceBox/sourceMip/sourceFormat/sampler/
+    // blendState/blendConstantColor are left at their defaults, matching the existing
+    // convention of leaving unused struct fields unbound (see TemporalAntiAliasingCreateParameters.
+    // historyClampRelax).
+    py::class_<donut::engine::BlitParameters>(m, "BlitParameters")
+        .def(py::init<>())
+        .def_property("targetFramebuffer",
+            [](const donut::engine::BlitParameters &self) -> nvrhi::IFramebuffer* { return self.targetFramebuffer; },
+            [](donut::engine::BlitParameters &self, nvrhi::IFramebuffer* fb) { self.targetFramebuffer = fb; },
+            py::return_value_policy::reference)
+        .def_readwrite("targetViewport", &donut::engine::BlitParameters::targetViewport)
+        .def_property("sourceTexture",
+            [](const donut::engine::BlitParameters &self) -> nvrhi::ITexture* { return self.sourceTexture; },
+            [](donut::engine::BlitParameters &self, nvrhi::ITexture* t) { self.sourceTexture = t; },
+            py::return_value_policy::reference)
+        .def_readwrite("sourceArraySlice", &donut::engine::BlitParameters::sourceArraySlice);
+
     py::class_<donut::engine::CommonRenderPasses, std::shared_ptr<donut::engine::CommonRenderPasses>>(m, "CommonRenderPasses")
         .def(py::init<nvrhi::IDevice*, std::shared_ptr<donut::engine::ShaderFactory>>(), py::arg("device"), py::arg("shaderFactory"))
         .def("BlitTexture", [](donut::engine::CommonRenderPasses &self, nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* targetFramebuffer,
                 nvrhi::ITexture* sourceTexture, donut::engine::BindingCache* bindingCache) {
             self.BlitTexture(commandList, targetFramebuffer, sourceTexture, bindingCache);
         }, py::arg("commandList"), py::arg("targetFramebuffer"), py::arg("sourceTexture"), py::arg("bindingCache") = nullptr)
+        // BlitParameters overload: composites one source array slice into one specific
+        // viewport region of the target framebuffer, rather than the whole thing.
+        .def("BlitTexture", [](donut::engine::CommonRenderPasses &self, nvrhi::ICommandList* commandList,
+                const donut::engine::BlitParameters &params, donut::engine::BindingCache* bindingCache) {
+            self.BlitTexture(commandList, params, bindingCache);
+        }, py::arg("commandList"), py::arg("params"), py::arg("bindingCache") = nullptr)
         .def_property_readonly("m_AnisotropicWrapSampler", [](donut::engine::CommonRenderPasses &self) -> nvrhi::ISampler* {
             return self.m_AnisotropicWrapSampler;
         }, py::return_value_policy::reference_internal);
@@ -1601,8 +1664,13 @@ PYBIND11_MODULE(_pydonut, m) {
         }, py::arg("commandList"), py::arg("view"), py::arg("inputs"))
         .def("ResetBindingCache", &donut::render::DeferredLightingPass::ResetBindingCache);
 
+    // materialBindings/singlePassCubemap/trackLiveness/useInputAssembler stay at their defaults,
+    // matching every current sample's usage; numConstantBufferVersions is bound because
+    // threaded_rendering.py needs to raise it above the default 16 (each of the 6 concurrently-
+    // recorded per-face command lists consumes its own volatile constant buffer version).
     py::class_<donut::render::ForwardShadingPass::CreateParameters>(m, "ForwardShadingPassCreateParameters")
-        .def(py::init<>());
+        .def(py::init<>())
+        .def_readwrite("numConstantBufferVersions", &donut::render::ForwardShadingPass::CreateParameters::numConstantBufferVersions);
 
     py::class_<donut::render::ForwardShadingPass::Context, donut::render::GeometryPassContext>(m, "ForwardShadingPassContext")
         .def(py::init<>());
@@ -1619,7 +1687,10 @@ PYBIND11_MODULE(_pydonut, m) {
             self.PrepareLights(context, commandList, lights,
                 donut::math::float3(topR, topG, topB), donut::math::float3(bottomR, bottomG, bottomB), {});
         }, py::arg("context"), py::arg("commandList"), py::arg("lights"),
-           py::arg("topR"), py::arg("topG"), py::arg("topB"), py::arg("bottomR"), py::arg("bottomG"), py::arg("bottomB"));
+           py::arg("topR"), py::arg("topG"), py::arg("topB"), py::arg("bottomR"), py::arg("bottomG"), py::arg("bottomB"),
+           // See the comment on CommandList.open above -- released for threaded_rendering.py's
+           // concurrent per-face recording.
+           py::call_guard<py::gil_scoped_release>());
 
     py::class_<donut::render::TemporalAntiAliasingParameters>(m, "TemporalAntiAliasingParameters")
         .def(py::init<>())
@@ -1712,7 +1783,11 @@ PYBIND11_MODULE(_pydonut, m) {
         donut::render::RenderCompositeView(commandList, &view, &viewPrev, framebufferFactory, rootNode,
             drawStrategy, pass, passContext, nullptr, materialEvents);
     }, py::arg("commandList"), py::arg("view"), py::arg("viewPrev"), py::arg("framebufferFactory"), py::arg("rootNode"),
-       py::arg("drawStrategy"), py::arg("pass"), py::arg("passContext"), py::arg("materialEvents") = false);
+       py::arg("drawStrategy"), py::arg("pass"), py::arg("passContext"), py::arg("materialEvents") = false,
+       // See the comment on CommandList.open above -- released for threaded_rendering.py's
+       // concurrent per-face recording. Safe: this walks read-only scene-graph/mesh/material
+       // data and issues draws into the caller's own CommandList, touching no Python objects.
+       py::call_guard<py::gil_scoped_release>());
 
     // FirstPersonCamera's matrices (dm::affine3/float4x4) aren't exposed to Python --
     // SetMatricesFromCamera on PlanarView below consumes them internally instead.
@@ -1782,6 +1857,29 @@ PYBIND11_MODULE(_pydonut, m) {
         self.FillPlanarViewConstants(constants);
         return py::bytes(reinterpret_cast<const char*>(&constants), sizeof(constants));
     });
+
+    // CubemapView splits one transform into 6 face view/proj matrices for cube-map/environment
+    // rendering (see threaded_rendering.py). Its faces are a plain PlanarView[6] internally, so
+    // GetFaceView returns the existing PlanarView type -- no new view hierarchy is exposed.
+    py::class_<donut::engine::CubemapView> cubemapView(m, "CubemapView");
+    cubemapView.def(py::init<>());
+    // Fetches the camera's world-to-view transform on the C++ side (consistent with
+    // PlanarView.SetMatricesFromCamera not exposing dm::affine3 to Python either) and forwards
+    // it to CubemapView::SetTransform.
+    cubemapView.def("SetTransformFromCamera", [](donut::engine::CubemapView &self, const donut::app::FirstPersonCamera &camera,
+            float zNear, float cullDistance, bool useReverseInfiniteProjections) {
+        self.SetTransform(camera.GetWorldToViewMatrix(), zNear, cullDistance, useReverseInfiniteProjections);
+    }, py::arg("camera"), py::arg("zNear"), py::arg("cullDistance"), py::arg("useReverseInfiniteProjections") = true);
+    cubemapView.def("SetArrayViewports", &donut::engine::CubemapView::SetArrayViewports,
+        py::arg("resolution"), py::arg("firstArraySlice"));
+    cubemapView.def("UpdateCache", &donut::engine::CubemapView::UpdateCache);
+    // GetChildView(PLANAR, face) always returns a pointer into this CubemapView's own
+    // m_FaceViews[6] array -- reference_internal ties the returned PlanarView's lifetime to
+    // this CubemapView, since it owns the storage.
+    cubemapView.def("GetFaceView", [](donut::engine::CubemapView &self, uint32_t face) -> donut::engine::PlanarView* {
+        const donut::engine::IView* view = self.GetChildView(donut::engine::ViewType::PLANAR, face);
+        return const_cast<donut::engine::PlanarView*>(static_cast<const donut::engine::PlanarView*>(view));
+    }, py::arg("face"), py::return_value_policy::reference_internal);
 
     py::class_<donut::app::IRenderPass, PyIRenderPass> renderPass(m, "IRenderPass");
     renderPass.def(py::init<donut::app::DeviceManager*>(), py::arg("deviceManager"));

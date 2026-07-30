@@ -61,6 +61,7 @@ from pydonut._pydonut import MeshletPipeline
 from pydonut._pydonut import ComputePipeline
 from pydonut._pydonut import RayTracingPipeline
 from pydonut._pydonut import ShaderTable
+from pydonut._pydonut import CommandListParameters
 from pydonut._pydonut import CommandList
 from pydonut._pydonut import Buffer
 from pydonut._pydonut import BindingLayout
@@ -73,6 +74,7 @@ from pydonut._pydonut import NativeFileSystem
 from pydonut._pydonut import RootFileSystem
 from pydonut._pydonut import ShaderFactory
 from pydonut._pydonut import BindingCache
+from pydonut._pydonut import BlitParameters
 from pydonut._pydonut import CommonRenderPasses
 from pydonut._pydonut import DescriptorTableManager
 from pydonut._pydonut import TextureCache
@@ -93,6 +95,7 @@ from pydonut._pydonut import Scene
 from pydonut._pydonut import SceneLoaded
 from pydonut._pydonut import FirstPersonCamera
 from pydonut._pydonut import PlanarView
+from pydonut._pydonut import CubemapView
 from pydonut._pydonut import IDrawStrategy
 from pydonut._pydonut import IGeometryPass
 from pydonut._pydonut import GeometryPassContext
@@ -202,6 +205,7 @@ __all__ = (
     'ComputePipeline',
     'RayTracingPipeline',
     'ShaderTable',
+    'CommandListParameters',
     'CommandList',
     'Buffer',
     'BindingLayout',
@@ -214,6 +218,7 @@ __all__ = (
     'RootFileSystem',
     'ShaderFactory',
     'BindingCache',
+    'BlitParameters',
     'CommonRenderPasses',
     'DescriptorTableManager',
     'TextureCache',
@@ -234,6 +239,7 @@ __all__ = (
     'SceneLoaded',
     'FirstPersonCamera',
     'PlanarView',
+    'CubemapView',
     'IDrawStrategy',
     'IGeometryPass',
     'GeometryPassContext',
