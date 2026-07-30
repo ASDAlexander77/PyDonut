@@ -15,6 +15,7 @@ from pydonut._pydonut import VariableShadingRate
 from pydonut._pydonut import ShadingRateCombiner
 from pydonut._pydonut import GeometryFlags
 from pydonut._pydonut import InstanceFlags
+from pydonut._pydonut import ShaderSpecialization
 from pydonut._pydonut import Color
 from pydonut._pydonut import Viewport
 from pydonut._pydonut import ViewportState
@@ -159,6 +160,7 @@ __all__ = (
     'ShadingRateCombiner',
     'GeometryFlags',
     'InstanceFlags',
+    'ShaderSpecialization',
     'Color',
     'Viewport',
     'ViewportState',

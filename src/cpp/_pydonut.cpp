@@ -752,6 +752,15 @@ PYBIND11_MODULE(_pydonut, m) {
     py::class_<nvrhi::IShaderLibrary, std::shared_ptr<nvrhi::IShaderLibrary>> shaderLibrary(m, "ShaderLibrary");
     py::class_<nvrhi::IInputLayout, std::shared_ptr<nvrhi::IInputLayout>>(m, "InputLayout");
 
+    // One Vulkan spec-constant override (constantID declared in HLSL via
+    // [[vk::constant_id(N)]]) for Device.createShaderSpecialization. The value union is
+    // exposed as three separate static factories (matching the C++ API) rather than one
+    // constructor, since the active union member depends on which factory was used.
+    py::class_<nvrhi::ShaderSpecialization>(m, "ShaderSpecialization")
+        .def_static("UInt32", &nvrhi::ShaderSpecialization::UInt32, py::arg("constantID"), py::arg("value"))
+        .def_static("Int32", &nvrhi::ShaderSpecialization::Int32, py::arg("constantID"), py::arg("value"))
+        .def_static("Float", &nvrhi::ShaderSpecialization::Float, py::arg("constantID"), py::arg("value"));
+
     py::class_<nvrhi::Color>(m, "Color")
         .def(py::init<>())
         .def(py::init<float>(), py::arg("c"))
@@ -1182,6 +1191,12 @@ PYBIND11_MODULE(_pydonut, m) {
         desc.entryName = entryName;
         return DetachToShared(self.createShader(desc, bytecode.data(), bytecode.size()));
     }, py::arg("bytecode"), py::arg("entryName"), py::arg("shaderType"));
+    // Bakes Vulkan spec constants (declared in HLSL via [[vk::constant_id(N)]]) into a new
+    // shader derived from baseShader -- Vulkan-only, matching nvrhi::Feature::ShaderSpecializations.
+    device.def("createShaderSpecialization", [](nvrhi::IDevice &self, nvrhi::IShader* baseShader,
+            const std::vector<nvrhi::ShaderSpecialization> &constants) {
+        return DetachToShared(self.createShaderSpecialization(baseShader, constants.data(), uint32_t(constants.size())));
+    }, py::arg("baseShader"), py::arg("constants"));
     device.def("queryFeatureSupport", [](nvrhi::IDevice &self, nvrhi::Feature feature) {
         return self.queryFeatureSupport(feature);
     }, py::arg("feature"));
