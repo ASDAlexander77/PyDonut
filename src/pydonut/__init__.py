@@ -131,6 +131,7 @@ from pydonut._pydonut import GetShaderTypeName
 from pydonut._pydonut import ClearColorAttachment
 from pydonut._pydonut import ClearDepthStencilAttachment
 from pydonut._pydonut import BuildBottomLevelAccelStruct
+from pydonut._pydonut import BuildSceneAccelStructs
 from pydonut._pydonut import CreateVolatileConstantBufferDesc
 from pydonut._pydonut import CreateStaticConstantBufferDesc
 from pydonut._pydonut import ComputeRotatingViewProjMatrix
@@ -277,6 +278,7 @@ __all__ = (
     'ClearColorAttachment',
     'ClearDepthStencilAttachment',
     'BuildBottomLevelAccelStruct',
+    'BuildSceneAccelStructs',
     'CreateVolatileConstantBufferDesc',
     'CreateStaticConstantBufferDesc',
     'ComputeRotatingViewProjMatrix',

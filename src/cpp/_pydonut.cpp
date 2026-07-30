@@ -48,6 +48,7 @@
 using namespace donut::math;
 #include <donut/shaders/view_cb.h>
 #include <donut/shaders/material_cb.h>
+#include <donut/shaders/light_cb.h>
 
 namespace py = pybind11;
 
@@ -1011,6 +1012,7 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_static("RawBuffer_SRV", &nvrhi::BindingLayoutItem::RawBuffer_SRV, py::arg("slot"))
         .def_static("TypedBuffer_SRV", &nvrhi::BindingLayoutItem::TypedBuffer_SRV, py::arg("slot"))
         .def_static("TypedBuffer_UAV", &nvrhi::BindingLayoutItem::TypedBuffer_UAV, py::arg("slot"))
+        .def_static("VolatileConstantBuffer", &nvrhi::BindingLayoutItem::VolatileConstantBuffer, py::arg("slot"))
         .def_static("RayTracingAccelStruct", &nvrhi::BindingLayoutItem::RayTracingAccelStruct, py::arg("slot"));
 
     py::class_<nvrhi::BindingLayoutDesc>(m, "BindingLayoutDesc")
@@ -1331,6 +1333,69 @@ PYBIND11_MODULE(_pydonut, m) {
     m.def("BuildBottomLevelAccelStruct", &nvrhi::utils::BuildBottomLevelAccelStruct,
         py::arg("commandList"), py::arg("as"), py::arg("desc"));
 
+    // Builds one BLAS per scene mesh and the scene's TLAS (one instance per MeshInstance,
+    // transformed by its node's world transform), returning just the finished TLAS. Wraps the
+    // whole per-mesh/per-geometry/per-instance traversal (mesh index/vertex offsets, node
+    // transforms, etc.) as a single combinator rather than exposing that scene-graph plumbing
+    // to Python -- matches the existing convention of wrapping multi-step C++ procedures behind
+    // one call (see SceneLoaded(), CreateMaterialConstantBuffer()).
+    m.def("BuildSceneAccelStructs", [](nvrhi::IDevice* device, nvrhi::ICommandList* commandList, donut::engine::Scene &scene) {
+        std::unordered_map<std::shared_ptr<donut::engine::MeshInfo>, nvrhi::rt::AccelStructHandle> meshAccelStructs;
+
+        for (const auto &mesh : scene.GetSceneGraph()->GetMeshes())
+        {
+            nvrhi::rt::AccelStructDesc blasDesc;
+            blasDesc.isTopLevel = false;
+
+            for (const auto &geometry : mesh->geometries)
+            {
+                nvrhi::rt::GeometryDesc geometryDesc;
+                auto &triangles = geometryDesc.geometryData.triangles;
+                triangles.indexBuffer = mesh->buffers->indexBuffer;
+                triangles.indexOffset = (mesh->indexOffset + geometry->indexOffsetInMesh) * sizeof(uint32_t);
+                triangles.indexFormat = nvrhi::Format::R32_UINT;
+                triangles.indexCount = geometry->numIndices;
+                triangles.vertexBuffer = mesh->buffers->vertexBuffer;
+                triangles.vertexOffset = (mesh->vertexOffset + geometry->vertexOffsetInMesh) * sizeof(donut::math::float3)
+                    + mesh->buffers->getVertexBufferRange(donut::engine::VertexAttribute::Position).byteOffset;
+                triangles.vertexFormat = nvrhi::Format::RGB32_FLOAT;
+                triangles.vertexStride = sizeof(donut::math::float3);
+                triangles.vertexCount = geometry->numVertices;
+                geometryDesc.geometryType = nvrhi::rt::GeometryType::Triangles;
+                geometryDesc.flags = nvrhi::rt::GeometryFlags::Opaque;
+                blasDesc.bottomLevelGeometries.push_back(geometryDesc);
+            }
+
+            nvrhi::rt::AccelStructHandle as = device->createAccelStruct(blasDesc);
+            nvrhi::utils::BuildBottomLevelAccelStruct(commandList, as, blasDesc);
+
+            meshAccelStructs[mesh] = as;
+        }
+
+        nvrhi::rt::AccelStructDesc tlasDesc;
+        tlasDesc.isTopLevel = true;
+
+        std::vector<nvrhi::rt::InstanceDesc> instances;
+
+        for (const auto &instance : scene.GetSceneGraph()->GetMeshInstances())
+        {
+            nvrhi::rt::InstanceDesc instanceDesc;
+            instanceDesc.bottomLevelAS = meshAccelStructs[instance->GetMesh()];
+            instanceDesc.instanceMask = 1;
+
+            auto *node = instance->GetNode();
+            donut::math::affineToColumnMajor(node->GetLocalToWorldTransformFloat(), instanceDesc.transform);
+
+            instances.push_back(instanceDesc);
+        }
+        tlasDesc.topLevelMaxInstances = uint32_t(instances.size());
+
+        nvrhi::rt::AccelStructHandle tlas = device->createAccelStruct(tlasDesc);
+        commandList->buildTopLevelAccelStruct(tlas, instances.data(), instances.size());
+
+        return DetachToShared(std::move(tlas));
+    }, py::arg("device"), py::arg("commandList"), py::arg("scene"));
+
     rtPipeline.def("createShaderTable", [](nvrhi::rt::IPipeline &self) {
         return DetachToShared(self.createShaderTable());
     });
@@ -1607,7 +1672,15 @@ PYBIND11_MODULE(_pydonut, m) {
     py::class_<donut::engine::Light, donut::engine::SceneGraphLeaf, std::shared_ptr<donut::engine::Light>>(m, "Light")
         .def("SetDirection", [](const donut::engine::Light &self, double x, double y, double z) {
             self.SetDirection(donut::math::double3(x, y, z));
-        }, py::arg("x"), py::arg("y"), py::arg("z"));
+        }, py::arg("x"), py::arg("y"), py::arg("z"))
+        // Raw bytes of the engine's LightConstants struct, ready for CommandList.writeBuffer --
+        // same pattern as PlanarView.FillPlanarViewConstants. Virtual, so this dispatches to
+        // whichever concrete light type (DirectionalLight, etc.) the Python object actually is.
+        .def("FillLightConstants", [](const donut::engine::Light &self) {
+            LightConstants constants{};
+            self.FillLightConstants(constants);
+            return py::bytes(reinterpret_cast<const char*>(&constants), sizeof(constants));
+        });
 
     py::class_<donut::engine::DirectionalLight, donut::engine::Light, std::shared_ptr<donut::engine::DirectionalLight>>(m, "DirectionalLight")
         .def(py::init<>())
