@@ -12,7 +12,7 @@ if __name__ == "__main__":
         # The C++ original loads media/sponza-plus.scene.json, which isn't part of this
         # project's media/ -- same substitution as bindless_rendering.py/rt_shadows.py/
         # rt_reflections.py.
-        candidate = folder / "media" / "glTF-Sample-Assets" / "Models" / "Sponza" / "glTF" / "Sponza.gltf"
+        candidate = folder / "media" / "sponza-plus.scene.json"
         return candidate if candidate.is_file() else None
 
     # sizeof(LightingConstants) from shaders/rt_bindless/lighting_cb.h: same shape as
