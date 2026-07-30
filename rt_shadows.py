@@ -125,6 +125,12 @@ if __name__ == "__main__":
                 return False
             assert self.scene is not None
 
+            # ApplicationBase owns the texture cache in the C++ sample. Here the cache is a
+            # Python-owned attribute, so finalize its queued uploads explicitly before
+            # FinishedLoading bakes material bindings; otherwise GBufferFillPass sees only
+            # fallback material textures.
+            pyd.SceneLoaded(self.textureCache, self.commonPasses)
+
             sceneGraph = self.scene.GetSceneGraph()
             self.sunLight = pyd.DirectionalLight()
             sceneGraph.AttachLeafNode(sceneGraph.GetRootNode(), self.sunLight)

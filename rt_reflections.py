@@ -158,6 +158,11 @@ if __name__ == "__main__":
                 return False
             assert self.scene is not None
 
+            # The C++ sample stores this cache on ApplicationBase, which finalizes queued
+            # texture uploads during scene loading. The Python attribute is not that base
+            # member, so do the same work explicitly before material bindings are baked.
+            pyd.SceneLoaded(self.textureCache, self.commonPasses)
+
             sceneGraph = self.scene.GetSceneGraph()
             self.sunLight = pyd.DirectionalLight()
             sceneGraph.AttachLeafNode(sceneGraph.GetRootNode(), self.sunLight)
