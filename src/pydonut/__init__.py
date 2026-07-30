@@ -8,6 +8,7 @@ from pydonut._pydonut import PrimitiveType
 from pydonut._pydonut import ComparisonFunc
 from pydonut._pydonut import RasterCullMode
 from pydonut._pydonut import CommandQueue
+from pydonut._pydonut import CpuAccessMode
 from pydonut._pydonut import Feature
 from pydonut._pydonut import ResourceStates
 from pydonut._pydonut import TextureDimension
@@ -153,6 +154,7 @@ __all__ = (
     'ComparisonFunc',
     'RasterCullMode',
     'CommandQueue',
+    'CpuAccessMode',
     'Feature',
     'ResourceStates',
     'TextureDimension',

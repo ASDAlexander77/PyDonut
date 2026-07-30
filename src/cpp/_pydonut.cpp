@@ -600,6 +600,12 @@ PYBIND11_MODULE(_pydonut, m) {
         .value("Copy", nvrhi::CommandQueue::Copy)
         .finalize();
 
+    pybind11::native_enum<nvrhi::CpuAccessMode>(m, "CpuAccessMode", "enum.Enum")
+        .value("None_", nvrhi::CpuAccessMode::None)
+        .value("Read", nvrhi::CpuAccessMode::Read)
+        .value("Write", nvrhi::CpuAccessMode::Write)
+        .finalize();
+
     pybind11::native_enum<nvrhi::Feature>(m, "Feature", "enum.Enum")
         .value("ComputeQueue", nvrhi::Feature::ComputeQueue)
         .value("ConservativeRasterization", nvrhi::Feature::ConservativeRasterization)
@@ -956,6 +962,7 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_readwrite("isAccelStructStorage", &nvrhi::BufferDesc::isAccelStructStorage)
         .def_readwrite("isShaderBindingTable", &nvrhi::BufferDesc::isShaderBindingTable)
         .def_readwrite("isVolatile", &nvrhi::BufferDesc::isVolatile)
+        .def_readwrite("cpuAccess", &nvrhi::BufferDesc::cpuAccess)
         .def_readwrite("initialState", &nvrhi::BufferDesc::initialState)
         .def_readwrite("keepInitialState", &nvrhi::BufferDesc::keepInitialState);
 
@@ -1002,6 +1009,8 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_static("Texture_UAV", &nvrhi::BindingLayoutItem::Texture_UAV, py::arg("slot"))
         .def_static("Texture_SRV", &nvrhi::BindingLayoutItem::Texture_SRV, py::arg("slot"))
         .def_static("RawBuffer_SRV", &nvrhi::BindingLayoutItem::RawBuffer_SRV, py::arg("slot"))
+        .def_static("TypedBuffer_SRV", &nvrhi::BindingLayoutItem::TypedBuffer_SRV, py::arg("slot"))
+        .def_static("TypedBuffer_UAV", &nvrhi::BindingLayoutItem::TypedBuffer_UAV, py::arg("slot"))
         .def_static("RayTracingAccelStruct", &nvrhi::BindingLayoutItem::RayTracingAccelStruct, py::arg("slot"));
 
     py::class_<nvrhi::BindingLayoutDesc>(m, "BindingLayoutDesc")
@@ -1043,6 +1052,12 @@ PYBIND11_MODULE(_pydonut, m) {
         }, py::arg("slot"), py::arg("buffer"), py::arg("range"))
         .def_static("StructuredBuffer_SRV", [](uint32_t slot, nvrhi::IBuffer* buffer) {
             return nvrhi::BindingSetItem::StructuredBuffer_SRV(slot, buffer);
+        }, py::arg("slot"), py::arg("buffer"))
+        .def_static("TypedBuffer_SRV", [](uint32_t slot, nvrhi::IBuffer* buffer) {
+            return nvrhi::BindingSetItem::TypedBuffer_SRV(slot, buffer);
+        }, py::arg("slot"), py::arg("buffer"))
+        .def_static("TypedBuffer_UAV", [](uint32_t slot, nvrhi::IBuffer* buffer) {
+            return nvrhi::BindingSetItem::TypedBuffer_UAV(slot, buffer);
         }, py::arg("slot"), py::arg("buffer"))
         .def_static("Sampler", [](uint32_t slot, nvrhi::ISampler* sampler) {
             return nvrhi::BindingSetItem::Sampler(slot, sampler);
@@ -1203,6 +1218,16 @@ PYBIND11_MODULE(_pydonut, m) {
     device.def("createBuffer", [](nvrhi::IDevice &self, const nvrhi::BufferDesc &desc) {
         return DetachToShared(self.createBuffer(desc));
     }, py::arg("desc"));
+    // Combinator wrapping mapBuffer(Read)+memcpy+unmapBuffer into one safe call, so raw mapped
+    // pointers are never exposed to Python -- same spirit as FillPlanarViewConstants returning
+    // bytes rather than a pointer. `buffer` must have been created with cpuAccess=Read (or
+    // Write, which is also host-visible) and byteSize must not exceed its actual size.
+    device.def("readBuffer", [](nvrhi::IDevice &self, nvrhi::IBuffer* buffer, size_t byteSize) {
+        void* mapped = self.mapBuffer(buffer, nvrhi::CpuAccessMode::Read);
+        py::bytes result(reinterpret_cast<const char*>(mapped), byteSize);
+        self.unmapBuffer(buffer);
+        return result;
+    }, py::arg("buffer"), py::arg("byteSize"));
     device.def("createTexture", [](nvrhi::IDevice &self, const nvrhi::TextureDesc &desc) {
         return DetachToShared(self.createTexture(desc));
     }, py::arg("desc"));
@@ -1259,6 +1284,8 @@ PYBIND11_MODULE(_pydonut, m) {
         py::buffer_info info = data.request();
         self.writeBuffer(buffer, info.ptr, static_cast<size_t>(info.size * info.itemsize), destOffsetBytes);
     }, py::arg("buffer"), py::arg("data"), py::arg("destOffsetBytes") = 0);
+    commandList.def("copyBuffer", &nvrhi::ICommandList::copyBuffer,
+        py::arg("dest"), py::arg("destOffsetBytes"), py::arg("src"), py::arg("srcOffsetBytes"), py::arg("dataSizeBytes"));
     commandList.def("buildTopLevelAccelStruct", [](nvrhi::ICommandList &self, nvrhi::rt::IAccelStruct* as, const std::vector<nvrhi::rt::InstanceDesc> &instances) {
         self.buildTopLevelAccelStruct(as, instances.data(), instances.size());
     }, py::arg("as"), py::arg("instances"));
