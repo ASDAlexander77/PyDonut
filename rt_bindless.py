@@ -1,4 +1,5 @@
 if __name__ == "__main__":
+    import math
     import struct
     import sys
     from pathlib import Path
@@ -8,10 +9,7 @@ if __name__ == "__main__":
     WINDOW_TITLE = "PyDonut Bindless Ray Tracing"
     folder = Path(__file__).resolve().parent
 
-    def FindSponzaGltf() -> Path | None:
-        # The C++ original loads media/sponza-plus.scene.json, which isn't part of this
-        # project's media/ -- same substitution as bindless_rendering.py/rt_shadows.py/
-        # rt_reflections.py.
+    def FindSponzaScene() -> Path | None:
         candidate = folder / "media" / "sponza-plus.scene.json"
         return candidate if candidate.is_file() else None
 
@@ -59,13 +57,16 @@ if __name__ == "__main__":
 
             self.commandList: pyd.CommandList | None = None
 
+            self.enableAnimations = True
+            self.wallclockTime = 0.0
+
         def Init(self: BindlessRayTracing) -> bool:
             device = self.GetDevice()
             api = device.getGraphicsAPI()
 
-            sceneFileName = FindSponzaGltf()
+            sceneFileName = FindSponzaScene()
             if sceneFileName is None:
-                pyd.log.fatal("Could not find Sponza.gltf under media/glTF-Sample-Assets/")
+                pyd.log.fatal("Could not find sponza-plus.scene.json under media/")
                 return False
 
             # CommonRenderPasses' own shaders are only statically linked in when Donut is built
@@ -126,17 +127,14 @@ if __name__ == "__main__":
             sceneGraph = self.scene.GetSceneGraph()
             self.sunLight = pyd.DirectionalLight()
             sceneGraph.AttachLeafNode(sceneGraph.GetRootNode(), self.sunLight)
-            self.sunLight.SetDirection(0.1, -1.0, 0.15)
+            self.sunLight.SetDirection(0.1, -1.0, -0.15)
             self.sunLight.angularSize = 0.53
             self.sunLight.irradiance = 5.0
 
             self.scene.FinishedLoading(self.GetFrameIndex())
 
-            # Same asset-scale adjustment as bindless_rendering.py/rt_shadows.py/
-            # rt_reflections.py: this glTF-Sample-Assets Sponza is not the one the C++
-            # original's (0,1.8,0)->(1,1.8,0) camera was tuned for.
-            self.camera.LookAt(0.0, 15.0, 40.0, 0.0, 3.0, 0.0)
-            self.camera.SetMoveSpeed(6.0)
+            self.camera.LookAt(0.0, 1.8, 0.0, 1.0, 1.8, 0.0)
+            self.camera.SetMoveSpeed(3.0)
 
             self.constantBuffer = device.createBuffer(
                 pyd.CreateVolatileConstantBufferDesc(_LIGHTING_CONSTANTS_SIZE, "LightingConstants", 16)
@@ -174,6 +172,8 @@ if __name__ == "__main__":
 
         def KeyboardUpdate(self: BindlessRayTracing, key: int, scancode: int, action: int, mods: int) -> bool:
             self.camera.KeyboardUpdate(key, scancode, action, mods)
+            if key == 32 and action == 1:  # GLFW_KEY_SPACE, GLFW_PRESS
+                self.enableAnimations = not self.enableAnimations
             return True
 
         def MousePosUpdate(self: BindlessRayTracing, xpos: float, ypos: float) -> bool:
@@ -186,6 +186,18 @@ if __name__ == "__main__":
 
         def Animate(self: BindlessRayTracing, elapsedTimeSeconds: float) -> None:
             self.camera.Animate(elapsedTimeSeconds)
+
+            if self.IsSceneLoaded() and self.enableAnimations:
+                assert self.scene is not None
+                self.wallclockTime += elapsedTimeSeconds
+                offset = 0.0
+
+                for anim in self.scene.GetSceneGraph().GetAnimations():
+                    duration = anim.GetDuration()
+                    animationTime = math.fmod(self.wallclockTime + offset, duration)
+                    anim.Apply(animationTime)
+                    offset += 1.0
+
             extraInfo = "- using RayQuery" if self.useRayQuery else "- using RayPipeline"
             self.GetDeviceManager().SetInformativeWindowTitle(WINDOW_TITLE, extraInfo=extraInfo)
 
@@ -324,11 +336,19 @@ if __name__ == "__main__":
             sceneGraph = self.scene.GetSceneGraph()
 
             for mesh in sceneGraph.GetMeshes():
+                if mesh.isSkinPrototype:
+                    continue  # the bind-pose template a skinned instance was cloned from -- never instanced/ray-traced directly
+
                 blasDesc = pyd.AccelStructDesc()
                 self.GetMeshBlasDesc(mesh, blasDesc)
 
                 accelStruct = self.GetDevice().createAccelStruct(blasDesc)
-                pyd.BuildBottomLevelAccelStruct(commandList, accelStruct, blasDesc)
+                if mesh.skinPrototype is None:
+                    # Static geometry: its BLAS never changes, so build it once, now. A skinned
+                    # mesh's vertex positions are rewritten by the skinning compute pass every
+                    # frame (inside Scene.Refresh()), so its BLAS is left unbuilt here and
+                    # rebuilt every frame in BuildTLAS() instead, once skinning has run.
+                    pyd.BuildBottomLevelAccelStruct(commandList, accelStruct, blasDesc)
 
                 mesh.accelStruct = accelStruct
 
@@ -339,9 +359,34 @@ if __name__ == "__main__":
 
         def BuildTLAS(self: BindlessRayTracing, commandList: pyd.CommandList, frameIndex: int) -> None:
             assert self.scene is not None
+            sceneGraph = self.scene.GetSceneGraph()
+
+            # Skinned instances the skinning compute pass wrote new vertex positions for this
+            # frame (see Scene.Refresh(), called just before this in Render()) need their BLAS
+            # rebuilt from those positions before the TLAS below can reference it.
+            updatedSkinnedInstances = [
+                instance for instance in sceneGraph.GetSkinnedMeshInstances()
+                if instance.GetLastUpdateFrameIndex() >= frameIndex
+            ]
+
+            for instance in updatedSkinnedInstances:
+                mesh = instance.GetMesh()
+                assert mesh.accelStruct is not None
+                assert mesh.buffers is not None and mesh.buffers.vertexBuffer is not None
+                commandList.setAccelStructState(mesh.accelStruct, pyd.ResourceStates.AccelStructWrite)
+                commandList.setBufferState(mesh.buffers.vertexBuffer, pyd.ResourceStates.AccelStructBuildInput)
+            commandList.commitBarriers()
+
+            for instance in updatedSkinnedInstances:
+                mesh = instance.GetMesh()
+                assert mesh.accelStruct is not None
+                blasDesc = pyd.AccelStructDesc()
+                self.GetMeshBlasDesc(mesh, blasDesc)
+                pyd.BuildBottomLevelAccelStruct(commandList, mesh.accelStruct, blasDesc)
+
             instances: list[pyd.InstanceDesc] = []
 
-            for instance in self.scene.GetSceneGraph().GetMeshInstances():
+            for instance in sceneGraph.GetMeshInstances():
                 mesh = instance.GetMesh()
                 assert mesh.accelStruct is not None
                 node = instance.GetNode()

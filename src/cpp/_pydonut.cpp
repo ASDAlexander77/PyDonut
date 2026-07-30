@@ -1448,6 +1448,15 @@ PYBIND11_MODULE(_pydonut, m) {
         py::arg("enable"), py::call_guard<py::gil_scoped_release>());
     commandList.def("setResourceStatesForFramebuffer", &nvrhi::ICommandList::setResourceStatesForFramebuffer,
         py::arg("framebuffer"), py::call_guard<py::gil_scoped_release>());
+    // Explicit state transitions for resources nvrhi's automatic tracking wouldn't otherwise
+    // catch in time -- e.g. a skinned mesh's vertex buffer/BLAS between the skinning compute
+    // dispatch that just wrote new positions and the BLAS rebuild that reads them this same
+    // frame (see rt_bindless.py's BuildTLAS, matching the C++ original's per-frame skinned BLAS
+    // update). commitBarriers submits the resulting barriers.
+    commandList.def("setBufferState", &nvrhi::ICommandList::setBufferState,
+        py::arg("buffer"), py::arg("stateBits"), py::call_guard<py::gil_scoped_release>());
+    commandList.def("setAccelStructState", &nvrhi::ICommandList::setAccelStructState,
+        py::arg("as"), py::arg("stateBits"), py::call_guard<py::gil_scoped_release>());
     commandList.def("commitBarriers", &nvrhi::ICommandList::commitBarriers, py::call_guard<py::gil_scoped_release>());
 
     m.def("ClearColorAttachment", &nvrhi::utils::ClearColorAttachment,
@@ -1860,6 +1869,12 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_readonly("indexOffset", &donut::engine::MeshInfo::indexOffset)
         .def_readonly("vertexOffset", &donut::engine::MeshInfo::vertexOffset)
         .def_readwrite("geometries", &donut::engine::MeshInfo::geometries)
+        // Set on the template mesh a skinned instance was cloned from -- see
+        // SceneGraph.GetSkinnedMeshInstances()/SkinnedMeshInstance.GetPrototypeMesh(). isSkinPrototype
+        // marks that template itself (never instantiated/ray-traced directly; skip it when building
+        // BLASes -- see rt_bindless.py's CreateAccelStructs).
+        .def_readonly("isSkinPrototype", &donut::engine::MeshInfo::isSkinPrototype)
+        .def_readonly("skinPrototype", &donut::engine::MeshInfo::skinPrototype)
         .def("SetObjectSpaceBounds", [](donut::engine::MeshInfo &self,
                 float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
             self.objectSpaceBounds = donut::math::box3(
@@ -1886,6 +1901,16 @@ PYBIND11_MODULE(_pydonut, m) {
         // so shaders can look up per-instance data (see rt_particles.py).
         .def("GetInstanceIndex", &donut::engine::MeshInstance::GetInstanceIndex);
 
+    // One instance of a skinned (animated) mesh -- see SceneGraph.GetSkinnedMeshInstances().
+    // GetMesh() (inherited from MeshInstance) returns this instance's own per-instance mesh
+    // (deformed vertex buffers), distinct from GetPrototypeMesh()'s shared bind-pose template.
+    // GetLastUpdateFrameIndex() tells the app which frame the skinning compute pass last wrote
+    // new vertex positions for this instance, so it knows when to rebuild the instance's BLAS
+    // (see rt_bindless.py's BuildTLAS, matching the C++ original).
+    py::class_<donut::engine::SkinnedMeshInstance, donut::engine::MeshInstance, std::shared_ptr<donut::engine::SkinnedMeshInstance>>(m, "SkinnedMeshInstance")
+        .def("GetPrototypeMesh", &donut::engine::SkinnedMeshInstance::GetPrototypeMesh)
+        .def("GetLastUpdateFrameIndex", &donut::engine::SkinnedMeshInstance::GetLastUpdateFrameIndex);
+
     // Light is abstract (pure virtual GetLightType()) -- bound base-only, so
     // SceneGraph.GetLights() can return a homogeneous list regardless of light subtype.
     py::class_<donut::engine::Light, donut::engine::SceneGraphLeaf, std::shared_ptr<donut::engine::Light>>(m, "Light")
@@ -1905,6 +1930,15 @@ PYBIND11_MODULE(_pydonut, m) {
         .def(py::init<>())
         .def_readwrite("irradiance", &donut::engine::DirectionalLight::irradiance)
         .def_readwrite("angularSize", &donut::engine::DirectionalLight::angularSize);
+
+    // One baked animation clip attached to the scene graph (e.g. a glTF skinned character
+    // animation) -- see SceneGraph.GetAnimations() below. Apply() drives every channel
+    // (node transforms, morph/material properties) to their sampled values at `time`; the
+    // caller is responsible for looping/wrapping time against GetDuration() itself (see
+    // rt_bindless.py's Animate()).
+    py::class_<donut::engine::SceneGraphAnimation, donut::engine::SceneGraphLeaf, std::shared_ptr<donut::engine::SceneGraphAnimation>>(m, "SceneGraphAnimation")
+        .def("GetDuration", &donut::engine::SceneGraphAnimation::GetDuration)
+        .def("Apply", &donut::engine::SceneGraphAnimation::Apply, py::arg("time"));
 
     py::class_<donut::engine::SceneGraphNode, std::shared_ptr<donut::engine::SceneGraphNode>>(m, "SceneGraphNode")
         .def(py::init<>())
@@ -1933,6 +1967,10 @@ PYBIND11_MODULE(_pydonut, m) {
             return meshes;
         })
         .def("GetMeshInstances", &donut::engine::SceneGraph::GetMeshInstances)
+        // Baked animation clips attached anywhere in the graph (see SceneGraphAnimation above).
+        .def("GetAnimations", &donut::engine::SceneGraph::GetAnimations)
+        // Skinned (animated) mesh instances -- see SkinnedMeshInstance above.
+        .def("GetSkinnedMeshInstances", &donut::engine::SceneGraph::GetSkinnedMeshInstances)
         // context is always null here (searches from the graph root) -- nothing in this
         // codebase needs to search from an arbitrary starting node.
         .def("FindNode", [](const donut::engine::SceneGraph &self, const std::filesystem::path &path) {
