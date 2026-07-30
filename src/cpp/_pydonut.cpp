@@ -1012,12 +1012,18 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_static("RawBuffer_SRV", &nvrhi::BindingLayoutItem::RawBuffer_SRV, py::arg("slot"))
         .def_static("TypedBuffer_SRV", &nvrhi::BindingLayoutItem::TypedBuffer_SRV, py::arg("slot"))
         .def_static("TypedBuffer_UAV", &nvrhi::BindingLayoutItem::TypedBuffer_UAV, py::arg("slot"))
+        .def_static("ConstantBuffer", &nvrhi::BindingLayoutItem::ConstantBuffer, py::arg("slot"))
         .def_static("VolatileConstantBuffer", &nvrhi::BindingLayoutItem::VolatileConstantBuffer, py::arg("slot"))
+        .def_static("Sampler", &nvrhi::BindingLayoutItem::Sampler, py::arg("slot"))
         .def_static("RayTracingAccelStruct", &nvrhi::BindingLayoutItem::RayTracingAccelStruct, py::arg("slot"));
 
     py::class_<nvrhi::BindingLayoutDesc>(m, "BindingLayoutDesc")
         .def(py::init<>())
         .def_readwrite("visibility", &nvrhi::BindingLayoutDesc::visibility)
+        // 0 (default) unless the binding layout needs to sit in a non-zero register space --
+        // e.g. a per-hit-group "local" root signature space in a ray tracing pipeline that
+        // also has a "global" space at 0 (see rt_reflections.py).
+        .def_readwrite("registerSpace", &nvrhi::BindingLayoutDesc::registerSpace)
         .def_readwrite("bindings", &nvrhi::BindingLayoutDesc::bindings);
 
     py::class_<nvrhi::BufferRange>(m, "BufferRange")
@@ -1058,6 +1064,13 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_static("TypedBuffer_SRV", [](uint32_t slot, nvrhi::IBuffer* buffer) {
             return nvrhi::BindingSetItem::TypedBuffer_SRV(slot, buffer);
         }, py::arg("slot"), py::arg("buffer"))
+        // Overload with an explicit format and byte range, for viewing one slice of a larger
+        // buffer through a specific typed format -- e.g. one mesh's slice of a shared
+        // index/vertex buffer, reinterpreted as a different element type/format than the
+        // buffer's own (see rt_reflections.py).
+        .def_static("TypedBuffer_SRV", [](uint32_t slot, nvrhi::IBuffer* buffer, nvrhi::Format format, const nvrhi::BufferRange &range) {
+            return nvrhi::BindingSetItem::TypedBuffer_SRV(slot, buffer, format, range);
+        }, py::arg("slot"), py::arg("buffer"), py::arg("format"), py::arg("range"))
         .def_static("TypedBuffer_UAV", [](uint32_t slot, nvrhi::IBuffer* buffer) {
             return nvrhi::BindingSetItem::TypedBuffer_UAV(slot, buffer);
         }, py::arg("slot"), py::arg("buffer"))
@@ -1112,6 +1125,11 @@ PYBIND11_MODULE(_pydonut, m) {
             py::return_value_policy::reference)
         .def_readwrite("indexFormat", &nvrhi::rt::GeometryTriangles::indexFormat)
         .def_readwrite("vertexFormat", &nvrhi::rt::GeometryTriangles::vertexFormat)
+        // Byte offsets into indexBuffer/vertexBuffer -- 0 (default) for a geometry that owns
+        // its whole buffer; non-zero when several geometries/meshes share one buffer (see
+        // rt_shadows.py/rt_reflections.py, which build BLASes from real scene meshes).
+        .def_readwrite("indexOffset", &nvrhi::rt::GeometryTriangles::indexOffset)
+        .def_readwrite("vertexOffset", &nvrhi::rt::GeometryTriangles::vertexOffset)
         .def_readwrite("indexCount", &nvrhi::rt::GeometryTriangles::indexCount)
         .def_readwrite("vertexCount", &nvrhi::rt::GeometryTriangles::vertexCount)
         .def_readwrite("vertexStride", &nvrhi::rt::GeometryTriangles::vertexStride);
@@ -1140,7 +1158,14 @@ PYBIND11_MODULE(_pydonut, m) {
             self.setInstanceContributionToHitGroupIndex(value);
         }, py::arg("value"))
         .def("setFlags", [](nvrhi::rt::InstanceDesc &self, nvrhi::rt::InstanceFlags value) { self.setFlags(value); }, py::arg("value"))
-        .def("setBLAS", [](nvrhi::rt::InstanceDesc &self, nvrhi::rt::IAccelStruct* value) { self.setBLAS(value); }, py::arg("value"));
+        .def("setBLAS", [](nvrhi::rt::InstanceDesc &self, nvrhi::rt::IAccelStruct* value) { self.setBLAS(value); }, py::arg("value"))
+        // Fills the row-major instance transform from a scene graph node's world transform
+        // (dm::affineToColumnMajor(node->GetLocalToWorldTransformFloat(), ...)) -- math types
+        // aren't exposed to Python, so this hides the conversion behind one call, matching the
+        // existing convention (see PlanarView.SetMatricesFromCamera).
+        .def("setTransformFromNode", [](nvrhi::rt::InstanceDesc &self, const donut::engine::SceneGraphNode &node) {
+            donut::math::affineToColumnMajor(node.GetLocalToWorldTransformFloat(), self.transform);
+        }, py::arg("node"));
 
     py::class_<nvrhi::rt::PipelineShaderDesc>(m, "PipelineShaderDesc")
         .def(py::init<>())
@@ -1149,11 +1174,13 @@ PYBIND11_MODULE(_pydonut, m) {
     py::class_<nvrhi::rt::PipelineHitGroupDesc>(m, "PipelineHitGroupDesc")
         .def(py::init<>())
         .def("setExportName", [](nvrhi::rt::PipelineHitGroupDesc &self, const std::string &value) { self.setExportName(value); }, py::arg("value"))
-        .def("setClosestHitShader", [](nvrhi::rt::PipelineHitGroupDesc &self, nvrhi::IShader* shader) { self.setClosestHitShader(shader); }, py::arg("shader"));
+        .def("setClosestHitShader", [](nvrhi::rt::PipelineHitGroupDesc &self, nvrhi::IShader* shader) { self.setClosestHitShader(shader); }, py::arg("shader"))
+        .def("setBindingLayout", [](nvrhi::rt::PipelineHitGroupDesc &self, nvrhi::IBindingLayout* layout) { self.setBindingLayout(layout); }, py::arg("layout"));
 
     py::class_<nvrhi::rt::PipelineDesc>(m, "RayTracingPipelineDesc")
         .def(py::init<>())
         .def_readwrite("maxPayloadSize", &nvrhi::rt::PipelineDesc::maxPayloadSize)
+        .def_readwrite("maxRecursionDepth", &nvrhi::rt::PipelineDesc::maxRecursionDepth)
         .def("addShader", [](nvrhi::rt::PipelineDesc &self, const nvrhi::rt::PipelineShaderDesc &shader) { self.addShader(shader); }, py::arg("shader"))
         .def("addHitGroup", [](nvrhi::rt::PipelineDesc &self, const nvrhi::rt::PipelineHitGroupDesc &hitGroup) { self.addHitGroup(hitGroup); }, py::arg("hitGroup"))
         .def("addBindingLayout", [](nvrhi::rt::PipelineDesc &self, nvrhi::IBindingLayout* layout) { self.addBindingLayout(layout); }, py::arg("layout"));
@@ -1504,6 +1531,16 @@ PYBIND11_MODULE(_pydonut, m) {
         }, py::arg("commandList"), py::arg("params"), py::arg("bindingCache") = nullptr)
         .def_property_readonly("m_AnisotropicWrapSampler", [](donut::engine::CommonRenderPasses &self) -> nvrhi::ISampler* {
             return self.m_AnisotropicWrapSampler;
+        }, py::return_value_policy::reference_internal)
+        .def_property_readonly("m_LinearWrapSampler", [](donut::engine::CommonRenderPasses &self) -> nvrhi::ISampler* {
+            return self.m_LinearWrapSampler;
+        }, py::return_value_policy::reference_internal)
+        // Fallback textures for materials missing a given texture slot (see rt_reflections.py).
+        .def_property_readonly("m_WhiteTexture", [](donut::engine::CommonRenderPasses &self) -> nvrhi::ITexture* {
+            return self.m_WhiteTexture;
+        }, py::return_value_policy::reference_internal)
+        .def_property_readonly("m_BlackTexture", [](donut::engine::CommonRenderPasses &self) -> nvrhi::ITexture* {
+            return self.m_BlackTexture;
         }, py::return_value_policy::reference_internal);
 
     py::class_<donut::engine::DescriptorTableManager, std::shared_ptr<donut::engine::DescriptorTableManager>> descriptorTableManager(m, "DescriptorTableManager");
@@ -1607,7 +1644,10 @@ PYBIND11_MODULE(_pydonut, m) {
             nvrhi::BufferRange &range = self.getVertexBufferRange(attr);
             range.byteOffset = byteOffset;
             range.byteSize = byteSize;
-        }, py::arg("attr"), py::arg("byteOffset"), py::arg("byteSize"));
+        }, py::arg("attr"), py::arg("byteOffset"), py::arg("byteSize"))
+        .def("getVertexBufferRange", [](donut::engine::BufferGroup &self, donut::engine::VertexAttribute attr) {
+            return self.getVertexBufferRange(attr);
+        }, py::arg("attr"));
 
     py::class_<donut::engine::Material, std::shared_ptr<donut::engine::Material>>(m, "Material")
         .def(py::init<>())
@@ -1615,6 +1655,12 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_readwrite("useSpecularGlossModel", &donut::engine::Material::useSpecularGlossModel)
         .def_readwrite("enableBaseOrDiffuseTexture", &donut::engine::Material::enableBaseOrDiffuseTexture)
         .def_readwrite("baseOrDiffuseTexture", &donut::engine::Material::baseOrDiffuseTexture)
+        .def_readwrite("metalRoughOrSpecularTexture", &donut::engine::Material::metalRoughOrSpecularTexture)
+        .def_readwrite("normalTexture", &donut::engine::Material::normalTexture)
+        .def_readwrite("emissiveTexture", &donut::engine::Material::emissiveTexture)
+        .def_readwrite("occlusionTexture", &donut::engine::Material::occlusionTexture)
+        .def_readwrite("transmissionTexture", &donut::engine::Material::transmissionTexture)
+        .def_readwrite("opacityTexture", &donut::engine::Material::opacityTexture)
         .def_property("materialConstants",
             [](const donut::engine::Material &self) -> nvrhi::IBuffer* { return self.materialConstants.Get(); },
             [](donut::engine::Material &self, nvrhi::IBuffer* b) { self.materialConstants = b; },
@@ -1643,7 +1689,15 @@ PYBIND11_MODULE(_pydonut, m) {
         .def(py::init<>())
         .def_readwrite("material", &donut::engine::MeshGeometry::material)
         .def_readwrite("numIndices", &donut::engine::MeshGeometry::numIndices)
-        .def_readwrite("numVertices", &donut::engine::MeshGeometry::numVertices);
+        .def_readwrite("numVertices", &donut::engine::MeshGeometry::numVertices)
+        // Assigned by the scene graph when the mesh is added to the scene; used to compute a
+        // stable per-geometry shader-table hit-group index (see rt_reflections.py).
+        .def_readonly("globalGeometryIndex", &donut::engine::MeshGeometry::globalGeometryIndex)
+        // This geometry's index/vertex range within its owning mesh's shared index/vertex
+        // buffers -- combine with MeshInfo.indexOffset/vertexOffset to get the absolute range
+        // (see rt_shadows.py's BLAS building and rt_reflections.py's per-geometry bindings).
+        .def_readonly("indexOffsetInMesh", &donut::engine::MeshGeometry::indexOffsetInMesh)
+        .def_readonly("vertexOffsetInMesh", &donut::engine::MeshGeometry::vertexOffsetInMesh);
 
     py::class_<donut::engine::MeshInfo, std::shared_ptr<donut::engine::MeshInfo>>(m, "MeshInfo")
         .def(py::init<>())
@@ -1651,12 +1705,21 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_readwrite("buffers", &donut::engine::MeshInfo::buffers)
         .def_readwrite("totalIndices", &donut::engine::MeshInfo::totalIndices)
         .def_readwrite("totalVertices", &donut::engine::MeshInfo::totalVertices)
+        .def_readonly("indexOffset", &donut::engine::MeshInfo::indexOffset)
+        .def_readonly("vertexOffset", &donut::engine::MeshInfo::vertexOffset)
         .def_readwrite("geometries", &donut::engine::MeshInfo::geometries)
         .def("SetObjectSpaceBounds", [](donut::engine::MeshInfo &self,
                 float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
             self.objectSpaceBounds = donut::math::box3(
                 donut::math::float3(minX, minY, minZ), donut::math::float3(maxX, maxY, maxZ));
-        }, py::arg("minX"), py::arg("minY"), py::arg("minZ"), py::arg("maxX"), py::arg("maxY"), py::arg("maxZ"));
+        }, py::arg("minX"), py::arg("minY"), py::arg("minZ"), py::arg("maxX"), py::arg("maxY"), py::arg("maxZ"))
+        // "for use by applications" per the engine's own comment -- lets an app cache each
+        // mesh's bottom-level acceleration structure directly on the mesh, e.g. while building
+        // BLASes once and looking them up per-instance when building the TLAS.
+        .def_property("accelStruct",
+            [](const donut::engine::MeshInfo &self) -> nvrhi::rt::IAccelStruct* { return self.accelStruct.Get(); },
+            [](donut::engine::MeshInfo &self, nvrhi::rt::IAccelStruct* as) { self.accelStruct = as; },
+            py::return_value_policy::reference);
 
     // SceneGraphLeaf is abstract (pure virtual Clone()) -- bound base-only, for MeshInstance/
     // Light/DirectionalLight below to derive from and for SetLeaf()/AttachLeafNode() to accept.
@@ -1665,7 +1728,8 @@ PYBIND11_MODULE(_pydonut, m) {
 
     py::class_<donut::engine::MeshInstance, donut::engine::SceneGraphLeaf, std::shared_ptr<donut::engine::MeshInstance>>(m, "MeshInstance")
         .def(py::init<std::shared_ptr<donut::engine::MeshInfo>>(), py::arg("mesh"))
-        .def("GetMesh", &donut::engine::MeshInstance::GetMesh);
+        .def("GetMesh", &donut::engine::MeshInstance::GetMesh)
+        .def("GetNode", &donut::engine::MeshInstance::GetNode, py::return_value_policy::reference);
 
     // Light is abstract (pure virtual GetLightType()) -- bound base-only, so
     // SceneGraph.GetLights() can return a homogeneous list regardless of light subtype.
@@ -1698,7 +1762,16 @@ PYBIND11_MODULE(_pydonut, m) {
         .def("GetRootNode", &donut::engine::SceneGraph::GetRootNode)
         .def("AttachLeafNode", &donut::engine::SceneGraph::AttachLeafNode, py::arg("parent"), py::arg("leaf"))
         .def("Refresh", &donut::engine::SceneGraph::Refresh, py::arg("frameIndex"))
-        .def("GetLights", &donut::engine::SceneGraph::GetLights);
+        .def("GetLights", &donut::engine::SceneGraph::GetLights)
+        // ResourceTracker<MeshInfo> isn't a plain container pybind11/stl.h can convert
+        // automatically, so it's copied into a plain vector here.
+        .def("GetMeshes", [](const donut::engine::SceneGraph &self) {
+            std::vector<std::shared_ptr<donut::engine::MeshInfo>> meshes;
+            for (const auto &mesh : self.GetMeshes())
+                meshes.push_back(mesh);
+            return meshes;
+        })
+        .def("GetMeshInstances", &donut::engine::SceneGraph::GetMeshInstances);
 
     // GBufferRenderTargets/GBufferFillPass/DeferredLightingPass/ForwardShadingPass/
     // TemporalAntiAliasingPass/draw strategies/RenderView/RenderCompositeView below implement

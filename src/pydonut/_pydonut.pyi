@@ -510,12 +510,19 @@ class BindingLayoutItem():
     @staticmethod
     def TypedBuffer_UAV(slot: int) -> BindingLayoutItem: ...
     @staticmethod
+    def ConstantBuffer(slot: int) -> BindingLayoutItem: ...
+    @staticmethod
     def VolatileConstantBuffer(slot: int) -> BindingLayoutItem: ...
+    @staticmethod
+    def Sampler(slot: int) -> BindingLayoutItem: ...
     @staticmethod
     def RayTracingAccelStruct(slot: int) -> BindingLayoutItem: ...
 
 class BindingLayoutDesc():
     visibility: ShaderType
+    # 0 (default) unless the layout needs a non-zero register space -- e.g. a per-hit-group
+    # "local" root signature space in a ray tracing pipeline that also has a "global" space at 0.
+    registerSpace: int
     bindings: list[BindingLayoutItem]
     def __init__(self: BindingLayoutDesc) -> None: ...
 
@@ -554,8 +561,14 @@ class BindingSetItem():
     def ConstantBuffer(slot: int, buffer: Buffer, range: BufferRange) -> BindingSetItem: ...
     @staticmethod
     def StructuredBuffer_SRV(slot: int, buffer: Buffer) -> BindingSetItem: ...
+    @overload
     @staticmethod
     def TypedBuffer_SRV(slot: int, buffer: Buffer) -> BindingSetItem: ...
+    # Overload with an explicit format and byte range, for viewing one slice of a larger buffer
+    # through a specific typed format -- e.g. one mesh's slice of a shared index/vertex buffer.
+    @overload
+    @staticmethod
+    def TypedBuffer_SRV(slot: int, buffer: Buffer, format: Format, range: BufferRange) -> BindingSetItem: ...
     @staticmethod
     def TypedBuffer_UAV(slot: int, buffer: Buffer) -> BindingSetItem: ...
     @staticmethod
@@ -587,6 +600,10 @@ class GeometryTriangles():
     vertexBuffer: Optional[Buffer]
     indexFormat: Format
     vertexFormat: Format
+    # Byte offsets into indexBuffer/vertexBuffer -- 0 (default) for a geometry that owns its
+    # whole buffer; non-zero when several geometries/meshes share one buffer.
+    indexOffset: int
+    vertexOffset: int
     indexCount: int
     vertexCount: int
     vertexStride: int
@@ -612,6 +629,9 @@ class InstanceDesc():
     def setInstanceContributionToHitGroupIndex(self: InstanceDesc, value: int) -> None: ...
     def setFlags(self: InstanceDesc, value: InstanceFlags) -> None: ...
     def setBLAS(self: InstanceDesc, value: AccelStruct) -> None: ...
+    # Fills the row-major instance transform from a scene graph node's world transform --
+    # math types aren't exposed to Python, so this hides the conversion behind one call.
+    def setTransformFromNode(self: InstanceDesc, node: SceneGraphNode) -> None: ...
 
 class PipelineShaderDesc():
     def __init__(self: PipelineShaderDesc) -> None: ...
@@ -621,9 +641,15 @@ class PipelineHitGroupDesc():
     def __init__(self: PipelineHitGroupDesc) -> None: ...
     def setExportName(self: PipelineHitGroupDesc, value: str) -> None: ...
     def setClosestHitShader(self: PipelineHitGroupDesc, shader: Shader) -> None: ...
+    # A "local" binding layout for this hit group specifically, distinct from the pipeline's
+    # global binding layout(s) -- e.g. per-geometry material bindings.
+    def setBindingLayout(self: PipelineHitGroupDesc, layout: BindingLayout) -> None: ...
 
 class RayTracingPipelineDesc():
     maxPayloadSize: int
+    # Default 1 (no recursive TraceRay calls). Raise when a closest-hit/any-hit shader itself
+    # calls TraceRay (e.g. tracing a shadow or reflection ray from within a hit shader).
+    maxRecursionDepth: int
     def __init__(self: RayTracingPipelineDesc) -> None: ...
     def addShader(self: RayTracingPipelineDesc, shader: PipelineShaderDesc) -> None: ...
     def addHitGroup(self: RayTracingPipelineDesc, hitGroup: PipelineHitGroupDesc) -> None: ...
@@ -785,6 +811,10 @@ class CommonRenderPasses():
     @overload
     def BlitTexture(self: CommonRenderPasses, commandList: CommandList, params: BlitParameters, bindingCache: Optional[BindingCache] = None) -> None: ...
     m_AnisotropicWrapSampler: Sampler
+    m_LinearWrapSampler: Sampler
+    # Fallback textures for materials missing a given texture slot.
+    m_WhiteTexture: Texture
+    m_BlackTexture: Texture
 
 class DescriptorTableManager():
     def __init__(self: DescriptorTableManager, device: Device, layout: BindingLayout) -> None: ...
@@ -812,6 +842,7 @@ class BufferGroup():
     vertexBuffer: Optional[Buffer]
     instanceBuffer: Optional[Buffer]
     def setVertexBufferRange(self: BufferGroup, attr: VertexAttribute, byteOffset: int, byteSize: int) -> None: ...
+    def getVertexBufferRange(self: BufferGroup, attr: VertexAttribute) -> BufferRange: ...
 
 class Material():
     def __init__(self: Material) -> None: ...
@@ -819,6 +850,12 @@ class Material():
     useSpecularGlossModel: bool
     enableBaseOrDiffuseTexture: bool
     baseOrDiffuseTexture: Optional[LoadedTexture]
+    metalRoughOrSpecularTexture: Optional[LoadedTexture]
+    normalTexture: Optional[LoadedTexture]
+    emissiveTexture: Optional[LoadedTexture]
+    occlusionTexture: Optional[LoadedTexture]
+    transmissionTexture: Optional[LoadedTexture]
+    opacityTexture: Optional[LoadedTexture]
     materialConstants: Optional[Buffer]
 
 # Wraps Material.FillConstantBuffer() -- the generated MaterialConstants shader-cbuffer
@@ -830,6 +867,13 @@ class MeshGeometry():
     material: Optional[Material]
     numIndices: int
     numVertices: int
+    # Assigned by the scene graph when the mesh is added to the scene; used to compute a
+    # stable per-geometry shader-table hit-group index.
+    globalGeometryIndex: int
+    # This geometry's index/vertex range within its owning mesh's shared index/vertex buffers --
+    # combine with MeshInfo.indexOffset/vertexOffset to get the absolute range.
+    indexOffsetInMesh: int
+    vertexOffsetInMesh: int
 
 class MeshInfo():
     def __init__(self: MeshInfo) -> None: ...
@@ -837,8 +881,14 @@ class MeshInfo():
     buffers: Optional[BufferGroup]
     totalIndices: int
     totalVertices: int
+    indexOffset: int
+    vertexOffset: int
     geometries: list[MeshGeometry]
     def SetObjectSpaceBounds(self: MeshInfo, minX: float, minY: float, minZ: float, maxX: float, maxY: float, maxZ: float) -> None: ...
+    # "For use by applications" per the engine itself -- lets an app cache each mesh's bottom-
+    # level acceleration structure directly on the mesh (build BLASes once, look them up per
+    # instance when building the TLAS).
+    accelStruct: Optional[AccelStruct]
 
 class SceneGraphLeaf():
     def SetName(self: SceneGraphLeaf, name: str) -> None: ...
@@ -846,6 +896,7 @@ class SceneGraphLeaf():
 class MeshInstance(SceneGraphLeaf):
     def __init__(self: MeshInstance, mesh: MeshInfo) -> None: ...
     def GetMesh(self: MeshInstance) -> MeshInfo: ...
+    def GetNode(self: MeshInstance) -> SceneGraphNode: ...
 
 class Light(SceneGraphLeaf):
     def SetDirection(self: Light, x: float, y: float, z: float) -> None: ...
@@ -870,6 +921,8 @@ class SceneGraph():
     def AttachLeafNode(self: SceneGraph, parent: SceneGraphNode, leaf: SceneGraphLeaf) -> SceneGraphNode: ...
     def Refresh(self: SceneGraph, frameIndex: int) -> None: ...
     def GetLights(self: SceneGraph) -> list[Light]: ...
+    def GetMeshes(self: SceneGraph) -> list[MeshInfo]: ...
+    def GetMeshInstances(self: SceneGraph) -> list[MeshInstance]: ...
 
 class Scene():
     def __init__(self: Scene, device: Device, shaderFactory: ShaderFactory, fs: IFileSystem, textureCache: TextureCache, descriptorTable: Optional[DescriptorTableManager]) -> None: ...
