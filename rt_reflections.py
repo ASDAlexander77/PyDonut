@@ -387,6 +387,7 @@ if __name__ == "__main__":
                 mesh = instance.GetMesh()
 
                 instanceDesc = pyd.InstanceDesc()
+                assert mesh.accelStruct is not None
                 instanceDesc.setBLAS(mesh.accelStruct)
                 instanceDesc.setInstanceMask(1)
                 instanceDesc.setInstanceContributionToHitGroupIndex(mesh.geometries[0].globalGeometryIndex * 2)
@@ -495,6 +496,7 @@ if __name__ == "__main__":
 
             state = pyd.RayTracingState()
             state.shaderTable = self.shaderTable
+            assert self.bindingSet is not None
             state.addBindingSet(self.bindingSet)
             self.commandList.setRayTracingState(state)
 
