@@ -1509,6 +1509,14 @@ PYBIND11_MODULE(_pydonut, m) {
     }, py::arg("buffer"), py::arg("data"), py::arg("destOffsetBytes") = 0);
     commandList.def("copyBuffer", &nvrhi::ICommandList::copyBuffer,
         py::arg("dest"), py::arg("destOffsetBytes"), py::arg("src"), py::arg("srcOffsetBytes"), py::arg("dataSizeBytes"));
+    // Whole-resource texture-to-texture copy (both default TextureSlice()s resolve to "entire
+    // texture") -- a plain byte copy, unlike CommonRenderPasses.BlitTexture which samples
+    // through a shader (and can apply unwanted color-space/tonemap conversions on data that's
+    // already in its final display encoding, e.g. work_graphs.py's RGBA8_UNORM LDR buffer).
+    // Matches work_graphs_d3d12.cpp:880's own commandList->copyTexture(...) call exactly.
+    commandList.def("copyTexture", [](nvrhi::ICommandList &self, nvrhi::ITexture* dest, nvrhi::ITexture* src) {
+        self.copyTexture(dest, nvrhi::TextureSlice(), src, nvrhi::TextureSlice());
+    }, py::arg("dest"), py::arg("src"));
 #ifdef NVRHI_WITH_DX12
     // NOTE: SetProgram is called directly on the native D3D12 command list and nvrhi's own
     // cached compute state has no idea the bound program changed. A later commandList.
