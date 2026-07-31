@@ -57,7 +57,44 @@ if __name__ == "__main__":
         )
         backingSize = workGraphPipeline.getBackingMemorySize()
         print(f"Work graph backing memory size: {backingSize} bytes")
-        return backingSize > 0
+
+        backingBufferDesc = pyd.BufferDesc()
+        backingBufferDesc.byteSize = max(backingSize, 1)
+        backingBufferDesc.canHaveUAVs = True
+        backingBufferDesc.debugName = "WorkGraphBackingMemory"
+        backingBufferDesc.initialState = pyd.ResourceStates.UnorderedAccess
+        backingBufferDesc.keepInitialState = True
+        backingBuffer = device.createBuffer(backingBufferDesc)
+
+        readbackBufferDesc = pyd.BufferDesc()
+        readbackBufferDesc.byteSize = outputBufferDesc.byteSize
+        readbackBufferDesc.cpuAccess = pyd.CpuAccessMode.Read
+        readbackBufferDesc.debugName = "ReadbackBuffer"
+        readbackBufferDesc.initialState = pyd.ResourceStates.CopyDest
+        readbackBufferDesc.keepInitialState = True
+        readbackBuffer = device.createBuffer(readbackBufferDesc)
+
+        commandList = device.createCommandList()
+        commandList.open()
+
+        state = pyd.ComputeState()
+        state.pipeline = dummyPipeline
+        state.addBindingSet(bindingSet)
+        commandList.setComputeState(state)
+
+        commandList.dispatchWorkGraph(workGraphPipeline, backingBuffer, True, 1)
+
+        commandList.copyBuffer(readbackBuffer, 0, outputBuffer, 0, readbackBufferDesc.byteSize)
+
+        commandList.close()
+        device.executeCommandList(commandList)
+        device.waitForIdle()
+
+        import struct
+        computedResult = struct.unpack("<I", device.readBuffer(readbackBuffer, 4))[0]
+        expectedResult = 0xC0FFEE
+        print(f"Expected result: {expectedResult:#x}, computed result: {computedResult:#x}")
+        return computedResult == expectedResult
 
     is_debug = "-debug" in sys.argv
     pyd.log.ConsoleApplicationMode()

@@ -1394,6 +1394,95 @@ PYBIND11_MODULE(_pydonut, m) {
     });
     device.def("waitForIdle", &nvrhi::IDevice::waitForIdle);
 
+#ifdef NVRHI_WITH_DX12
+    class D3D12WorkGraphPipeline
+    {
+    public:
+        D3D12WorkGraphPipeline(
+            nvrhi::IDevice* device,
+            nvrhi::IShaderLibrary* shaderLibrary,
+            nvrhi::IComputePipeline* rootSigSourcePipeline,
+            const std::string& workGraphName)
+        {
+            ID3D12Device* deviceD3D12 = device->getNativeObject(nvrhi::ObjectTypes::D3D12_Device);
+            if (!deviceD3D12)
+                throw std::runtime_error("D3D12WorkGraphPipeline: device is not a D3D12 device");
+
+            D3D12_FEATURE_DATA_D3D12_OPTIONS21 options = {};
+            HRESULT hr = deviceD3D12->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS21, &options, sizeof(options));
+            if (FAILED(hr) || options.WorkGraphsTier == D3D12_WORK_GRAPHS_TIER_NOT_SUPPORTED)
+                throw std::runtime_error("D3D12WorkGraphPipeline: this device/driver does not support D3D12 Work Graphs");
+
+            Microsoft::WRL::ComPtr<ID3D12Device5> deviceD3D12_5;
+            hr = deviceD3D12->QueryInterface(IID_PPV_ARGS(&deviceD3D12_5));
+            if (FAILED(hr))
+                throw std::runtime_error("D3D12WorkGraphPipeline: could not query ID3D12Device5");
+
+            ID3D12RootSignature* rootSignature = rootSigSourcePipeline->getNativeObject(nvrhi::ObjectTypes::D3D12_RootSignature);
+            if (!rootSignature)
+                throw std::runtime_error("D3D12WorkGraphPipeline: rootSigSourcePipeline has no D3D12 root signature");
+
+            D3D12_SHADER_BYTECODE libBytecode = {};
+            shaderLibrary->getBytecode(&libBytecode.pShaderBytecode, &libBytecode.BytecodeLength);
+
+            m_wideName.assign(workGraphName.begin(), workGraphName.end());
+
+            CD3DX12_STATE_OBJECT_DESC soDesc(D3D12_STATE_OBJECT_TYPE_EXECUTABLE);
+
+            auto* librarySubobject = soDesc.CreateSubobject<CD3DX12_DXIL_LIBRARY_SUBOBJECT>();
+            librarySubobject->SetDXILLibrary(&libBytecode);
+
+            auto* workGraphSubobject = soDesc.CreateSubobject<CD3DX12_WORK_GRAPH_SUBOBJECT>();
+            workGraphSubobject->SetProgramName(m_wideName.c_str());
+            workGraphSubobject->IncludeAllAvailableNodes();
+
+            auto* rootSigSubobject = soDesc.CreateSubobject<CD3DX12_GLOBAL_ROOT_SIGNATURE_SUBOBJECT>();
+            rootSigSubobject->SetRootSignature(rootSignature);
+
+            hr = deviceD3D12_5->CreateStateObject(soDesc, IID_PPV_ARGS(&m_stateObject));
+            if (FAILED(hr))
+            {
+                char message[128];
+                snprintf(message, sizeof(message), "D3D12WorkGraphPipeline: CreateStateObject failed with HRESULT 0x%08X", (unsigned)hr);
+                throw std::runtime_error(message);
+            }
+
+            Microsoft::WRL::ComPtr<ID3D12StateObjectProperties1> soProperties;
+            hr = m_stateObject->QueryInterface(IID_PPV_ARGS(&soProperties));
+            if (FAILED(hr))
+                throw std::runtime_error("D3D12WorkGraphPipeline: could not query ID3D12StateObjectProperties1");
+            m_programIdentifier = soProperties->GetProgramIdentifier(m_wideName.c_str());
+
+            Microsoft::WRL::ComPtr<ID3D12WorkGraphProperties> workGraphProperties;
+            hr = m_stateObject->QueryInterface(IID_PPV_ARGS(&workGraphProperties));
+            if (FAILED(hr))
+                throw std::runtime_error("D3D12WorkGraphPipeline: could not query ID3D12WorkGraphProperties");
+
+            uint32_t workGraphIndex = workGraphProperties->GetWorkGraphIndex(m_wideName.c_str());
+            if (workGraphIndex == UINT32_MAX)
+                throw std::runtime_error("D3D12WorkGraphPipeline: work graph name not found in the state object");
+
+            D3D12_WORK_GRAPH_MEMORY_REQUIREMENTS memReqs = {};
+            workGraphProperties->GetWorkGraphMemoryRequirements(workGraphIndex, &memReqs);
+            m_backingMemorySize = memReqs.MaxSizeInBytes;
+        }
+
+        uint64_t getBackingMemorySize() const { return m_backingMemorySize; }
+        D3D12_PROGRAM_IDENTIFIER getProgramIdentifier() const { return m_programIdentifier; }
+
+    private:
+        Microsoft::WRL::ComPtr<ID3D12StateObject> m_stateObject;
+        std::wstring m_wideName;
+        D3D12_PROGRAM_IDENTIFIER m_programIdentifier{};
+        uint64_t m_backingMemorySize = 0;
+    };
+
+    py::class_<D3D12WorkGraphPipeline, std::shared_ptr<D3D12WorkGraphPipeline>>(m, "D3D12WorkGraphPipeline")
+        .def(py::init<nvrhi::IDevice*, nvrhi::IShaderLibrary*, nvrhi::IComputePipeline*, const std::string&>(),
+            py::arg("device"), py::arg("shaderLibrary"), py::arg("rootSigSourcePipeline"), py::arg("workGraphName"))
+        .def("getBackingMemorySize", &D3D12WorkGraphPipeline::getBackingMemorySize);
+#endif // NVRHI_WITH_DX12
+
     // open/close and the calls below marked with gil_scoped_release are the ones
     // threaded_rendering.py's worker threads call concurrently while recording independent
     // per-face command lists; releasing the GIL here is what lets Python's threading actually
@@ -1416,6 +1505,39 @@ PYBIND11_MODULE(_pydonut, m) {
     }, py::arg("buffer"), py::arg("data"), py::arg("destOffsetBytes") = 0);
     commandList.def("copyBuffer", &nvrhi::ICommandList::copyBuffer,
         py::arg("dest"), py::arg("destOffsetBytes"), py::arg("src"), py::arg("srcOffsetBytes"), py::arg("dataSizeBytes"));
+#ifdef NVRHI_WITH_DX12
+    commandList.def("dispatchWorkGraph", [](nvrhi::ICommandList &self, D3D12WorkGraphPipeline &pipeline,
+        nvrhi::IBuffer* backingMemoryBuffer, bool initialize, uint32_t numRecords) {
+        ID3D12GraphicsCommandList* baseCommandList = self.getNativeObject(nvrhi::ObjectTypes::D3D12_GraphicsCommandList);
+        if (!baseCommandList)
+            throw std::runtime_error("dispatchWorkGraph: command list is not a D3D12 command list");
+
+        Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList10> commandListD3D12;
+        HRESULT hr = baseCommandList->QueryInterface(IID_PPV_ARGS(&commandListD3D12));
+        if (FAILED(hr))
+            throw std::runtime_error("dispatchWorkGraph: could not query ID3D12GraphicsCommandList10 (requires a recent Agility SDK)");
+
+        ID3D12Resource* backingMemoryD3D12 = backingMemoryBuffer->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource);
+        if (!backingMemoryD3D12)
+            throw std::runtime_error("dispatchWorkGraph: backingMemoryBuffer has no D3D12 resource");
+
+        D3D12_SET_PROGRAM_DESC setProgramDesc = {};
+        setProgramDesc.Type = D3D12_PROGRAM_TYPE_WORK_GRAPH;
+        setProgramDesc.WorkGraph.ProgramIdentifier = pipeline.getProgramIdentifier();
+        setProgramDesc.WorkGraph.Flags = initialize ? D3D12_SET_WORK_GRAPH_FLAG_INITIALIZE : D3D12_SET_WORK_GRAPH_FLAG_NONE;
+        setProgramDesc.WorkGraph.BackingMemory.StartAddress = backingMemoryD3D12->GetGPUVirtualAddress();
+        setProgramDesc.WorkGraph.BackingMemory.SizeInBytes = backingMemoryD3D12->GetDesc().Width;
+        commandListD3D12->SetProgram(&setProgramDesc);
+
+        D3D12_DISPATCH_GRAPH_DESC dispatchDesc = {};
+        dispatchDesc.Mode = D3D12_DISPATCH_MODE_NODE_CPU_INPUT;
+        dispatchDesc.NodeCPUInput.EntrypointIndex = 0;
+        dispatchDesc.NodeCPUInput.NumRecords = numRecords;
+        dispatchDesc.NodeCPUInput.pRecords = nullptr;
+        dispatchDesc.NodeCPUInput.RecordStrideInBytes = 0;
+        commandListD3D12->DispatchGraph(&dispatchDesc);
+    }, py::arg("pipeline"), py::arg("backingMemoryBuffer"), py::arg("initialize"), py::arg("numRecords") = 1);
+#endif // NVRHI_WITH_DX12
     commandList.def("buildTopLevelAccelStruct", [](nvrhi::ICommandList &self, nvrhi::rt::IAccelStruct* as, const std::vector<nvrhi::rt::InstanceDesc> &instances) {
         self.buildTopLevelAccelStruct(as, instances.data(), instances.size());
     }, py::arg("as"), py::arg("instances"));
@@ -1584,95 +1706,6 @@ PYBIND11_MODULE(_pydonut, m) {
         py::arg("sourceName") = "shader.hlsl", py::arg("shaderModel") = "6_5",
         py::arg("includePaths") = std::vector<std::string>{});
 #endif
-
-#ifdef NVRHI_WITH_DX12
-    class D3D12WorkGraphPipeline
-    {
-    public:
-        D3D12WorkGraphPipeline(
-            nvrhi::IDevice* device,
-            nvrhi::IShaderLibrary* shaderLibrary,
-            nvrhi::IComputePipeline* rootSigSourcePipeline,
-            const std::string& workGraphName)
-        {
-            ID3D12Device* deviceD3D12 = device->getNativeObject(nvrhi::ObjectTypes::D3D12_Device);
-            if (!deviceD3D12)
-                throw std::runtime_error("D3D12WorkGraphPipeline: device is not a D3D12 device");
-
-            D3D12_FEATURE_DATA_D3D12_OPTIONS21 options = {};
-            HRESULT hr = deviceD3D12->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS21, &options, sizeof(options));
-            if (FAILED(hr) || options.WorkGraphsTier == D3D12_WORK_GRAPHS_TIER_NOT_SUPPORTED)
-                throw std::runtime_error("D3D12WorkGraphPipeline: this device/driver does not support D3D12 Work Graphs");
-
-            Microsoft::WRL::ComPtr<ID3D12Device5> deviceD3D12_5;
-            hr = deviceD3D12->QueryInterface(IID_PPV_ARGS(&deviceD3D12_5));
-            if (FAILED(hr))
-                throw std::runtime_error("D3D12WorkGraphPipeline: could not query ID3D12Device5");
-
-            ID3D12RootSignature* rootSignature = rootSigSourcePipeline->getNativeObject(nvrhi::ObjectTypes::D3D12_RootSignature);
-            if (!rootSignature)
-                throw std::runtime_error("D3D12WorkGraphPipeline: rootSigSourcePipeline has no D3D12 root signature");
-
-            D3D12_SHADER_BYTECODE libBytecode = {};
-            shaderLibrary->getBytecode(&libBytecode.pShaderBytecode, &libBytecode.BytecodeLength);
-
-            m_wideName.assign(workGraphName.begin(), workGraphName.end());
-
-            CD3DX12_STATE_OBJECT_DESC soDesc(D3D12_STATE_OBJECT_TYPE_EXECUTABLE);
-
-            auto* librarySubobject = soDesc.CreateSubobject<CD3DX12_DXIL_LIBRARY_SUBOBJECT>();
-            librarySubobject->SetDXILLibrary(&libBytecode);
-
-            auto* workGraphSubobject = soDesc.CreateSubobject<CD3DX12_WORK_GRAPH_SUBOBJECT>();
-            workGraphSubobject->SetProgramName(m_wideName.c_str());
-            workGraphSubobject->IncludeAllAvailableNodes();
-
-            auto* rootSigSubobject = soDesc.CreateSubobject<CD3DX12_GLOBAL_ROOT_SIGNATURE_SUBOBJECT>();
-            rootSigSubobject->SetRootSignature(rootSignature);
-
-            hr = deviceD3D12_5->CreateStateObject(soDesc, IID_PPV_ARGS(&m_stateObject));
-            if (FAILED(hr))
-            {
-                char message[128];
-                snprintf(message, sizeof(message), "D3D12WorkGraphPipeline: CreateStateObject failed with HRESULT 0x%08X", (unsigned)hr);
-                throw std::runtime_error(message);
-            }
-
-            Microsoft::WRL::ComPtr<ID3D12StateObjectProperties1> soProperties;
-            hr = m_stateObject->QueryInterface(IID_PPV_ARGS(&soProperties));
-            if (FAILED(hr))
-                throw std::runtime_error("D3D12WorkGraphPipeline: could not query ID3D12StateObjectProperties1");
-            m_programIdentifier = soProperties->GetProgramIdentifier(m_wideName.c_str());
-
-            Microsoft::WRL::ComPtr<ID3D12WorkGraphProperties> workGraphProperties;
-            hr = m_stateObject->QueryInterface(IID_PPV_ARGS(&workGraphProperties));
-            if (FAILED(hr))
-                throw std::runtime_error("D3D12WorkGraphPipeline: could not query ID3D12WorkGraphProperties");
-
-            uint32_t workGraphIndex = workGraphProperties->GetWorkGraphIndex(m_wideName.c_str());
-            if (workGraphIndex == UINT32_MAX)
-                throw std::runtime_error("D3D12WorkGraphPipeline: work graph name not found in the state object");
-
-            D3D12_WORK_GRAPH_MEMORY_REQUIREMENTS memReqs = {};
-            workGraphProperties->GetWorkGraphMemoryRequirements(workGraphIndex, &memReqs);
-            m_backingMemorySize = memReqs.MaxSizeInBytes;
-        }
-
-        uint64_t getBackingMemorySize() const { return m_backingMemorySize; }
-        D3D12_PROGRAM_IDENTIFIER getProgramIdentifier() const { return m_programIdentifier; }
-
-    private:
-        Microsoft::WRL::ComPtr<ID3D12StateObject> m_stateObject;
-        std::wstring m_wideName;
-        D3D12_PROGRAM_IDENTIFIER m_programIdentifier{};
-        uint64_t m_backingMemorySize = 0;
-    };
-
-    py::class_<D3D12WorkGraphPipeline, std::shared_ptr<D3D12WorkGraphPipeline>>(m, "D3D12WorkGraphPipeline")
-        .def(py::init<nvrhi::IDevice*, nvrhi::IShaderLibrary*, nvrhi::IComputePipeline*, const std::string&>(),
-            py::arg("device"), py::arg("shaderLibrary"), py::arg("rootSigSourcePipeline"), py::arg("workGraphName"))
-        .def("getBackingMemorySize", &D3D12WorkGraphPipeline::getBackingMemorySize);
-#endif // NVRHI_WITH_DX12
 
     py::class_<donut::vfs::IFileSystem, std::shared_ptr<donut::vfs::IFileSystem>>(m, "IFileSystem");
     py::class_<donut::vfs::NativeFileSystem, donut::vfs::IFileSystem, std::shared_ptr<donut::vfs::NativeFileSystem>>(m, "NativeFileSystem")
