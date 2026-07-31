@@ -1406,7 +1406,11 @@ PYBIND11_MODULE(_pydonut, m) {
             nvrhi::IDevice* device,
             nvrhi::IShaderLibrary* shaderLibrary,
             nvrhi::IComputePipeline* rootSigSourcePipeline,
-            const std::string& workGraphName)
+            const std::string& workGraphName,
+            const std::string& broadcastEntryNodeName,
+            uint32_t dispatchGridX,
+            uint32_t dispatchGridY,
+            uint32_t dispatchGridZ)
         {
             ID3D12Device* deviceD3D12 = device->getNativeObject(nvrhi::ObjectTypes::D3D12_Device);
             if (!deviceD3D12)
@@ -1439,6 +1443,18 @@ PYBIND11_MODULE(_pydonut, m) {
             auto* workGraphSubobject = soDesc.CreateSubobject<CD3DX12_WORK_GRAPH_SUBOBJECT>();
             workGraphSubobject->SetProgramName(m_wideName.c_str());
             workGraphSubobject->IncludeAllAvailableNodes();
+
+            // Override a broadcasting entry node's [NodeDispatchGrid()] attribute, which HLSL
+            // can only express as a compile-time constant. Sizes that depend on the viewport
+            // (e.g. a tile count) must be supplied here instead -- the alternative, putting
+            // SV_DispatchGrid in the entry record, costs performance on every launch for a
+            // value that only changes on resize. Empty name = keep the shader's own attribute.
+            if (!broadcastEntryNodeName.empty())
+            {
+                m_wideEntryNodeName.assign(broadcastEntryNodeName.begin(), broadcastEntryNodeName.end());
+                auto* nodeOverrides = workGraphSubobject->CreateBroadcastingLaunchNodeOverrides(m_wideEntryNodeName.c_str());
+                nodeOverrides->DispatchGrid(dispatchGridX, dispatchGridY, dispatchGridZ);
+            }
 
             auto* rootSigSubobject = soDesc.CreateSubobject<CD3DX12_GLOBAL_ROOT_SIGNATURE_SUBOBJECT>();
             rootSigSubobject->SetRootSignature(rootSignature);
@@ -1477,13 +1493,19 @@ PYBIND11_MODULE(_pydonut, m) {
     private:
         Microsoft::WRL::ComPtr<ID3D12StateObject> m_stateObject;
         std::wstring m_wideName;
+        // Kept alive as a member because CreateBroadcastingLaunchNodeOverrides stores the
+        // pointer, and it must still be valid when CreateStateObject reads it below.
+        std::wstring m_wideEntryNodeName;
         D3D12_PROGRAM_IDENTIFIER m_programIdentifier{};
         uint64_t m_backingMemorySize = 0;
     };
 
     py::class_<D3D12WorkGraphPipeline, std::shared_ptr<D3D12WorkGraphPipeline>>(m, "D3D12WorkGraphPipeline")
-        .def(py::init<nvrhi::IDevice*, nvrhi::IShaderLibrary*, nvrhi::IComputePipeline*, const std::string&>(),
-            py::arg("device"), py::arg("shaderLibrary"), py::arg("rootSigSourcePipeline"), py::arg("workGraphName"))
+        .def(py::init<nvrhi::IDevice*, nvrhi::IShaderLibrary*, nvrhi::IComputePipeline*, const std::string&,
+                const std::string&, uint32_t, uint32_t, uint32_t>(),
+            py::arg("device"), py::arg("shaderLibrary"), py::arg("rootSigSourcePipeline"), py::arg("workGraphName"),
+            py::arg("broadcastEntryNodeName") = "", py::arg("dispatchGridX") = 1,
+            py::arg("dispatchGridY") = 1, py::arg("dispatchGridZ") = 1)
         .def("getBackingMemorySize", &D3D12WorkGraphPipeline::getBackingMemorySize);
 #endif // NVRHI_WITH_DX12
 

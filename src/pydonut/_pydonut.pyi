@@ -315,12 +315,19 @@ def CompileShaderLibrary(
 # ID3D12StateObject for a single-library work graph; raises RuntimeError if the device/driver
 # doesn't report D3D12_WORK_GRAPHS_TIER support, or if state object creation fails.
 class D3D12WorkGraphPipeline:
+    # broadcastEntryNodeName overrides that node's [NodeDispatchGrid()] attribute, which HLSL
+    # can only express as a compile-time constant -- use it for grids sized from the viewport
+    # (e.g. a tile count). Leave it empty to keep whatever the shader declared.
     def __init__(
         self,
         device: Device,
         shaderLibrary: ShaderLibrary,
         rootSigSourcePipeline: ComputePipeline,
         workGraphName: str,
+        broadcastEntryNodeName: str = "",
+        dispatchGridX: int = 1,
+        dispatchGridY: int = 1,
+        dispatchGridZ: int = 1,
     ) -> None: ...
     def getBackingMemorySize(self) -> int: ...
 

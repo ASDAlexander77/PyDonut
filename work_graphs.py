@@ -436,6 +436,12 @@ if __name__ == "__main__":
     DeferredShadingParam_TileWidth = 8
     DeferredShadingParam_TileHeight = 4
 
+    # Program name the work graph state object is built under and later looked up by, matching
+    # WORKGRAPH_NAME in work_graphs_d3d12.cpp:42. Arbitrary, but it must be identical between
+    # the CD3DX12_WORK_GRAPH_SUBOBJECT's SetProgramName and GetProgramIdentifier lookups (both
+    # done inside the D3D12WorkGraphPipeline binding).
+    WORK_GRAPH_NAME = "D3D12WorkGraphs"
+
     def GetLightTileCountX(viewportWidth: int) -> int:
         return (viewportWidth + DeferredShadingParam_TileWidth - 1) // DeferredShadingParam_TileWidth
 
@@ -496,6 +502,20 @@ if __name__ == "__main__":
             self.time_in_seconds = 0.0
             self.time_diff_this_frame = 0.0
             self.force_reset_animation = True
+            # Which shading technique to use. Set from the command line, toggled with SPACE.
+            # Only honoured once load_scene_pipelines has actually built a work graph -- see
+            # use_work_graph_now().
+            self.want_work_graph = False
+            self.work_graph_pipeline = None
+            self.work_graph_backing = None
+            self.init_work_graph_backing = True
+
+        def toggle_technique(self) -> None:
+            self.want_work_graph = not self.want_work_graph
+            # The backing memory must be re-initialized whenever the graph starts being used
+            # again, since something else may have used that memory in between -- same reason
+            # work_graphs_d3d12.cpp:814 sets m_InitWorkGraphBackingMemory on a technique change.
+            self.init_work_graph_backing = True
 
         def init_scene(self, commandList) -> None:
             self.scene.CreateAssets(self.device, commandList)
@@ -561,7 +581,8 @@ if __name__ == "__main__":
             self.constant_buffer = self.device.createBuffer(cbDesc)
 
             width, height = self.render_targets.size
-            tileCount = GetLightTileCountX(width) * GetLightTileCountY(height)
+            tilesX, tilesY = GetLightTileCountX(width), GetLightTileCountY(height)
+            tileCount = tilesX * tilesY
             culledLightsDesc = pyd.BufferDesc()
             culledLightsDesc.byteSize = tileCount * DeferredShadingParam_MaxLightsPerTile * 4
             culledLightsDesc.structStride = 4
@@ -659,7 +680,59 @@ if __name__ == "__main__":
                 "deferred_shading": self.binding_sets_deferred_shading,
             }
 
+            self._load_work_graph_pipeline(shader_dir, include_paths, api, tilesX, tilesY)
+
             self.force_reset_animation = True
+
+        def _load_work_graph_pipeline(self, shader_dir, include_paths, api, tilesX: int, tilesY: int) -> None:
+            # The work graph replaces BOTH the light-culling and deferred-shading dispatches
+            # with one launch: its LightCull_Node entry culls per tile and then spawns
+            # Sky_Node / DarkTile_Node / one Material_Nodes[materialType] node per tile, so
+            # each tile only runs the material shading it actually needs.
+            #
+            # It reuses deferred_shading's root signature and binding set rather than getting
+            # its own. work_graph_broadcasting.hlsl declares a strict SUBSET of that pass's
+            # registers (b0, b1, t0, t1, t2, t4, u1 -- it has no t3 culled-lights buffer,
+            # since culled lights travel inside the node records instead), and binding a
+            # superset root signature is legal in D3D12. Sharing also means the state object
+            # can take shade_pso's root signature directly, matching how the C++ sample sources
+            # its root signature from an existing PSO.
+            self.work_graph_pipeline = None
+            self.work_graph_backing = None
+            self.init_work_graph_backing = True
+
+            if pyd.D3D12WorkGraphPipeline is None or api != pyd.GraphicsAPI.D3D12:
+                return  # Vulkan build, or a non-D3D12 build without the binding at all.
+
+            try:
+                source = (shader_dir / "work_graph_broadcasting.hlsl").read_text(encoding="utf-8")
+                # Work graph nodes need shader model 6.8; the rest of this sample is 6_5.
+                bytecode = pyd.CompileShaderLibrary(
+                    source, api, sourceName="work_graph_broadcasting.hlsl",
+                    shaderModel="6_8", includePaths=include_paths)
+                library = self.device.createShaderLibrary(bytecode)
+                assert library is not None, "createShaderLibrary returned null for the work graph"
+
+                # LightCull_Node's [NodeDispatchGrid(1,1,1)] is a placeholder -- the real grid is
+                # one group per screen tile, known only once the viewport size is.
+                self.work_graph_pipeline = pyd.D3D12WorkGraphPipeline(
+                    self.device, library, self.shade_pso, WORK_GRAPH_NAME,
+                    broadcastEntryNodeName="LightCull_Node",
+                    dispatchGridX=tilesX, dispatchGridY=tilesY, dispatchGridZ=1)
+
+                backingDesc = pyd.BufferDesc()
+                backingDesc.byteSize = self.work_graph_pipeline.getBackingMemorySize()
+                backingDesc.canHaveUAVs = True
+                backingDesc.debugName = "WorkGraphBackingMem"
+                backingDesc.initialState = pyd.ResourceStates.UnorderedAccess
+                backingDesc.keepInitialState = True
+                self.work_graph_backing = self.device.createBuffer(backingDesc)
+            except RuntimeError as e:
+                # Raised when the device/driver reports no D3D12_WORK_GRAPHS_TIER support, or
+                # when state object creation fails. Not fatal: the dispatch path still works.
+                pyd.log.warning(f"Work graph technique unavailable, dispatch only: {e}")
+                self.work_graph_pipeline = None
+                self.work_graph_backing = None
 
         def update_scene_constants(self, commandList, view) -> None:
             sceneSize = self.scene.GetSceneSize()
@@ -784,6 +857,31 @@ if __name__ == "__main__":
             threadsX, threadsY = 8, 4
             commandList.dispatch((width + threadsX - 1) // threadsX, (height + threadsY - 1) // threadsY, 1)
 
+        def populate_deferred_shading_work_graph(self, commandList) -> None:
+            # Resource bindings are established the ordinary way. The pipeline named in this
+            # ComputeState is never actually executed -- SetProgram (inside dispatchWorkGraph)
+            # swaps the program to the work graph. It has to be shade_pso specifically, because
+            # the state object was created against shade_pso's root signature, and nvrhi binds
+            # the descriptors through whichever pipeline it sees here.
+            state = pyd.ComputeState()
+            state.pipeline = self.shade_pso
+            state.addBindingSet(self.binding_sets["deferred_shading"])
+            commandList.setComputeState(state)
+
+            # The shared root signature declares 3 uints (deferred_shading.hlsl's
+            # g_LightTilesX/Y/g_LightCount). work_graph_broadcasting.hlsl's InlineConstants
+            # declares only g_LightCount, so it must be first; the other two are padding here.
+            commandList.setPushConstants(struct.pack("<III", len(self.scene.lights), 0, 0))
+
+            # Backing memory only needs initializing the first time it is used by this graph
+            # (and again after the technique is switched away and back).
+            commandList.dispatchWorkGraph(
+                self.work_graph_pipeline, self.work_graph_backing, self.init_work_graph_backing, 1)
+            self.init_work_graph_backing = False
+
+        def use_work_graph_now(self) -> bool:
+            return self.want_work_graph and self.work_graph_pipeline is not None
+
         def render(self, commandList, view, backbuffer) -> None:
             fbinfo = backbuffer.getFramebufferInfo()
             width, height = fbinfo.width, fbinfo.height
@@ -805,8 +903,12 @@ if __name__ == "__main__":
             self.update_scene_constants(commandList, view)
             self.populate_animation_pass(commandList)
             self.populate_gbuffer_pass(commandList, self.render_targets.framebuffer_gb.GetFramebuffer(view))
-            self.populate_light_culling_pass(commandList)
-            self.populate_deferred_shading_pass(commandList)
+            if self.use_work_graph_now():
+                # One launch replaces both the light-culling and deferred-shading dispatches.
+                self.populate_deferred_shading_work_graph(commandList)
+            else:
+                self.populate_light_culling_pass(commandList)
+                self.populate_deferred_shading_pass(commandList)
 
             # Plain GPU bit copy, matching work_graphs_d3d12.cpp:880's own
             # commandList->copyTexture(...) exactly. Deliberately NOT
@@ -856,7 +958,15 @@ if __name__ == "__main__":
     device.executeCommandList(commandList)
     device.waitForIdle()
 
+    # Technique selection. The C++ sample exposes this as an ImGui combo; this port has no
+    # ImGui, so it is a command line flag plus a SPACE toggle. Both techniques must produce
+    # the same image -- that equivalence is the whole point of the sample.
+    wg.want_work_graph = "--work-graph" in sys.argv
+
     view = pyd.PlanarView()
+
+    GLFW_KEY_SPACE = 32
+    GLFW_PRESS = 1
 
     class RenderPass(pyd.IRenderPass):
         def __init__(self, deviceManager) -> None:
@@ -867,10 +977,18 @@ if __name__ == "__main__":
             wg.render(commandList, view, framebuffer)
             commandList.close()
             device.executeCommandList(commandList)
-            deviceManager.SetInformativeWindowTitle("PyDonut Work Graphs (Dispatch)")
+            technique = "Work Graph (Broadcasting Launch)" if wg.use_work_graph_now() else "Dispatch"
+            deviceManager.SetInformativeWindowTitle(f"PyDonut Work Graphs [{technique}] - SPACE to switch")
 
         def Animate(self, elapsedTimeSeconds: float) -> None:
             wg.animate(elapsedTimeSeconds)
+
+        def KeyboardUpdate(self, key: int, scancode: int, action: int, mods: int) -> bool:
+            if key == GLFW_KEY_SPACE and action == GLFW_PRESS:
+                wg.toggle_technique()
+                if wg.want_work_graph and wg.work_graph_pipeline is None:
+                    pyd.log.warning("Work graph technique is unavailable on this device/driver.")
+            return True
 
     renderPass = RenderPass(deviceManager)
     deviceManager.AddRenderPassToBack(renderPass)
