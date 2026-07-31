@@ -53,6 +53,8 @@ if __name__ == "__main__":
         dummyPipelineDesc.addBindingLayout(bindingLayout)
         dummyPipeline = device.createComputePipeline(dummyPipelineDesc)
 
+        assert shaderLibrary is not None
+
         workGraphPipeline = pyd.D3D12WorkGraphPipeline(
             device, shaderLibrary, dummyPipeline, "PrototypeWorkGraph"
         )
