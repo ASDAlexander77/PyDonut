@@ -142,7 +142,7 @@ if __name__ == "__main__":
             # Same asset-scale adjustment as variable_shading.py/bindless_rendering.py: this
             # glTF-Sample-Assets Sponza is not the one the C++ sample's (0,1.8,0)->(1,1.8,0)
             # camera was tuned for.
-            self.camera.LookAt(0.0, 15.0, 40.0, 0.0, 3.0, 0.0)
+            self.camera.LookAt(0.0, 1.8, 0.0, 1.0, 1.8, 0.0)
             self.camera.SetMoveSpeed(6.0)
 
             self.constantBuffer = device.createBuffer(
