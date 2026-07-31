@@ -804,6 +804,7 @@ PYBIND11_MODULE(_pydonut, m) {
     // nvrhi objects created through factory calls below: each create*() call returns one
     // owning reference, handed to Python as a std::shared_ptr that Releases() on collection.
     py::class_<nvrhi::IShader, std::shared_ptr<nvrhi::IShader>>(m, "Shader");
+    py::class_<nvrhi::ITimerQuery, std::shared_ptr<nvrhi::ITimerQuery>>(m, "TimerQuery");
     py::class_<nvrhi::IGraphicsPipeline, std::shared_ptr<nvrhi::IGraphicsPipeline>>(m, "GraphicsPipeline");
     py::class_<nvrhi::IMeshletPipeline, std::shared_ptr<nvrhi::IMeshletPipeline>>(m, "MeshletPipeline");
     py::class_<nvrhi::IComputePipeline, std::shared_ptr<nvrhi::IComputePipeline>>(m, "ComputePipeline");
@@ -1397,6 +1398,13 @@ PYBIND11_MODULE(_pydonut, m) {
         return info;
     });
     device.def("waitForIdle", &nvrhi::IDevice::waitForIdle);
+    device.def("createTimerQuery", &nvrhi::IDevice::createTimerQuery);
+    // Non-blocking: true once the query's result is ready to read. GPU timing samples are
+    // read a few frames late on purpose (see work_graphs.py's timer-ring buffering) so this
+    // never has to stall waiting for the queue to catch up.
+    device.def("pollTimerQuery", &nvrhi::IDevice::pollTimerQuery, py::arg("query"));
+    device.def("getTimerQueryTime", &nvrhi::IDevice::getTimerQueryTime, py::arg("query"));
+    device.def("resetTimerQuery", &nvrhi::IDevice::resetTimerQuery, py::arg("query"));
 
 #ifdef NVRHI_WITH_DX12
     class D3D12WorkGraphPipeline
