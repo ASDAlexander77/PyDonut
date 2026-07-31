@@ -1072,6 +1072,7 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_static("StructuredBuffer_SRV", &nvrhi::BindingLayoutItem::StructuredBuffer_SRV, py::arg("slot"))
         .def_static("TypedBuffer_SRV", &nvrhi::BindingLayoutItem::TypedBuffer_SRV, py::arg("slot"))
         .def_static("TypedBuffer_UAV", &nvrhi::BindingLayoutItem::TypedBuffer_UAV, py::arg("slot"))
+        .def_static("StructuredBuffer_UAV", &nvrhi::BindingLayoutItem::StructuredBuffer_UAV, py::arg("slot"))
         .def_static("ConstantBuffer", &nvrhi::BindingLayoutItem::ConstantBuffer, py::arg("slot"))
         .def_static("VolatileConstantBuffer", &nvrhi::BindingLayoutItem::VolatileConstantBuffer, py::arg("slot"))
         .def_static("Sampler", &nvrhi::BindingLayoutItem::Sampler, py::arg("slot"))
@@ -1139,6 +1140,9 @@ PYBIND11_MODULE(_pydonut, m) {
         }, py::arg("slot"), py::arg("buffer"), py::arg("format"), py::arg("range"))
         .def_static("TypedBuffer_UAV", [](uint32_t slot, nvrhi::IBuffer* buffer) {
             return nvrhi::BindingSetItem::TypedBuffer_UAV(slot, buffer);
+        }, py::arg("slot"), py::arg("buffer"))
+        .def_static("StructuredBuffer_UAV", [](uint32_t slot, nvrhi::IBuffer* buffer) {
+            return nvrhi::BindingSetItem::StructuredBuffer_UAV(slot, buffer);
         }, py::arg("slot"), py::arg("buffer"))
         .def_static("Sampler", [](uint32_t slot, nvrhi::ISampler* sampler) {
             return nvrhi::BindingSetItem::Sampler(slot, sampler);
@@ -2395,6 +2399,52 @@ PYBIND11_MODULE(_pydonut, m) {
         self.SetMatrices(viewMatrix, projection);
     }, py::arg("yawRadians"), py::arg("pitchRadians"), py::arg("distance"), py::arg("aspectRatio"),
        py::arg("fovYRadians"), py::arg("zNear"), py::arg("zFar"));
+
+    // Explicit look-at, regular (non-reverse-Z) D3D-style perspective, for subjects whose eye
+    // AND target both move independently (unlike SetMatricesOrbit's fixed-target-at-origin
+    // yaw/pitch/distance parameterization -- see work_graphs.py, whose camera orbits both its
+    // position and its look-at target on separate paths). The view matrix is built directly
+    // (basis vectors from cross products, exactly the classic D3D "look-to" construction) and
+    // packed into affine3's row-vector layout: m_linear's rows are (x.x,y.x,z.x), (x.y,y.y,z.y),
+    // (x.z,y.z,z.z) -- the transpose of the natural [x;y;z] row layout -- and m_translation is
+    // (dot(x,-eye), dot(y,-eye), dot(z,-eye)), matching how PlanarView::transformPoint applies
+    // v*m_linear+m_translation in the same row-vector convention HLSL's mul(vec,matrix) uses.
+    planarView.def("SetMatricesLookAt", [](donut::engine::PlanarView &self,
+            float posX, float posY, float posZ, float targetX, float targetY, float targetZ,
+            float upX, float upY, float upZ, float aspectRatio, float fovYRadians, float zNear, float zFar) {
+        using namespace donut::math;
+        const float3 eye(posX, posY, posZ);
+        const float3 target(targetX, targetY, targetZ);
+        const float3 up(upX, upY, upZ);
+
+        const float3 z = normalize(target - eye);
+        const float3 x = normalize(cross(up, z));
+        const float3 y = cross(z, x);
+        const float3 negEye = -eye;
+
+        const affine3 viewMatrix(
+            float3(x.x, y.x, z.x),
+            float3(x.y, y.y, z.y),
+            float3(x.z, y.z, z.z),
+            float3(dot(x, negEye), dot(y, negEye), dot(z, negEye)));
+        const float4x4 projection = perspProjD3DStyle(fovYRadians, aspectRatio, zNear, zFar);
+        self.SetMatrices(viewMatrix, projection);
+    }, py::arg("posX"), py::arg("posY"), py::arg("posZ"), py::arg("targetX"), py::arg("targetY"), py::arg("targetZ"),
+       py::arg("upX"), py::arg("upY"), py::arg("upZ"), py::arg("aspectRatio"), py::arg("fovYRadians"),
+       py::arg("zNear"), py::arg("zFar"));
+
+    // Raw bytes of viewProj and its inverse, in work_graphs.py's own SceneConstantBuffer layout
+    // (NOT donut's PlanarViewConstants layout that FillPlanarViewConstants above returns) --
+    // GetViewProjectionMatrix/GetInverseViewProjectionMatrix already exist on PlanarView
+    // (donut/engine/View.h:77-78), this just exposes them as one 128-byte blob.
+    planarView.def("GetViewProjMatrixBytes", [](const donut::engine::PlanarView &self) {
+        struct { donut::math::float4x4 viewProj, viewProjInverse; } out {
+            self.GetViewProjectionMatrix(),
+            self.GetInverseViewProjectionMatrix()
+        };
+        return py::bytes(reinterpret_cast<const char*>(&out), sizeof(out));
+    });
+
     planarView.def("UpdateCache", &donut::engine::PlanarView::UpdateCache);
 
     // Standalone view*projection matrix computation for cases that don't go through
