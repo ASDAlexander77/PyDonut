@@ -1,4 +1,4 @@
-RWStructuredBuffer<uint> u_Output : register(u0);
+RWBuffer<uint> u_Output : register(u0);
 
 [Shader("node")]
 [NodeLaunch("broadcasting")]

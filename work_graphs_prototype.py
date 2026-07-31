@@ -1,4 +1,5 @@
 if __name__ == "__main__":
+    import struct
     import sys
     from pathlib import Path
 
@@ -90,7 +91,6 @@ if __name__ == "__main__":
         device.executeCommandList(commandList)
         device.waitForIdle()
 
-        import struct
         computedResult = struct.unpack("<I", device.readBuffer(readbackBuffer, 4))[0]
         expectedResult = 0xC0FFEE
         print(f"Expected result: {expectedResult:#x}, computed result: {computedResult:#x}")

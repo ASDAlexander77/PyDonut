@@ -1506,6 +1506,13 @@ PYBIND11_MODULE(_pydonut, m) {
     commandList.def("copyBuffer", &nvrhi::ICommandList::copyBuffer,
         py::arg("dest"), py::arg("destOffsetBytes"), py::arg("src"), py::arg("srcOffsetBytes"), py::arg("dataSizeBytes"));
 #ifdef NVRHI_WITH_DX12
+    // NOTE: SetProgram is called directly on the native D3D12 command list and nvrhi's own
+    // cached compute state has no idea the bound program changed. A later commandList.
+    // setComputeState(...) call with the SAME ComputePipeline object nvrhi last saw will skip
+    // re-issuing SetPipelineState (since nvrhi thinks nothing changed), silently leaving the
+    // work graph program bound instead. Always setComputeState with a DIFFERENT pipeline object
+    // after dispatching a work graph, or re-dispatch another work graph -- never assume the
+    // previous compute pipeline is still actually bound at the D3D12 level.
     commandList.def("dispatchWorkGraph", [](nvrhi::ICommandList &self, D3D12WorkGraphPipeline &pipeline,
         nvrhi::IBuffer* backingMemoryBuffer, bool initialize, uint32_t numRecords) {
         ID3D12GraphicsCommandList* baseCommandList = self.getNativeObject(nvrhi::ObjectTypes::D3D12_GraphicsCommandList);
@@ -1520,6 +1527,9 @@ PYBIND11_MODULE(_pydonut, m) {
         ID3D12Resource* backingMemoryD3D12 = backingMemoryBuffer->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource);
         if (!backingMemoryD3D12)
             throw std::runtime_error("dispatchWorkGraph: backingMemoryBuffer has no D3D12 resource");
+
+        if (backingMemoryD3D12->GetDesc().Width < pipeline.getBackingMemorySize())
+            throw std::runtime_error("dispatchWorkGraph: backingMemoryBuffer is smaller than the graph's backing memory requirement");
 
         D3D12_SET_PROGRAM_DESC setProgramDesc = {};
         setProgramDesc.Type = D3D12_PROGRAM_TYPE_WORK_GRAPH;

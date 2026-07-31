@@ -760,6 +760,8 @@ class CommandList():
     # D3D12 Work Graphs interop prototype. Only present in Windows/D3D12 builds. Sets the
     # given work graph as the active program (initializing its backing memory on first use)
     # and dispatches it with a single, zero-size input record at entry point 0.
+    # Note: nvrhi's cached compute state does not track this call; a subsequent setComputeState
+    # with the same pipeline object will not re-bind it at the D3D12 level.
     def dispatchWorkGraph(
         self,
         pipeline: D3D12WorkGraphPipeline,
