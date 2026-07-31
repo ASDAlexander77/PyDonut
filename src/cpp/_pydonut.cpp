@@ -1650,6 +1650,9 @@ PYBIND11_MODULE(_pydonut, m) {
                 throw std::runtime_error("D3D12WorkGraphPipeline: could not query ID3D12WorkGraphProperties");
 
             uint32_t workGraphIndex = workGraphProperties->GetWorkGraphIndex(m_wideName.c_str());
+            if (workGraphIndex == UINT32_MAX)
+                throw std::runtime_error("D3D12WorkGraphPipeline: work graph name not found in the state object");
+
             D3D12_WORK_GRAPH_MEMORY_REQUIREMENTS memReqs = {};
             workGraphProperties->GetWorkGraphMemoryRequirements(workGraphIndex, &memReqs);
             m_backingMemorySize = memReqs.MaxSizeInBytes;
