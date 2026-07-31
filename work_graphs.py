@@ -497,21 +497,6 @@ if __name__ == "__main__":
             self.time_diff_this_frame = 0.0
             self.force_reset_animation = True
 
-        def init_common_passes(self) -> None:
-            # Matches variable_shading.py's exact mount pattern for donut's precompiled
-            # framework shaders (needed here only for CommonRenderPasses.BlitTexture).
-            # Must run with NO command list open: CommonRenderPasses' constructor opens its
-            # own internal immediate command list to upload fallback textures, and nvrhi only
-            # allows one immediate command list open at a time -- calling this while our own
-            # commandList is open trips "Two or more immediate command lists cannot be open at
-            # the same time" (silently, without -debug's validation layer) and corrupts the
-            # command list's state for every frame after, producing a black screen.
-            frameworkShaderPath = folder / "bin" / "shaders" / "framework" / pyd.GetShaderTypeName(self.device.getGraphicsAPI())
-            rootFs = pyd.RootFileSystem()
-            rootFs.mount(Path("/shaders/donut"), frameworkShaderPath)
-            shaderFactory = pyd.ShaderFactory(self.device, rootFs, Path("/shaders"))
-            self.common_passes = pyd.CommonRenderPasses(self.device, shaderFactory)
-
         def init_scene(self, commandList) -> None:
             self.scene.CreateAssets(self.device, commandList)
 
@@ -700,6 +685,7 @@ if __name__ == "__main__":
 
             width, height = self.render_targets.size
             aspectRatio = width / height
+            # The view's viewport is set by render() before this runs -- see the note there.
             view.SetMatricesLookAt(camX, camY, camZ, tgtX, tgtY, tgtZ, 0.0, 1.0, 0.0,
                                     aspectRatio, camVerticalFov, camNearClip, sceneSize * 1.2)
             view.UpdateCache()
@@ -802,6 +788,15 @@ if __name__ == "__main__":
             fbinfo = backbuffer.getFramebufferInfo()
             width, height = fbinfo.width, fbinfo.height
 
+            # Must happen before any GetFramebuffer(view) call below, including the one whose
+            # FramebufferInfo the G-buffer pipeline is created from. FramebufferFactory keys
+            # its framebuffers off view.GetSubresources(), and a PlanarView that never had a
+            # viewport set yields a degenerate framebuffer whose getViewport() is empty -- so
+            # the G-buffer pass rasterizes nothing, depth stays at its 1.0 clear value, and
+            # deferred_shading.hlsl takes its "depth == 1.0 -> EvaluateSky" branch for every
+            # pixel, drawing the starfield sky and no scene at all.
+            view.SetViewport(pyd.Viewport(float(width), float(height)))
+
             if self.render_targets is None or self.render_targets.is_update_required(width, height):
                 self.render_targets = RenderTargets(self.device, width, height)
                 gbuffer_fb = self.render_targets.framebuffer_gb.GetFramebuffer(view)
@@ -812,7 +807,15 @@ if __name__ == "__main__":
             self.populate_gbuffer_pass(commandList, self.render_targets.framebuffer_gb.GetFramebuffer(view))
             self.populate_light_culling_pass(commandList)
             self.populate_deferred_shading_pass(commandList)
-            self.common_passes.BlitTexture(commandList, backbuffer, self.render_targets.ldr_buffer)
+
+            # Plain GPU bit copy, matching work_graphs_d3d12.cpp:880's own
+            # commandList->copyTexture(...) exactly. Deliberately NOT
+            # CommonRenderPasses.BlitTexture: the swap chain is SRGBA8_UNORM while the LDR
+            # buffer is RGBA8_UNORM, so a shader blit would resolve through an sRGB render
+            # target and re-encode pixels this shader already wrote in final display form.
+            # copyTexture moves the bits untouched, which is what the original sample does.
+            backbufferTexture = backbuffer.getDesc().getColorAttachment(0).texture
+            commandList.copyTexture(backbufferTexture, self.render_targets.ldr_buffer)
 
         def animate(self, elapsed: float) -> None:
             self.time_diff_this_frame = elapsed
@@ -846,7 +849,6 @@ if __name__ == "__main__":
 
     device = deviceManager.GetDevice()
     wg = WorkGraphs(device)
-    wg.init_common_passes()
     commandList = device.createCommandList()
     commandList.open()
     wg.init_scene(commandList)
