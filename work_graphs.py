@@ -168,10 +168,10 @@ if __name__ == "__main__":
             self._vertex_buffers: list = [None] * MESH_COUNT
             self._index_buffers: list = [None] * MESH_COUNT
             self._index_counts: list = [0] * MESH_COUNT
-            self._materials_buffer = None
-            self._instances_buffer = None
-            self._lights_buffer = None
-            self._anim_state_buffer = None
+            self._materials_buffer: pyd.Buffer | None = None
+            self._instances_buffer: pyd.Buffer | None  = None
+            self._lights_buffer: pyd.Buffer | None  = None
+            self._anim_state_buffer: pyd.Buffer | None  = None
 
         def GetSceneSize(self) -> float:
             return SceneParam_FloorSize
@@ -179,16 +179,20 @@ if __name__ == "__main__":
         def GetSceneHeight(self) -> float:
             return SceneParam_FloorToCeilingHeight * SceneParam_Floors
 
-        def GetMaterialsBuffer(self):
+        def GetMaterialsBuffer(self) -> pyd.Buffer:
+            assert self._materials_buffer is not None
             return self._materials_buffer
 
-        def GetWorldObjectsBuffer(self):
+        def GetWorldObjectsBuffer(self) -> pyd.Buffer:
+            assert self._instances_buffer is not None
             return self._instances_buffer
 
-        def GetLightsBuffer(self):
+        def GetLightsBuffer(self) -> pyd.Buffer:
+            assert self._lights_buffer is not None
             return self._lights_buffer
 
-        def GetAnimStateBuffer(self):
+        def GetAnimStateBuffer(self) -> pyd.Buffer:
+            assert self._anim_state_buffer is not None
             return self._anim_state_buffer
 
         def GetMeshVertexBuffer(self, meshType: int):
@@ -367,8 +371,8 @@ if __name__ == "__main__":
             commandList.writeBuffer(self._instances_buffer, instanceBytes)
 
             lightBytes = b"".join(
-                struct.pack("<3f3f3f3fff", *l["position"], *l["target"], *l["targetOffset"], *l["color"], l["innerAngle"], l["outerAngle"])
-                for l in self.lights
+                struct.pack("<3f3f3f3fff", *light["position"], *light["target"], *light["targetOffset"], *light["color"], light["innerAngle"], light["outerAngle"])
+                for light in self.lights
             )
             lightDesc = pyd.BufferDesc()
             lightDesc.byteSize = len(lightBytes)
@@ -545,6 +549,8 @@ if __name__ == "__main__":
             sources = {k: v.read_text(encoding="utf-8") for k, v in source_paths.items()}
             include_paths = [str(shader_dir)]
 
+            assert pyd.CompileShader is not None
+
             animate_objects_bc = pyd.CompileShader(sources["animation"], "CSMainObjects", pyd.ShaderType.Compute, api, sourceName="animation.hlsl", includePaths=include_paths)
             animate_lights_bc = pyd.CompileShader(sources["animation"], "CSMainLights", pyd.ShaderType.Compute, api, sourceName="animation.hlsl", includePaths=include_paths)
             gbuffer_vs_bc = pyd.CompileShader(sources["gbuffer_fill"], "VSMain", pyd.ShaderType.Vertex, api, sourceName="gbuffer_fill.hlsl", includePaths=include_paths)
@@ -579,6 +585,8 @@ if __name__ == "__main__":
             cbDesc.initialState = pyd.ResourceStates.ShaderResource
             cbDesc.keepInitialState = True
             self.constant_buffer = self.device.createBuffer(cbDesc)
+
+            assert self.render_targets is not None
 
             width, height = self.render_targets.size
             tilesX, tilesY = GetLightTileCountX(width), GetLightTileCountY(height)
@@ -707,6 +715,7 @@ if __name__ == "__main__":
             try:
                 source = (shader_dir / "work_graph_broadcasting.hlsl").read_text(encoding="utf-8")
                 # Work graph nodes need shader model 6.8; the rest of this sample is 6_5.
+                assert pyd.CompileShaderLibrary is not None
                 bytecode = pyd.CompileShaderLibrary(
                     source, api, sourceName="work_graph_broadcasting.hlsl",
                     shaderModel="6_8", includePaths=include_paths)
@@ -755,6 +764,8 @@ if __name__ == "__main__":
             tgtX = math.cos(t * camTargetOrbitSpeed) * sceneSize * camTargetRadiusRatio
             tgtY = 0.0
             tgtZ = math.sin(t * camTargetOrbitSpeed) * sceneSize * camTargetRadiusRatio
+
+            assert self.render_targets is not None
 
             width, height = self.render_targets.size
             aspectRatio = width / height
@@ -806,6 +817,9 @@ if __name__ == "__main__":
             self.force_reset_animation = False
 
         def populate_gbuffer_pass(self, commandList, framebuffer) -> None:
+
+            assert self.render_targets is not None
+
             commandList.clearDepthStencilTexture(self.render_targets.depth, True, 1.0, False, 0)
 
             fbinfo = framebuffer.getFramebufferInfo()
@@ -839,6 +853,9 @@ if __name__ == "__main__":
             state.pipeline = self.cull_lights_pso
             state.addBindingSet(self.binding_sets["light_culling"])
             commandList.setComputeState(state)
+
+            assert self.render_targets is not None
+
             width, height = self.render_targets.size
             tilesX, tilesY = GetLightTileCountX(width), GetLightTileCountY(height)
             rootConstants = struct.pack("<III", tilesX, tilesY, len(self.scene.lights))
@@ -850,6 +867,9 @@ if __name__ == "__main__":
             state.pipeline = self.shade_pso
             state.addBindingSet(self.binding_sets["deferred_shading"])
             commandList.setComputeState(state)
+
+            assert self.render_targets is not None
+
             width, height = self.render_targets.size
             tilesX, tilesY = GetLightTileCountX(width), GetLightTileCountY(height)
             rootConstants = struct.pack("<III", tilesX, tilesY, len(self.scene.lights))
