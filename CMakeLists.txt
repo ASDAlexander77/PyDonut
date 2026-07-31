@@ -141,6 +141,15 @@ target_link_libraries(_pydonut PRIVATE
     donut_engine
 )
 
+if (NVRHI_WITH_DX12)
+    # Forwards the CMake option as a C++ preprocessor macro so _pydonut.cpp can guard its
+    # D3D12 Work Graphs interop code the same way it already guards DXC via PYDONUT_HAVE_DXC.
+    target_compile_definitions(_pydonut PRIVATE NVRHI_WITH_DX12=1)
+    # d3dx12/d3dx12.h (CD3DX12_STATE_OBJECT_DESC, CD3DX12_WORK_GRAPH_SUBOBJECT, ...) ships in the
+    # Agility SDK package fetched above by FetchAgilitySDK.cmake, not on any include path yet.
+    target_include_directories(_pydonut PRIVATE "${DONUT_D3D_AGILITY_SDK_PATH}/build/native/include")
+endif()
+
 # ---------------------------------------
 # DXC (in-process HLSL -> DXIL/SPIR-V compilation, for pyd.CompileShader)
 # ---------------------------------------
