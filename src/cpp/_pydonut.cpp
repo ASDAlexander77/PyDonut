@@ -2436,11 +2436,15 @@ PYBIND11_MODULE(_pydonut, m) {
     // Raw bytes of viewProj and its inverse, in work_graphs.py's own SceneConstantBuffer layout
     // (NOT donut's PlanarViewConstants layout that FillPlanarViewConstants above returns) --
     // GetViewProjectionMatrix/GetInverseViewProjectionMatrix already exist on PlanarView
-    // (donut/engine/View.h:77-78), this just exposes them as one 128-byte blob.
+    // (donut/engine/View.h:77-78), this just exposes them as one 128-byte blob. Transposed to
+    // match work_graphs_d3d12.cpp's own upload convention (work_graphs_d3d12.cpp:607-608:
+    // "constants.viewProj = transpose(view*proj);") -- scene_data.hlsli's cbuffer has no
+    // `row_major` qualifier, so DXC packs it column-major; donut::math::float4x4 is row-major,
+    // so it must be transposed before upload or mul(vertexPosition, viewProj) computes garbage.
     planarView.def("GetViewProjMatrixBytes", [](const donut::engine::PlanarView &self) {
         struct { donut::math::float4x4 viewProj, viewProjInverse; } out {
-            self.GetViewProjectionMatrix(),
-            self.GetInverseViewProjectionMatrix()
+            donut::math::transpose(self.GetViewProjectionMatrix()),
+            donut::math::transpose(self.GetInverseViewProjectionMatrix())
         };
         return py::bytes(reinterpret_cast<const char*>(&out), sizeof(out));
     });
