@@ -157,6 +157,13 @@ except ImportError:
     CompileShader = None
     CompileShaderLibrary = None
 
+try:
+    # Only present in Windows/D3D12 builds (NVRHI_WITH_DX12) -- a prototype interop class,
+    # not part of the stable API.
+    from pydonut._pydonut import D3D12WorkGraphPipeline
+except ImportError:
+    D3D12WorkGraphPipeline = None
+
 __all__ = (
     'GraphicsAPI',
     'Format',
@@ -308,4 +315,5 @@ __all__ = (
     'log',
     'CompileShader',
     'CompileShaderLibrary',
+    'D3D12WorkGraphPipeline',
 )

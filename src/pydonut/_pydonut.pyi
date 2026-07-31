@@ -311,6 +311,19 @@ def CompileShaderLibrary(
     includePaths: list[str] = [],
 ) -> bytes: ...
 
+# D3D12 Work Graphs interop prototype. Only present in Windows/D3D12 builds. Builds the
+# ID3D12StateObject for a single-library work graph; raises RuntimeError if the device/driver
+# doesn't report D3D12_WORK_GRAPHS_TIER support, or if state object creation fails.
+class D3D12WorkGraphPipeline:
+    def __init__(
+        self,
+        device: Device,
+        shaderLibrary: ShaderLibrary,
+        rootSigSourcePipeline: ComputePipeline,
+        workGraphName: str,
+    ) -> None: ...
+    def getBackingMemorySize(self) -> int: ...
+
 # One Vulkan spec-constant override (constantID declared in HLSL via [[vk::constant_id(N)]])
 # for Device.createShaderSpecialization. Three static factories, matching the C++ API, since
 # the active value depends on which one was used.

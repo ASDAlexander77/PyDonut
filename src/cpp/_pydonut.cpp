@@ -42,6 +42,11 @@
 #include <dxcapi.h>
 #endif
 
+#ifdef NVRHI_WITH_DX12
+#include <wrl.h>
+#include <d3dx12/d3dx12.h>
+#endif
+
 // view_cb.h is a shared C++/HLSL header: its field types (float4x4, float2, ...) are
 // donut::math types used unqualified, exactly as donut's own View.cpp includes it. Its
 // PlanarViewConstants is forward-declared at GLOBAL scope in View.h (see the `struct
@@ -1579,6 +1584,92 @@ PYBIND11_MODULE(_pydonut, m) {
         py::arg("sourceName") = "shader.hlsl", py::arg("shaderModel") = "6_5",
         py::arg("includePaths") = std::vector<std::string>{});
 #endif
+
+#ifdef NVRHI_WITH_DX12
+    class D3D12WorkGraphPipeline
+    {
+    public:
+        D3D12WorkGraphPipeline(
+            nvrhi::IDevice* device,
+            nvrhi::IShaderLibrary* shaderLibrary,
+            nvrhi::IComputePipeline* rootSigSourcePipeline,
+            const std::string& workGraphName)
+        {
+            ID3D12Device* deviceD3D12 = device->getNativeObject(nvrhi::ObjectTypes::D3D12_Device);
+            if (!deviceD3D12)
+                throw std::runtime_error("D3D12WorkGraphPipeline: device is not a D3D12 device");
+
+            D3D12_FEATURE_DATA_D3D12_OPTIONS21 options = {};
+            HRESULT hr = deviceD3D12->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS21, &options, sizeof(options));
+            if (FAILED(hr) || options.WorkGraphsTier == D3D12_WORK_GRAPHS_TIER_NOT_SUPPORTED)
+                throw std::runtime_error("D3D12WorkGraphPipeline: this device/driver does not support D3D12 Work Graphs");
+
+            Microsoft::WRL::ComPtr<ID3D12Device5> deviceD3D12_5;
+            hr = deviceD3D12->QueryInterface(IID_PPV_ARGS(&deviceD3D12_5));
+            if (FAILED(hr))
+                throw std::runtime_error("D3D12WorkGraphPipeline: could not query ID3D12Device5");
+
+            ID3D12RootSignature* rootSignature = rootSigSourcePipeline->getNativeObject(nvrhi::ObjectTypes::D3D12_RootSignature);
+            if (!rootSignature)
+                throw std::runtime_error("D3D12WorkGraphPipeline: rootSigSourcePipeline has no D3D12 root signature");
+
+            D3D12_SHADER_BYTECODE libBytecode = {};
+            shaderLibrary->getBytecode(&libBytecode.pShaderBytecode, &libBytecode.BytecodeLength);
+
+            m_wideName.assign(workGraphName.begin(), workGraphName.end());
+
+            CD3DX12_STATE_OBJECT_DESC soDesc(D3D12_STATE_OBJECT_TYPE_EXECUTABLE);
+
+            auto* librarySubobject = soDesc.CreateSubobject<CD3DX12_DXIL_LIBRARY_SUBOBJECT>();
+            librarySubobject->SetDXILLibrary(&libBytecode);
+
+            auto* workGraphSubobject = soDesc.CreateSubobject<CD3DX12_WORK_GRAPH_SUBOBJECT>();
+            workGraphSubobject->SetProgramName(m_wideName.c_str());
+            workGraphSubobject->IncludeAllAvailableNodes();
+
+            auto* rootSigSubobject = soDesc.CreateSubobject<CD3DX12_GLOBAL_ROOT_SIGNATURE_SUBOBJECT>();
+            rootSigSubobject->SetRootSignature(rootSignature);
+
+            hr = deviceD3D12_5->CreateStateObject(soDesc, IID_PPV_ARGS(&m_stateObject));
+            if (FAILED(hr))
+            {
+                char message[128];
+                snprintf(message, sizeof(message), "D3D12WorkGraphPipeline: CreateStateObject failed with HRESULT 0x%08X", (unsigned)hr);
+                throw std::runtime_error(message);
+            }
+
+            Microsoft::WRL::ComPtr<ID3D12StateObjectProperties1> soProperties;
+            hr = m_stateObject->QueryInterface(IID_PPV_ARGS(&soProperties));
+            if (FAILED(hr))
+                throw std::runtime_error("D3D12WorkGraphPipeline: could not query ID3D12StateObjectProperties1");
+            m_programIdentifier = soProperties->GetProgramIdentifier(m_wideName.c_str());
+
+            Microsoft::WRL::ComPtr<ID3D12WorkGraphProperties> workGraphProperties;
+            hr = m_stateObject->QueryInterface(IID_PPV_ARGS(&workGraphProperties));
+            if (FAILED(hr))
+                throw std::runtime_error("D3D12WorkGraphPipeline: could not query ID3D12WorkGraphProperties");
+
+            uint32_t workGraphIndex = workGraphProperties->GetWorkGraphIndex(m_wideName.c_str());
+            D3D12_WORK_GRAPH_MEMORY_REQUIREMENTS memReqs = {};
+            workGraphProperties->GetWorkGraphMemoryRequirements(workGraphIndex, &memReqs);
+            m_backingMemorySize = memReqs.MaxSizeInBytes;
+        }
+
+        uint64_t getBackingMemorySize() const { return m_backingMemorySize; }
+        D3D12_PROGRAM_IDENTIFIER getProgramIdentifier() const { return m_programIdentifier; }
+
+    private:
+        Microsoft::WRL::ComPtr<ID3D12StateObject> m_stateObject;
+        std::wstring m_wideName;
+        D3D12_PROGRAM_IDENTIFIER m_programIdentifier{};
+        uint64_t m_backingMemorySize = 0;
+    };
+
+    py::class_<D3D12WorkGraphPipeline, std::shared_ptr<D3D12WorkGraphPipeline>>(m, "D3D12WorkGraphPipeline")
+        .def(py::init<nvrhi::IDevice*, nvrhi::IShaderLibrary*, nvrhi::IComputePipeline*, const std::string&>(),
+            py::arg("device"), py::arg("shaderLibrary"), py::arg("rootSigSourcePipeline"), py::arg("workGraphName"))
+        .def("getBackingMemorySize", &D3D12WorkGraphPipeline::getBackingMemorySize);
+#endif // NVRHI_WITH_DX12
 
     py::class_<donut::vfs::IFileSystem, std::shared_ptr<donut::vfs::IFileSystem>>(m, "IFileSystem");
     py::class_<donut::vfs::NativeFileSystem, donut::vfs::IFileSystem, std::shared_ptr<donut::vfs::NativeFileSystem>>(m, "NativeFileSystem")
