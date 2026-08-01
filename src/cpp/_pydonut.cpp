@@ -420,7 +420,8 @@ py::bytes CompileShaderWithDXC(
     nvrhi::GraphicsAPI api,
     const std::string &sourceName,
     const std::string &shaderModel,
-    const std::vector<std::string> &includePaths)
+    const std::vector<std::string> &includePaths,
+    bool requiresVulkan11)
 {
     std::wstring wEntryPoint = ToWide(entryPoint);
     std::wstring wProfile = std::wstring(HlslProfilePrefix(shaderType)) + L"_" + ToWide(shaderModel);
@@ -433,6 +434,16 @@ py::bytes CompileShaderWithDXC(
     };
     if (api == nvrhi::GraphicsAPI::VULKAN) {
         args.push_back(L"-spirv");
+        // Wave Operations (e.g. WaveActiveBitOr/WaveIsFirstLane, used by
+        // shaders/work_graphs/light_culling.hlsl) need Vulkan 1.1+, above DXC's default target
+        // env -- same reason CompileShaderLibraryWithDXC below sets this for its RT shaders.
+        // Opt-in only (unlike the library variant): raising the target env for every shader
+        // compiled through this function, regardless of whether it actually uses Vulkan 1.1+
+        // features, is an unscoped behavior change for every other example that calls
+        // pyd.CompileShader on Vulkan.
+        if (requiresVulkan11) {
+            args.push_back(L"-fspv-target-env=vulkan1.2");
+        }
         AddVulkanBindingShiftArgs(args);
     }
     std::vector<std::wstring> includePathStorage;
@@ -1398,7 +1409,12 @@ PYBIND11_MODULE(_pydonut, m) {
         return info;
     });
     device.def("waitForIdle", &nvrhi::IDevice::waitForIdle);
-    device.def("createTimerQuery", &nvrhi::IDevice::createTimerQuery);
+    // Wrapped through DetachToShared like every other create*() factory below -- the raw
+    // method returns nvrhi::TimerQueryHandle (RefCountPtr<ITimerQuery>), which pybind11 can't
+    // convert directly to the std::shared_ptr<ITimerQuery> holder TimerQuery is registered with.
+    device.def("createTimerQuery", [](nvrhi::IDevice &self) {
+        return DetachToShared(self.createTimerQuery());
+    });
     // Non-blocking: true once the query's result is ready to read. GPU timing samples are
     // read a few frames late on purpose (see work_graphs.py's timer-ring buffering) so this
     // never has to stall waiting for the queue to catch up.
@@ -1754,7 +1770,8 @@ PYBIND11_MODULE(_pydonut, m) {
     m.def("CompileShader", &CompileShaderWithDXC,
         py::arg("source"), py::arg("entryPoint"), py::arg("shaderType"), py::arg("api"),
         py::arg("sourceName") = "shader.hlsl", py::arg("shaderModel") = "6_5",
-        py::arg("includePaths") = std::vector<std::string>{});
+        py::arg("includePaths") = std::vector<std::string>{},
+        py::arg("requiresVulkan11") = false);
     m.def("CompileShaderLibrary", &CompileShaderLibraryWithDXC,
         py::arg("source"), py::arg("api"),
         py::arg("sourceName") = "shader.hlsl", py::arg("shaderModel") = "6_5",

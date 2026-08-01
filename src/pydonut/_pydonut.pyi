@@ -298,6 +298,9 @@ def CompileShader(
     sourceName: str = "shader.hlsl",
     shaderModel: str = "6_5",
     includePaths: list[str] = [],
+    # Vulkan only: raises DXC's SPIR-V target env to vulkan1.2, needed for Wave Operations
+    # (e.g. WaveActiveBitOr/WaveIsFirstLane). Leave False unless the shader actually uses them.
+    requiresVulkan11: bool = False,
 ) -> bytes: ...
 
 # Same as CompileShader, but for a shader library with multiple [shader("...")]-annotated
