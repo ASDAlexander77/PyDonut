@@ -9,6 +9,10 @@ if __name__ == "__main__":
 
     folder = Path(__file__).resolve().parent
 
+    # ImGuiWindowFlags_AlwaysAutoResize -- same constant rt_particles.py already defines for
+    # the same purpose.
+    _IMGUI_WINDOW_FLAGS_ALWAYS_AUTO_RESIZE = 64
+
     # MeshType
     MESH_PLANE = 0
     MESH_BOX = 1
@@ -589,7 +593,9 @@ if __name__ == "__main__":
             animate_lights_bc = pyd.CompileShader(sources["animation"], "CSMainLights", pyd.ShaderType.Compute, api, sourceName="animation.hlsl", includePaths=include_paths)
             gbuffer_vs_bc = pyd.CompileShader(sources["gbuffer_fill"], "VSMain", pyd.ShaderType.Vertex, api, sourceName="gbuffer_fill.hlsl", includePaths=include_paths)
             gbuffer_ps_bc = pyd.CompileShader(sources["gbuffer_fill"], "PSMain", pyd.ShaderType.Pixel, api, sourceName="gbuffer_fill.hlsl", includePaths=include_paths)
-            light_culling_bc = pyd.CompileShader(sources["light_culling"], "CSMain", pyd.ShaderType.Compute, api, sourceName="light_culling.hlsl", includePaths=include_paths)
+            # requiresVulkan11=True: CSMain uses WaveActiveBitOr/WaveIsFirstLane, which need a
+            # higher SPIR-V target env than DXC's default on Vulkan.
+            light_culling_bc = pyd.CompileShader(sources["light_culling"], "CSMain", pyd.ShaderType.Compute, api, sourceName="light_culling.hlsl", includePaths=include_paths, requiresVulkan11=True)
             deferred_shading_bc = pyd.CompileShader(sources["deferred_shading"], "CSMain", pyd.ShaderType.Compute, api, sourceName="deferred_shading.hlsl", includePaths=include_paths)
 
             animate_objects_shader = self.device.createShader(animate_objects_bc, "CSMainObjects", pyd.ShaderType.Compute)
@@ -1003,6 +1009,27 @@ if __name__ == "__main__":
             self.ui.gpuFrameTime = self._get_last_valid_query_timer(self.frame_timers)
             self.ui.gpuShadingTime = self._get_last_valid_query_timer(self.shading_timers)
 
+    class UIRenderer(pyd.ImGui_Renderer):
+        def __init__(self, deviceManager, ui) -> None:
+            super().__init__(deviceManager)
+            self.ui = ui
+            pyd.ImGui.DisableIniFile()
+
+        def buildUI(self) -> None:
+            pyd.ImGui.SetNextWindowPos(10.0, 10.0)
+            pyd.ImGui.Begin("Options/Stats", _IMGUI_WINDOW_FLAGS_ALWAYS_AUTO_RESIZE)
+
+            _, self.ui.currentTechnique = pyd.ImGui.Combo(
+                "Current Technique", self.ui.currentTechnique,
+                ["Work Graph (Broadcast Launch)", "Compute Dispatches"],
+            )
+            _, self.ui.paused = pyd.ImGui.Checkbox("Pause Animation", self.ui.paused)
+            self.ui.resetAnim = pyd.ImGui.Button("Reset Animation")
+            pyd.ImGui.Text(f"Frame Time (GPU): {self.ui.gpuFrameTime:.3f} ms")
+            pyd.ImGui.Text(f"Shading Time (GPU): {self.ui.gpuShadingTime:.3f} ms")
+
+            pyd.ImGui.End()
+
     if "--scene-smoke-test" in sys.argv:
         sys.exit(0 if _scene_smoke_test() else 1)
 
@@ -1025,12 +1052,16 @@ if __name__ == "__main__":
     deviceParams.backBufferWidth = 1920
     deviceParams.backBufferHeight = 1080
 
-    if not deviceManager.CreateWindowDeviceAndSwapChain(deviceParams, "PyDonut Work Graphs (Dispatch)"):
+    WINDOW_TITLE = "PyDonut Work Graphs"
+
+    if not deviceManager.CreateWindowDeviceAndSwapChain(deviceParams, WINDOW_TITLE):
         pyd.log.fatal("Cannot initialize a graphics device with the requested parameters")
         sys.exit(1)
 
     device = deviceManager.GetDevice()
-    wg = WorkGraphs(device)
+
+    uiData = UIData()
+    wg = WorkGraphs(device, uiData)
     commandList = device.createCommandList()
     commandList.open()
     wg.init_scene(commandList)
@@ -1038,15 +1069,7 @@ if __name__ == "__main__":
     device.executeCommandList(commandList)
     device.waitForIdle()
 
-    # Technique selection. The C++ sample exposes this as an ImGui combo; this port has no
-    # ImGui, so it is a command line flag plus a SPACE toggle. Both techniques must produce
-    # the same image -- that equivalence is the whole point of the sample.
-    wg.want_work_graph = "--work-graph" in sys.argv
-
     view = pyd.PlanarView()
-
-    GLFW_KEY_SPACE = 32
-    GLFW_PRESS = 1
 
     class RenderPass(pyd.IRenderPass):
         def __init__(self, deviceManager) -> None:
@@ -1057,22 +1080,29 @@ if __name__ == "__main__":
             wg.render(commandList, view, framebuffer)
             commandList.close()
             device.executeCommandList(commandList)
-            technique = "Work Graph (Broadcasting Launch)" if wg.use_work_graph_now() else "Dispatch"
-            deviceManager.SetInformativeWindowTitle(f"PyDonut Work Graphs [{technique}] - SPACE to switch")
+            deviceManager.SetInformativeWindowTitle(WINDOW_TITLE)
 
         def Animate(self, elapsedTimeSeconds: float) -> None:
             wg.animate(elapsedTimeSeconds)
 
-        def KeyboardUpdate(self, key: int, scancode: int, action: int, mods: int) -> bool:
-            if key == GLFW_KEY_SPACE and action == GLFW_PRESS:
-                wg.toggle_technique()
-                if wg.want_work_graph and wg.work_graph_pipeline is None:
-                    pyd.log.warning("Work graph technique is unavailable on this device/driver.")
-            return True
+    # Framework shaders (needed only so UIRenderer.Init() can load ImGui's own vertex/pixel
+    # shaders) -- same RootFileSystem/ShaderFactory mount convention rt_particles.py uses.
+    rootFS = pyd.RootFileSystem()
+    frameworkShaderPath = folder / "bin" / "shaders" / "framework" / pyd.GetShaderTypeName(api)
+    rootFS.mount(Path("/shaders/donut"), frameworkShaderPath)
+    uiShaderFactory = pyd.ShaderFactory(device, rootFS, Path("/shaders"))
 
     renderPass = RenderPass(deviceManager)
+    gui = UIRenderer(deviceManager, uiData)
+
+    if not gui.Init(uiShaderFactory):
+        pyd.log.fatal("Failed to initialize the ImGui renderer")
+        sys.exit(1)
+
     deviceManager.AddRenderPassToBack(renderPass)
+    deviceManager.AddRenderPassToBack(gui)
     deviceManager.RunMessageLoop()
+    deviceManager.RemoveRenderPass(gui)
     deviceManager.RemoveRenderPass(renderPass)
     deviceManager.Shutdown()
 
