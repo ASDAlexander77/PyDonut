@@ -498,21 +498,55 @@ if __name__ == "__main__":
         def is_update_required(self, width: int, height: int) -> bool:
             return self.size != (width, height)
 
+    class UIData:
+        def __init__(self) -> None:
+            # 0 = Work Graph (Broadcast Launch), 1 = Compute Dispatches -- same order/index as
+            # the combo built in UIRenderer.buildUI, matching work_graphs_d3d12.cpp's
+            # techniqueNames array and UIData::CurrentTechnique's default of 0.
+            self.currentTechnique = 0
+            self.paused = False
+            self.resetAnim = False
+            self.gpuFrameTime = 0.0
+            self.gpuShadingTime = 0.0
+
     class WorkGraphs:
-        def __init__(self, device) -> None:
+        _TIMER_RING_SIZE = 10  # matches work_graphs_d3d12.cpp's QueuedFramesCount
+
+        def __init__(self, device, ui) -> None:
             self.device = device
+            self.ui = ui
             self.scene = Scene()
             self.render_targets = None
             self.time_in_seconds = 0.0
             self.time_diff_this_frame = 0.0
             self.force_reset_animation = True
-            # Which shading technique to use. Set from the command line, toggled with SPACE.
-            # Only honoured once load_scene_pipelines has actually built a work graph -- see
-            # use_work_graph_now().
-            self.want_work_graph = False
+            # Which shading technique to use, synchronized from ui.currentTechnique each
+            # Animate() call (see animate() below). Only honoured once load_scene_pipelines has
+            # actually built a work graph -- see use_work_graph_now(). Starts True to match
+            # work_graphs_d3d12.cpp's m_CurrentTechnique default of
+            # Techniques::WorkGraphBroadcastingLaunch (== ui.currentTechnique's default of 0).
+            self.want_work_graph = ui.currentTechnique == 0
             self.work_graph_pipeline = None
             self.work_graph_backing = None
             self.init_work_graph_backing = True
+
+            self.next_timer_to_use = 0
+            self.frame_timers = [device.createTimerQuery() for _ in range(self._TIMER_RING_SIZE)]
+            self.shading_timers = [device.createTimerQuery() for _ in range(self._TIMER_RING_SIZE)]
+
+        def _get_last_valid_query_timer(self, timers) -> float:
+            # Ports work_graphs_d3d12.cpp's GetLastValidQueryTimer: search backward from just
+            # before the ring-buffer slot about to be reused, then wrap around to the end --
+            # this always finds the most recently completed query without stalling on one still
+            # in flight. Returns milliseconds, or -1.0 if nothing has completed yet.
+            device = self.device
+            for i in range(self.next_timer_to_use - 1, -1, -1):
+                if device.pollTimerQuery(timers[i]):
+                    return device.getTimerQueryTime(timers[i]) * 1000.0
+            for i in range(self._TIMER_RING_SIZE - 1, self.next_timer_to_use, -1):
+                if device.pollTimerQuery(timers[i]):
+                    return device.getTimerQueryTime(timers[i]) * 1000.0
+            return -1.0
 
         def toggle_technique(self) -> None:
             self.want_work_graph = not self.want_work_graph
@@ -794,7 +828,7 @@ if __name__ == "__main__":
             commandList.writeBuffer(self.constant_buffer, constants)
 
         def populate_animation_pass(self, commandList) -> None:
-            resetAnim = self.force_reset_animation
+            resetAnim = self.force_reset_animation or self.ui.resetAnim
 
             state = pyd.ComputeState()
             state.pipeline = self.animate_objects_pso
@@ -920,15 +954,22 @@ if __name__ == "__main__":
                 gbuffer_fb = self.render_targets.framebuffer_gb.GetFramebuffer(view)
                 self.load_scene_pipelines(gbuffer_fb.getFramebufferInfo())
 
+            timerIndex = self.next_timer_to_use
+            self.device.resetTimerQuery(self.frame_timers[timerIndex])
+            self.device.resetTimerQuery(self.shading_timers[timerIndex])
+            commandList.beginTimerQuery(self.frame_timers[timerIndex])
+
             self.update_scene_constants(commandList, view)
             self.populate_animation_pass(commandList)
             self.populate_gbuffer_pass(commandList, self.render_targets.framebuffer_gb.GetFramebuffer(view))
+            commandList.beginTimerQuery(self.shading_timers[timerIndex])
             if self.use_work_graph_now():
                 # One launch replaces both the light-culling and deferred-shading dispatches.
                 self.populate_deferred_shading_work_graph(commandList)
             else:
                 self.populate_light_culling_pass(commandList)
                 self.populate_deferred_shading_pass(commandList)
+            commandList.endTimerQuery(self.shading_timers[timerIndex])
 
             # Plain GPU bit copy, matching work_graphs_d3d12.cpp:880's own
             # commandList->copyTexture(...) exactly. Deliberately NOT
@@ -939,9 +980,28 @@ if __name__ == "__main__":
             backbufferTexture = backbuffer.getDesc().getColorAttachment(0).texture
             commandList.copyTexture(backbufferTexture, self.render_targets.ldr_buffer)
 
+            commandList.endTimerQuery(self.frame_timers[timerIndex])
+            self.next_timer_to_use = (self.next_timer_to_use + 1) % self._TIMER_RING_SIZE
+
         def animate(self, elapsed: float) -> None:
-            self.time_diff_this_frame = elapsed
-            self.time_in_seconds += elapsed
+            if not self.ui.paused:
+                self.time_diff_this_frame = elapsed
+                self.time_in_seconds += elapsed
+            else:
+                self.time_diff_this_frame = 0.0
+
+            if self.force_reset_animation or self.ui.resetAnim:
+                self.time_in_seconds = 0.0
+                self.time_diff_this_frame = 0.0
+
+            wantWorkGraph = self.ui.currentTechnique == 0
+            if wantWorkGraph != self.want_work_graph:
+                self.toggle_technique()
+                if self.want_work_graph and self.work_graph_pipeline is None:
+                    pyd.log.warning("Work graph technique is unavailable on this device/driver.")
+
+            self.ui.gpuFrameTime = self._get_last_valid_query_timer(self.frame_timers)
+            self.ui.gpuShadingTime = self._get_last_valid_query_timer(self.shading_timers)
 
     if "--scene-smoke-test" in sys.argv:
         sys.exit(0 if _scene_smoke_test() else 1)
