@@ -1637,6 +1637,8 @@ PYBIND11_MODULE(_pydonut, m) {
     commandList.def("setAccelStructState", &nvrhi::ICommandList::setAccelStructState,
         py::arg("as"), py::arg("stateBits"), py::call_guard<py::gil_scoped_release>());
     commandList.def("commitBarriers", &nvrhi::ICommandList::commitBarriers, py::call_guard<py::gil_scoped_release>());
+    commandList.def("beginTimerQuery", &nvrhi::ICommandList::beginTimerQuery, py::arg("query"));
+    commandList.def("endTimerQuery", &nvrhi::ICommandList::endTimerQuery, py::arg("query"));
 
     m.def("ClearColorAttachment", &nvrhi::utils::ClearColorAttachment,
         py::arg("commandList"), py::arg("framebuffer"), py::arg("attachmentIndex"), py::arg("color"));
@@ -2653,7 +2655,10 @@ PYBIND11_MODULE(_pydonut, m) {
             float v[3] = { x, y, z };
             bool changed = ImGui::DragFloat3(label.c_str(), v, speed);
             return py::make_tuple(changed, v[0], v[1], v[2]);
-        }, py::arg("label"), py::arg("x"), py::arg("y"), py::arg("z"), py::arg("speed") = 1.0f);
+        }, py::arg("label"), py::arg("x"), py::arg("y"), py::arg("z"), py::arg("speed") = 1.0f)
+        .def_static("Button", [](const std::string &label) {
+            return ImGui::Button(label.c_str());
+        }, py::arg("label"));
 
     py::class_<donut::app::AdapterInfo>(m, "AdapterInfo")
         .def(py::init<>())

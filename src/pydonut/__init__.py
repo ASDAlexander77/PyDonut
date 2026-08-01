@@ -59,6 +59,7 @@ from pydonut._pydonut import DispatchRaysArguments
 from pydonut._pydonut import Framebuffer
 from pydonut._pydonut import Texture
 from pydonut._pydonut import Shader
+from pydonut._pydonut import TimerQuery
 from pydonut._pydonut import ShaderLibrary
 from pydonut._pydonut import InputLayout
 from pydonut._pydonut import GraphicsPipeline
@@ -224,6 +225,7 @@ __all__ = (
     'Framebuffer',
     'Texture',
     'Shader',
+    'TimerQuery',
     'ShaderLibrary',
     'InputLayout',
     'GraphicsPipeline',
