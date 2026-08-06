@@ -141,7 +141,7 @@ if __name__ == "__main__":
             # landing inside a wall/column, so start well above and outside the building
             # looking down and in -- guaranteed clear of geometry -- and fly the rest of the
             # way in with WASD + mouse look (wired up via KeyboardUpdate/MousePosUpdate below).
-            self.camera.LookAt(0.0, 15.0, 40.0, 0.0, 3.0, 0.0)
+            self.camera.LookAt(0.0, 1.8, 0.0, 1.0, 1.8, 0.0)
             self.camera.SetMoveSpeed(6.0)
 
             viewConstantsSize = len(self.view.FillPlanarViewConstants())

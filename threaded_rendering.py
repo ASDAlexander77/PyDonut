@@ -107,7 +107,7 @@ if __name__ == "__main__":
             # orientation only rotates the whole cubemap basis (CubemapView still captures a
             # full 360 degrees around its position either way), so any reasonable vantage point
             # works.
-            self.camera.LookAt(0.0, 15.0, 40.0, 0.0, 3.0, 0.0)
+            self.camera.LookAt(0.0, 1.8, 0.0, 1.0, 1.8, 0.0)
             self.camera.SetMoveSpeed(6.0)
 
             self.commandList = device.createCommandList()

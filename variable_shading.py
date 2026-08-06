@@ -171,7 +171,7 @@ if __name__ == "__main__":
             # distribution; this glTF-Sample-Assets version applies a 0.008 root-node scale,
             # putting its world-space bounds at roughly x:[-15,14] y:[-1,11] z:[-9,9] (an
             # elongated hall along X) -- same asset/scale adjustment as bindless_rendering.py.
-            self.camera.LookAt(0.0, 15.0, 40.0, 0.0, 3.0, 0.0)
+            self.camera.LookAt(0.0, 1.8, 0.0, 1.0, 1.8, 0.0)
             self.camera.SetMoveSpeed(6.0)
 
             info = device.queryVariableRateShadingInfo()
