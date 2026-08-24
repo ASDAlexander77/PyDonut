@@ -573,7 +573,7 @@ uv run python -c "
 import src.pydonut as pyd
 from pathlib import Path
 src = Path('shaders/aftermath/shaders.hlsl').read_text(encoding='utf-8')
-for api in (pyd.GraphicsAPI.D3D12, pyd.GraphicsAPI.VULKAN):
+for api in (pyd.GraphicsAPI.D3D12, pyd.GraphicsAPI.Vulkan):  # NB: Vulkan, not VULKAN
     for entry, st in (('main_vs', pyd.ShaderType.Vertex), ('main_ps', pyd.ShaderType.Pixel)):
         print(api, entry, len(pyd.CompileShader(src, entry, st, api, sourceName='shaders.hlsl')))
 "
