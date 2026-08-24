@@ -163,6 +163,8 @@ from pydonut._pydonut import DeviceCreationParameters
 from pydonut._pydonut import GetGraphicsAPIFromCommandLine
 from pydonut._pydonut import GetDirectoryWithExecutable
 from pydonut._pydonut import GetShaderTypeName
+from pydonut._pydonut import AFTERMATH_AVAILABLE
+from pydonut._pydonut import DestroyBufferMemory_UnsafeForCrashTesting
 from pydonut._pydonut import ClearColorAttachment
 from pydonut._pydonut import ClearDepthStencilAttachment
 from pydonut._pydonut import BuildBottomLevelAccelStruct
@@ -329,6 +331,8 @@ __all__ = (
     'GetGraphicsAPIFromCommandLine',
     'GetDirectoryWithExecutable',
     'GetShaderTypeName',
+    'AFTERMATH_AVAILABLE',
+    'DestroyBufferMemory_UnsafeForCrashTesting',
     'ClearColorAttachment',
     'ClearDepthStencilAttachment',
     'BuildBottomLevelAccelStruct',

@@ -70,6 +70,38 @@
 #include <d3dx12/d3dx12.h>
 #endif
 
+#if DONUT_WITH_VULKAN
+// Plain C Vulkan API only (for vkFreeMemory in DestroyBufferMemory_UnsafeForCrashTesting).
+// Deliberately NOT vulkan.hpp: the aftermath.cpp sample uses it with
+// VULKAN_HPP_DISPATCH_LOADER_DYNAMIC, whose dispatcher-storage macro would have to be
+// satisfied in this translation unit for no benefit here.
+#include <vulkan/vulkan.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
+// donut links Vulkan-Headers -- headers only, no loader import library -- because nvrhi loads
+// Vulkan dynamically. So vkFreeMemory has no link-time symbol in this translation unit and
+// must be resolved from the loader module, which is guaranteed to already be in the process by
+// the time a VULKAN device exists. Returns nullptr if the loader somehow isn't present.
+static PFN_vkFreeMemory ResolveVkFreeMemory() {
+#ifdef _WIN32
+    HMODULE loader = GetModuleHandleW(L"vulkan-1.dll");
+    if (!loader)
+        return nullptr;
+    return reinterpret_cast<PFN_vkFreeMemory>(GetProcAddress(loader, "vkFreeMemory"));
+#else
+    // Already loaded, so this only bumps a refcount and hands back the existing handle.
+    void* loader = dlopen("libvulkan.so.1", RTLD_NOW);
+    if (!loader)
+        return nullptr;
+    return reinterpret_cast<PFN_vkFreeMemory>(dlsym(loader, "vkFreeMemory"));
+#endif
+}
+#endif
+
 // view_cb.h is a shared C++/HLSL header: its field types (float4x4, float2, ...) are
 // donut::math types used unqualified, exactly as donut's own View.cpp includes it. Its
 // PlanarViewConstants is forward-declared at GLOBAL scope in View.h (see the `struct
@@ -1689,6 +1721,45 @@ PYBIND11_MODULE(_pydonut, m) {
     }, py::arg("name"));
     commandList.def("endMarker", &nvrhi::ICommandList::endMarker);
 
+    // True only in builds configured with -DPYDONUT_WITH_AFTERMATH=ON. When False,
+    // DeviceCreationParameters has no enableAftermath attribute at all and no crash dumps are
+    // written -- the crashes still happen, they just go uncaptured.
+    m.attr("AFTERMATH_AVAILABLE") = py::bool_(static_cast<bool>(DONUT_WITH_AFTERMATH));
+
+    // DELIBERATELY UNSAFE -- crash testing only, and there is no way to recover the device
+    // afterwards. Destroys the native graphics-API memory backing `buffer` while the GPU may
+    // still be reading it, so the next draw that touches it page-faults and NSight Aftermath
+    // captures a dump. Used by aftermath.py's "Trigger page fault" button and nothing else.
+    //
+    // It must reach past NVRHI: destroying the nvrhi::IBuffer would fault on the CPU first,
+    // before the GPU ever page-faults (aftermath.cpp:155-157).
+    m.def("DestroyBufferMemory_UnsafeForCrashTesting", [](nvrhi::IDevice* device, nvrhi::IBuffer* buffer) {
+        const nvrhi::GraphicsAPI api = device->getGraphicsAPI();
+#ifdef NVRHI_WITH_DX12
+        if (api == nvrhi::GraphicsAPI::D3D12) {
+            ID3D12Resource* resource = buffer->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource);
+            resource->Release();
+            return;
+        }
+#endif
+#if DONUT_WITH_VULKAN
+        if (api == nvrhi::GraphicsAPI::VULKAN) {
+            PFN_vkFreeMemory freeMemory = ResolveVkFreeMemory();
+            if (!freeMemory)
+                throw std::runtime_error(
+                    "DestroyBufferMemory_UnsafeForCrashTesting: could not resolve vkFreeMemory "
+                    "from the Vulkan loader.");
+            VkDevice vkDevice = static_cast<VkDevice>(device->getNativeObject(nvrhi::ObjectTypes::VK_Device).pointer);
+            VkDeviceMemory memory = static_cast<VkDeviceMemory>(buffer->getNativeObject(nvrhi::ObjectTypes::VK_DeviceMemory).pointer);
+            freeMemory(vkDevice, memory, nullptr);
+            return;
+        }
+#endif
+        throw std::runtime_error(
+            "DestroyBufferMemory_UnsafeForCrashTesting: unsupported graphics API. D3D11 does not "
+            "page-fault under these conditions, and D3D12/Vulkan must be compiled in.");
+    }, py::arg("device"), py::arg("buffer"));
+
     m.def("ClearColorAttachment", &nvrhi::utils::ClearColorAttachment,
         py::arg("commandList"), py::arg("framebuffer"), py::arg("attachmentIndex"), py::arg("color"));
 
@@ -2963,6 +3034,12 @@ PYBIND11_MODULE(_pydonut, m) {
     deviceCreationParameters.def_readwrite("enableComputeQueue", &donut::app::DeviceCreationParameters::enableComputeQueue);
     deviceCreationParameters.def_readwrite("enableCopyQueue", &donut::app::DeviceCreationParameters::enableCopyQueue);
     deviceCreationParameters.def_readwrite("enableJoystickInput", &donut::app::DeviceCreationParameters::enableJoystickInput);
+#if DONUT_WITH_AFTERMATH
+    // Only exists in builds configured with -DPYDONUT_WITH_AFTERMATH=ON: the underlying field
+    // is itself inside #if DONUT_WITH_AFTERMATH (DeviceManager.h:104-106), so binding it
+    // unconditionally would not compile. Python must gate on pyd.AFTERMATH_AVAILABLE.
+    deviceCreationParameters.def_readwrite("enableAftermath", &donut::app::DeviceCreationParameters::enableAftermath);
+#endif
     deviceCreationParameters.def_readwrite("adapterIndex", &donut::app::DeviceCreationParameters::adapterIndex);
     deviceCreationParameters.def_readwrite("supportExplicitDisplayScaling", &donut::app::DeviceCreationParameters::supportExplicitDisplayScaling);
     deviceCreationParameters.def_readwrite("resizeWindowWithDisplayScale", &donut::app::DeviceCreationParameters::resizeWindowWithDisplayScale);

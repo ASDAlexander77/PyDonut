@@ -276,6 +276,15 @@ class InstanceFlags(Enum):
 def GetGraphicsAPIFromCommandLine(args: list[str]) -> GraphicsAPI: ...
 def GetDirectoryWithExecutable() -> Path: ...
 def GetShaderTypeName(api: GraphicsAPI) -> str: ...
+# True only in builds configured with -DPYDONUT_WITH_AFTERMATH=ON. When False,
+# DeviceCreationParameters has no enableAftermath attribute and no crash dumps are written.
+AFTERMATH_AVAILABLE: bool
+
+# DELIBERATELY UNSAFE -- crash testing only. Destroys the native API memory backing `buffer`
+# while the GPU may still be reading it, so the next draw page-faults. The device cannot be
+# recovered afterwards. Raises RuntimeError on D3D11, which does not fault this way.
+def DestroyBufferMemory_UnsafeForCrashTesting(device: Device, buffer: Buffer) -> None: ...
+
 def ClearColorAttachment(commandList: CommandList, framebuffer: Framebuffer, attachmentIndex: int, color: Color) -> None: ...
 
 class log():
@@ -1489,6 +1498,9 @@ class DeviceCreationParameters():
     enableComputeQueue: bool
     enableCopyQueue: bool
     enableJoystickInput: bool
+    # Present ONLY when AFTERMATH_AVAILABLE is True (built with -DPYDONUT_WITH_AFTERMATH=ON).
+    # Guard every access on that flag; this attribute does not exist in a default build.
+    enableAftermath: bool
     adapterIndex: int
     supportExplicitDisplayScaling: bool
     resizeWindowWithDisplayScale: bool
