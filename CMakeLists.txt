@@ -123,6 +123,16 @@ else()
     message(WARNING "pydonut: git not found -- skipping donut patch application")
 endif()
 
+# Opt-in NSight Aftermath GPU crash dumps. OFF by default: turning it on makes donut force
+# NVRHI_WITH_AFTERMATH (extern/donut/CMakeLists.txt:101), which pulls in
+# extern/donut/nvrhi/cmake/FetchAftermath.cmake -- a configure-time FetchContent download of
+# the NSight Aftermath SDK from developer.nvidia.com. Must be set before add_subdirectory()
+# below, or donut caches the OFF value.
+option(PYDONUT_WITH_AFTERMATH "Enable NSight Aftermath GPU crash dumps (downloads the SDK at configure time)" OFF)
+if (PYDONUT_WITH_AFTERMATH)
+    set(DONUT_WITH_AFTERMATH ON CACHE BOOL "" FORCE)
+endif()
+
 add_subdirectory(extern/donut)
 
 if (NVRHI_WITH_DX12)
@@ -232,6 +242,35 @@ if (DXC_INCLUDE_DIR AND DXC_LIB AND DXC_COMPILER_RUNTIME)
 else()
     message(WARNING "pydonut: DXC not found -- pyd.CompileShader will not be available. "
                      "Set SHADERMAKE_DXC_PATH to a DXC install to enable it.")
+endif()
+
+# The Aftermath SDK's runtime library has to sit next to _pydonut, both in a dev build tree and
+# in an installed wheel -- same two-step (POST_BUILD copy + install) the DXC runtime uses above.
+#
+# NOT via the `aftermath` imported target: donut's FetchAftermath.cmake declares it as
+# `add_library(aftermath SHARED IMPORTED)` without GLOBAL (unlike the nvapi target just above it
+# in nvrhi/CMakeLists.txt), so it is scoped to that directory and `TARGET aftermath` is false
+# here. The find_file/find_library results it caches are global, so use those instead.
+if (PYDONUT_WITH_AFTERMATH)
+    if (WIN32)
+        set(AFTERMATH_RUNTIME "${AFTERMATH_RUNTIME_LIBRARY}")  # the .dll, not the import .lib
+    else()
+        set(AFTERMATH_RUNTIME "${AFTERMATH_LIBRARY}")
+    endif()
+
+    if (AFTERMATH_RUNTIME AND EXISTS "${AFTERMATH_RUNTIME}")
+        add_custom_command(TARGET _pydonut POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${AFTERMATH_RUNTIME}" "$<TARGET_FILE_DIR:_pydonut>"
+            COMMENT "pydonut: copying Aftermath runtime library next to _pydonut")
+        install(FILES "${AFTERMATH_RUNTIME}" DESTINATION ${SKBUILD_PROJECT_NAME})
+        message(STATUS "pydonut: Aftermath enabled (${AFTERMATH_RUNTIME})")
+    else()
+        # Loud, not silent: without this library the built module fails to load at import time.
+        message(FATAL_ERROR
+            "pydonut: PYDONUT_WITH_AFTERMATH is ON but the Aftermath runtime library was not "
+            "found. Expected AFTERMATH_RUNTIME_LIBRARY (Windows) or AFTERMATH_LIBRARY to be set "
+            "by donut's FetchAftermath.cmake.")
+    endif()
 endif()
 
 install(TARGETS _pydonut DESTINATION ${SKBUILD_PROJECT_NAME})
