@@ -1111,7 +1111,8 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_static("ConstantBuffer", &nvrhi::BindingLayoutItem::ConstantBuffer, py::arg("slot"))
         .def_static("VolatileConstantBuffer", &nvrhi::BindingLayoutItem::VolatileConstantBuffer, py::arg("slot"))
         .def_static("Sampler", &nvrhi::BindingLayoutItem::Sampler, py::arg("slot"))
-        .def_static("RayTracingAccelStruct", &nvrhi::BindingLayoutItem::RayTracingAccelStruct, py::arg("slot"));
+        .def_static("RayTracingAccelStruct", &nvrhi::BindingLayoutItem::RayTracingAccelStruct, py::arg("slot"))
+        .def_static("PushConstants", &nvrhi::BindingLayoutItem::PushConstants, py::arg("slot"), py::arg("byteSize"));
 
     py::class_<nvrhi::BindingLayoutDesc>(m, "BindingLayoutDesc")
         .def(py::init<>())
@@ -1678,6 +1679,15 @@ PYBIND11_MODULE(_pydonut, m) {
     commandList.def("commitBarriers", &nvrhi::ICommandList::commitBarriers, py::call_guard<py::gil_scoped_release>());
     commandList.def("beginTimerQuery", &nvrhi::ICommandList::beginTimerQuery, py::arg("query"));
     commandList.def("endTimerQuery", &nvrhi::ICommandList::endTimerQuery, py::arg("query"));
+    // Debug marker ranges. Nestable: each beginMarker must be matched by an endMarker. These
+    // are what make an Aftermath crash dump readable -- Aftermath stores markers as hashed
+    // 64-bit values and resolves them back to these strings via
+    // donut::app::AftermathCrashDump::ResolveMarker, so the innermost live marker names the
+    // scope that faulted (see aftermath.py).
+    commandList.def("beginMarker", [](nvrhi::ICommandList &self, const std::string &name) {
+        self.beginMarker(name.c_str());
+    }, py::arg("name"));
+    commandList.def("endMarker", &nvrhi::ICommandList::endMarker);
 
     m.def("ClearColorAttachment", &nvrhi::utils::ClearColorAttachment,
         py::arg("commandList"), py::arg("framebuffer"), py::arg("attachmentIndex"), py::arg("color"));
