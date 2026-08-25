@@ -18,6 +18,7 @@
 - **Rebuild after every C++ change** with `uv sync --reinstall-package pydonut`. Plain `uv sync` is cached on `src/**/*.{h,c,hpp,cpp}` (`pyproject.toml:24-31`) and is usually enough, but `--reinstall-package` is the reliable form.
 - **Every new `.py` file starts with the project's MIT header** — copy the 22-line block verbatim from the top of `aftermath.py`, including `Copyright (C) 1991-2026 ASDAlexander77.`
 - **Examples import as `from src import pydonut as pyd`** and are run with `uv run <name>.py`. Tests import as `import pydonut as pyd`.
+- **C++ `float` defaults widen lossily into Python.** A `float` field whose default is not binary-exact (0.1f, 0.8f, 0.95f, 0.02f, …) arrives in Python as a `double` carrying the float32 residue — `0.1f` becomes `0.10000000149011612`. Assert those with `pytest.approx(...)`. Defaults that ARE binary-exact (0.5, 1.0, 2.0, 3.0, 16.0, 100.0, -0.5) stay on exact `==` deliberately, so a genuine drift in them still fails the test. The test module imports `pytest` for this.
 - **Out of scope for every task in this plan:** DLSS, taskflow, ImGui console, shadows, light probes, MaterialID/PixelReadback, MipMapGen, stereo, screenshots.
 
 ---
@@ -369,7 +370,10 @@ def test_ssao_parameters_defaults_match_header() -> None:
     assert p.amount == 2.0
     assert p.backgroundViewDepth == 100.0
     assert p.radiusWorld == 0.5
-    assert p.surfaceBias == 0.1
+    # 0.1f is not exactly representable, so widening the C++ float to a Python double
+    # gives 0.10000000149011612. Exact == would be unsatisfiable. Values that ARE
+    # binary-exact (2.0, 100.0, 0.5, 16.0) stay on exact equality deliberately.
+    assert p.surfaceBias == pytest.approx(0.1)
     assert p.powerExponent == 2.0
     assert p.enableBlur is True
     assert p.blurSharpness == 16.0
@@ -502,11 +506,14 @@ Append to `test/test_postprocess_bindings.py`:
 ```python
 def test_tone_mapping_parameters_defaults_match_header() -> None:
     p = pyd.ToneMappingParameters()
-    assert p.histogramLowPercentile == 0.8
-    assert p.histogramHighPercentile == 0.95
+    # 0.8f / 0.95f / 0.02f are not exactly representable, so widening the C++ float to a
+    # Python double leaves a residue and exact == would be unsatisfiable. The remaining
+    # defaults (1.0, 0.5, -0.5, 3.0) are binary-exact and stay on exact equality.
+    assert p.histogramLowPercentile == pytest.approx(0.8)
+    assert p.histogramHighPercentile == pytest.approx(0.95)
     assert p.eyeAdaptationSpeedUp == 1.0
     assert p.eyeAdaptationSpeedDown == 0.5
-    assert p.minAdaptedLuminance == 0.02
+    assert p.minAdaptedLuminance == pytest.approx(0.02)
     assert p.maxAdaptedLuminance == 0.5
     assert p.exposureBias == -0.5
     assert p.whitePoint == 3.0
