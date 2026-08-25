@@ -195,3 +195,16 @@ def test_command_list_can_resolve_textures() -> None:
     # Bound without subresource arguments, matching clearTextureFloat/clearDepthStencilTexture
     # which likewise hide nvrhi::TextureSubresourceSet from Python.
     assert hasattr(pyd.CommandList, "resolveTexture")
+
+
+def test_new_imgui_widgets_are_bound() -> None:
+    for name in ("SliderFloat", "DragFloat", "CollapsingHeader", "SameLine", "SetItemDefaultFocus"):
+        assert hasattr(pyd.ImGui, name), name
+
+
+def test_imgui_text_already_covers_text_unformatted() -> None:
+    # ImGui.Text is deliberately implemented as ImGui::TextUnformatted (_pydonut.cpp:2753)
+    # so Python string content can never be read as a printf format string. No separate
+    # TextUnformatted binding is needed or wanted.
+    assert hasattr(pyd.ImGui, "Text")
+    assert not hasattr(pyd.ImGui, "TextUnformatted")

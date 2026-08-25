@@ -2966,7 +2966,22 @@ PYBIND11_MODULE(_pydonut, m) {
         }, py::arg("label"), py::arg("x"), py::arg("y"), py::arg("z"), py::arg("speed") = 1.0f)
         .def_static("Button", [](const std::string &label) {
             return ImGui::Button(label.c_str());
-        }, py::arg("label"));
+        }, py::arg("label"))
+        // Out-params follow the (changed, newValue) tuple convention documented at the top of
+        // this class -- e.g. changed, ui.bloomSigma = pyd.ImGui.SliderFloat(...).
+        .def_static("SliderFloat", [](const std::string &label, float value, float vMin, float vMax) {
+            bool changed = ImGui::SliderFloat(label.c_str(), &value, vMin, vMax);
+            return py::make_tuple(changed, value);
+        }, py::arg("label"), py::arg("value"), py::arg("vMin"), py::arg("vMax"))
+        .def_static("DragFloat", [](const std::string &label, float value, float speed, float vMin, float vMax) {
+            bool changed = ImGui::DragFloat(label.c_str(), &value, speed, vMin, vMax);
+            return py::make_tuple(changed, value);
+        }, py::arg("label"), py::arg("value"), py::arg("speed") = 1.0f, py::arg("vMin") = 0.0f, py::arg("vMax") = 0.0f)
+        .def_static("CollapsingHeader", [](const std::string &label) {
+            return ImGui::CollapsingHeader(label.c_str());
+        }, py::arg("label"))
+        .def_static("SameLine", []() { ImGui::SameLine(); })
+        .def_static("SetItemDefaultFocus", &ImGui::SetItemDefaultFocus);
 
     py::class_<donut::app::AdapterInfo>(m, "AdapterInfo")
         .def(py::init<>())
