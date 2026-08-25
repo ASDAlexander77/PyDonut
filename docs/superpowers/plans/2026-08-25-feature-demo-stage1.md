@@ -1830,16 +1830,28 @@ git commit -m "Add TAA/MSAA, bloom and tone mapping to feature_demo.py"
             pyd.ImGui.SetNextWindowPos(10.0, 10.0)
             pyd.ImGui.Begin("Settings", _IMGUI_WINDOW_FLAGS_ALWAYS_AUTO_RESIZE)
 
-            _, self.ui.UseDeferredShading = pyd.ImGui.Checkbox(
-                "Deferred Shading", self.ui.UseDeferredShading
-            )
-
             aaNames = [m.name for m in AntiAliasingMode]
             changed, index = pyd.ImGui.Combo(
                 "AA Mode", int(self.ui.AntiAliasingMode), aaNames
             )
             if changed:
                 self.ui.AntiAliasingMode = AntiAliasingMode(index)
+
+            # Deferred shading does not work with MSAA: DeferredLightingPass is a compute
+            # pass writing to `output`, but HdrColor is created with isUAV = (sampleCount
+            # == 1), so under MSAA there is no UAV to write to and NVRHI validation fires.
+            # FeatureDemo.cpp:1543-1544 resolves this by forcing the toggle off, with the
+            # comment "Deferred shading doesn't work with MSAA". Mirror that here.
+            msaaActive = self.ui.AntiAliasingMode >= AntiAliasingMode.MSAA_2X
+            if msaaActive:
+                self.ui.UseDeferredShading = False
+
+            _, self.ui.UseDeferredShading = pyd.ImGui.Checkbox(
+                "Deferred Shading", self.ui.UseDeferredShading
+            )
+            if msaaActive:
+                pyd.ImGui.SameLine()
+                pyd.ImGui.Text("(forced off under MSAA)")
 
             _, self.ui.AmbientIntensity = pyd.ImGui.SliderFloat(
                 "Ambient Intensity", self.ui.AmbientIntensity, 0.0, 2.0
@@ -1919,8 +1931,16 @@ Add `self.forwardPass = None` to `__init__` and `self.forwardPass.ResetBindingCa
 Then in `Render`, wrap the G-buffer fill + deferred lighting block in a branch. `threaded_rendering.py:235-247` is the working reference for the forward call shape:
 
 ```python
+            # The UI forces UseDeferredShading off under MSAA, but the UI is not the only
+            # path here -- ShowUI can be false, and UIData's defaults are set before any
+            # frame runs. Recompute the invariant at the point of use so the deferred path
+            # can never be entered with a multisampled, non-UAV HdrColor.
             ambient = self.ui.AmbientIntensity
-            if self.ui.UseDeferredShading:
+            useDeferred = (
+                self.ui.UseDeferredShading
+                and self.renderTargets.gbuffer.GetSampleCount() == 1
+            )
+            if useDeferred:
                 gbufferContext = pyd.GBufferFillPassContext()
                 pyd.RenderCompositeView(
                     self.commandList,
