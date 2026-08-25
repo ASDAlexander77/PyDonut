@@ -220,6 +220,8 @@ if __name__ == "__main__":
             self.bindingCache: pyd.BindingCache | None = None
             self.gbufferPass: pyd.GBufferFillPass | None = None
             self.deferredLightingPass: pyd.DeferredLightingPass | None = None
+            self.skyPass: pyd.SkyPass | None = None
+            self.ssaoPass: pyd.SsaoPass | None = None
             self.opaqueDrawStrategy = pyd.InstancedOpaqueDrawStrategy()
             self.transparentDrawStrategy = pyd.TransparentDrawStrategy()
             self.descriptorTable: pyd.DescriptorTableManager | None = None
@@ -281,6 +283,37 @@ if __name__ == "__main__":
             self.deferredLightingPass.Init(self.shaderFactory)
 
             return True
+
+        def CreateRenderPasses(self: FeatureDemo) -> None:
+            """Recreates every size-dependent pass. Called whenever RenderTargets is rebuilt."""
+            device = self.GetDevice()
+            assert self.renderTargets is not None
+
+            self.bindingCache.Clear()
+            self.gbufferPass.ResetBindingCache()
+            self.deferredLightingPass.ResetBindingCache()
+
+            self.skyPass = pyd.SkyPass(
+                device,
+                self.shaderFactory,
+                self.m_CommonPasses,
+                self.renderTargets.ForwardFramebuffer,
+                self.view,
+            )
+
+            # SSAO is only available without MSAA: its compute path reads a single-sampled
+            # depth buffer (FeatureDemo.cpp:825 guards on GetSampleCount() == 1).
+            if self.renderTargets.gbuffer.GetSampleCount() == 1:
+                self.ssaoPass = pyd.SsaoPass(
+                    device,
+                    self.shaderFactory,
+                    self.m_CommonPasses,
+                    self.renderTargets.gbuffer.Depth,
+                    self.renderTargets.gbuffer.GBufferNormals,
+                    self.renderTargets.AmbientOcclusion,
+                )
+            else:
+                self.ssaoPass = None
 
         def CreateSunLight(self: FeatureDemo) -> None:
             """sponza-plus.scene.json declares no lights, so the sun is always synthesised
@@ -348,6 +381,11 @@ if __name__ == "__main__":
             width, height = fbInfo.width, fbInfo.height
             sampleCount = SAMPLE_COUNTS[self.ui.AntiAliasingMode]
 
+            # CreateRenderPasses reads self.view (SkyPass's constructor takes the composite
+            # view), so SetupView must run before it -- and before the rebuild block below,
+            # since that block calls CreateRenderPasses once the new targets exist.
+            self.SetupView(width, height)
+
             if self.renderTargets is None or self.renderTargets.IsUpdateRequired(
                 width, height, sampleCount
             ):
@@ -367,7 +405,14 @@ if __name__ == "__main__":
                 self.renderTargets = RenderTargets()
                 self.renderTargets.Init(device, width, height, sampleCount)
 
-            self.SetupView(width, height)
+                # CreateRenderPasses asserts self.renderTargets is not None and reads its
+                # freshly-allocated textures, so it must run after Init() above, not in place
+                # of the clear-before-allocate block -- otherwise the sky/SSAO passes would be
+                # built one frame too early and the VRAM-doubling ordering above would be lost.
+                # Its own bindingCache.Clear()/ResetBindingCache() calls are therefore a cheap,
+                # idempotent no-op here (the caches are already empty); this only runs on
+                # resize/AA-mode change, not per frame.
+                self.CreateRenderPasses()
 
             self.commandList.open()
             self.renderTargets.Clear(self.commandList)
@@ -388,6 +433,9 @@ if __name__ == "__main__":
                 self.ui.EnableMaterialEvents,
             )
 
+            if self.ui.EnableSsao and self.ssaoPass is not None:
+                self.ssaoPass.Render(self.commandList, self.ui.SsaoParams, self.view)
+
             deferredInputs = pyd.DeferredLightingPassInputs()
             deferredInputs.SetGBuffer(self.renderTargets.gbuffer)
             deferredInputs.SetLights(self.scene.GetSceneGraph().GetLights())
@@ -399,8 +447,18 @@ if __name__ == "__main__":
                 self.ui.AmbientIntensity * 0.1,
                 self.ui.AmbientIntensity * 0.1,
             )
+            deferredInputs.ambientOcclusion = (
+                self.renderTargets.AmbientOcclusion
+                if (self.ui.EnableSsao and self.ssaoPass is not None)
+                else None
+            )
             deferredInputs.output = self.renderTargets.HdrColor
             self.deferredLightingPass.Render(self.commandList, self.view, deferredInputs)
+
+            if self.ui.EnableProceduralSky and self.sunLight is not None:
+                self.skyPass.Render(
+                    self.commandList, self.view, self.sunLight, self.ui.SkyParams
+                )
 
             self.m_CommonPasses.BlitTexture(
                 self.commandList, framebuffer, self.renderTargets.HdrColor, self.bindingCache

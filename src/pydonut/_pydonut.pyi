@@ -1309,6 +1309,9 @@ class DeferredLightingPassInputs():
     def SetAmbientColors(self: DeferredLightingPassInputs, topR: float, topG: float, topB: float, bottomR: float, bottomG: float, bottomB: float) -> None: ...
     def SetLights(self: DeferredLightingPassInputs, lights: list[Light]) -> None: ...
     output: Optional[Texture]
+    # None disables the SSAO term. Only ever set when sampleCount == 1 -- SsaoPass does not
+    # exist under MSAA.
+    ambientOcclusion: Optional[Texture]
 
 class DeferredLightingPass():
     def __init__(self: DeferredLightingPass, device: Device, commonPasses: CommonRenderPasses) -> None: ...

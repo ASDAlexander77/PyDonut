@@ -2385,6 +2385,10 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_property("output",
             [](const PyDeferredLightingInputs &self) -> nvrhi::ITexture* { return self.output; },
             [](PyDeferredLightingInputs &self, nvrhi::ITexture* tex) { self.output = tex; },
+            py::return_value_policy::reference)
+        .def_property("ambientOcclusion",
+            [](const PyDeferredLightingInputs &self) -> nvrhi::ITexture* { return self.ambientOcclusion; },
+            [](PyDeferredLightingInputs &self, nvrhi::ITexture* tex) { self.ambientOcclusion = tex; },
             py::return_value_policy::reference);
 
     py::class_<donut::render::DeferredLightingPass, std::shared_ptr<donut::render::DeferredLightingPass>>(m, "DeferredLightingPass")
