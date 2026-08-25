@@ -1654,6 +1654,43 @@ Add to `CreateRenderPasses`, after the SSAO block. Note the exposure-buffer hand
 
 Initialise `self.taaPass = None`, `self.toneMappingPass = None`, `self.bloomPass = None` and `self.exposureResetRequired = True` in `__init__`.
 
+- [ ] **Step 1b: Release the new passes before reallocation**
+
+None of the bound passes expose a binding-cache reset — `SkyPass`, `SsaoPass` and `BloomPass` have only `Render`; `TemporalAntiAliasingPass` has only `RenderMotionVectors`/`TemporalResolve`; `ToneMappingPass` has only `AdvanceFrame`/`GetExposureBuffer`/`ResetExposure`/`SimpleRender`. Dropping the Python reference is therefore the ONLY way to release the internal binding sets that reference the old render targets. Any pass left assigned across `RenderTargets.Init()` keeps its old textures resident while the new ones are allocated.
+
+Extend the inline release block in `Render` (the one that sets `self.renderTargets = None` and clears the three binding caches) so it also releases this task's passes:
+
+```python
+                self.taaPass = None
+                self.bloomPass = None
+```
+
+`self.toneMappingPass` needs different handling, because `CreateRenderPasses` reads its exposure buffer to carry eye adaptation across the rebuild — nulling it naively would silently reset adaptation on every resize. Capture the buffer first, then release:
+
+```python
+                # GetExposureBuffer is return_value_policy::reference_internal, so holding the
+                # buffer keeps the old pass alive until the new one AddRefs it -- capturing
+                # before releasing is what makes this safe rather than a dangling handle.
+                self.pendingExposureBuffer = (
+                    self.toneMappingPass.GetExposureBuffer()
+                    if self.toneMappingPass is not None
+                    else None
+                )
+                self.toneMappingPass = None
+```
+
+Initialise `self.pendingExposureBuffer = None` in `__init__`, and in `CreateRenderPasses` drive the exposure handoff from it instead of from `self.toneMappingPass`:
+
+```python
+            toneMappingParams = pyd.ToneMappingPassCreateParameters()
+            if self.pendingExposureBuffer is not None:
+                toneMappingParams.exposureBufferOverride = self.pendingExposureBuffer
+                self.exposureResetRequired = False
+            else:
+                self.exposureResetRequired = True
+            self.pendingExposureBuffer = None
+```
+
 - [ ] **Step 2: Advance the tone mapping frame clock**
 
 In `Animate`, after the camera update:
