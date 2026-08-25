@@ -351,11 +351,21 @@ if __name__ == "__main__":
             if self.renderTargets is None or self.renderTargets.IsUpdateRequired(
                 width, height, sampleCount
             ):
-                self.renderTargets = RenderTargets()
-                self.renderTargets.Init(device, width, height, sampleCount)
+                # Release the old targets and drop every cached binding set that references
+                # them BEFORE allocating replacements, mirroring FeatureDemo.cpp:899-904.
+                # The binding caches hold nvrhi BindingSetHandles pointing at the old
+                # textures, so dropping the Python reference alone does not free them --
+                # without clearing first, the old and new render-target sets are both
+                # resident during Init(), doubling peak VRAM on every resize and AA switch
+                # (worst at 8x MSAA, where the G-buffer and HdrColor are all multisampled).
+                # No waitForIdle is needed: nvrhi defers destruction of in-flight resources.
+                self.renderTargets = None
                 self.bindingCache.Clear()
                 self.gbufferPass.ResetBindingCache()
                 self.deferredLightingPass.ResetBindingCache()
+
+                self.renderTargets = RenderTargets()
+                self.renderTargets.Init(device, width, height, sampleCount)
 
             self.SetupView(width, height)
 
