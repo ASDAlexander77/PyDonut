@@ -2428,6 +2428,16 @@ PYBIND11_MODULE(_pydonut, m) {
            // concurrent per-face recording.
            py::call_guard<py::gil_scoped_release>());
 
+    // Sub-pixel jitter pattern. Not part of TemporalAntiAliasingParameters -- it is a
+    // separate enum held by the pass itself, set through SetJitter and read back per frame
+    // by GetCurrentPixelOffset (TemporalAntiAliasingPass.h:40-46).
+    pybind11::native_enum<donut::render::TemporalAntiAliasingJitter>(m, "TemporalAntiAliasingJitter", "enum.Enum")
+        .value("MSAA", donut::render::TemporalAntiAliasingJitter::MSAA)
+        .value("Halton", donut::render::TemporalAntiAliasingJitter::Halton)
+        .value("R2", donut::render::TemporalAntiAliasingJitter::R2)
+        .value("WhiteNoise", donut::render::TemporalAntiAliasingJitter::WhiteNoise)
+        .finalize();
+
     py::class_<donut::render::TemporalAntiAliasingParameters>(m, "TemporalAntiAliasingParameters")
         .def(py::init<>())
         .def_readwrite("newFrameWeight", &donut::render::TemporalAntiAliasingParameters::newFrameWeight)
@@ -2484,7 +2494,20 @@ PYBIND11_MODULE(_pydonut, m) {
                 const donut::render::TemporalAntiAliasingParameters &params, bool feedbackIsValid,
                 donut::engine::PlanarView &compositeViewInput, donut::engine::PlanarView &compositeViewOutput) {
             self.TemporalResolve(commandList, params, feedbackIsValid, compositeViewInput, compositeViewOutput);
-        }, py::arg("commandList"), py::arg("params"), py::arg("feedbackIsValid"), py::arg("compositeViewInput"), py::arg("compositeViewOutput"));
+        }, py::arg("commandList"), py::arg("params"), py::arg("feedbackIsValid"), py::arg("compositeViewInput"), py::arg("compositeViewOutput"))
+        .def("SetJitter", &donut::render::TemporalAntiAliasingPass::SetJitter, py::arg("jitter"))
+        // The current frame's sub-pixel offset as (x, y), both in [-0.5, 0.5] -- decomposed
+        // from dm::float2 because math types aren't exposed to Python, same convention as
+        // SceneGraphNode.GetWorldPosition and DeferredLightingPassInputs.SetAmbientColors.
+        // Feed it straight to PlanarView.SetPixelOffset.
+        .def("GetCurrentPixelOffset", [](donut::render::TemporalAntiAliasingPass &self) {
+            const donut::math::float2 offset = self.GetCurrentPixelOffset();
+            return py::make_tuple(offset.x, offset.y);
+        })
+        // Call once per frame, after TemporalResolve: besides advancing the jitter sequence
+        // this is also what ping-pongs the two resolve binding sets, so the feedback pair
+        // swaps history and output roles (TemporalAntiAliasingPass.cpp:300-317).
+        .def("AdvanceFrame", &donut::render::TemporalAntiAliasingPass::AdvanceFrame);
 
     // SkyParameters' four dm::float3 fields (skyColor/horizonColor/groundColor/directionUp)
     // follow this codebase's flat-scalar convention rather than being exposed as math types --
@@ -2742,6 +2765,12 @@ PYBIND11_MODULE(_pydonut, m) {
         self.SetViewport(viewport);
     }, py::arg("viewport"));
     planarView.def("SetVariableRateShadingState", &donut::engine::PlanarView::SetVariableRateShadingState, py::arg("state"));
+    // Flat (x, y) scalars rather than a dm::float2, matching the codebase-wide rule that
+    // Donut math types never cross into Python; pairs with
+    // TemporalAntiAliasingPass.GetCurrentPixelOffset, which returns exactly that 2-tuple.
+    planarView.def("SetPixelOffset", [](donut::engine::PlanarView &self, float x, float y) {
+        self.SetPixelOffset(donut::math::float2(x, y));
+    }, py::arg("x"), py::arg("y"));
     planarView.def("SetMatricesFromCamera", [](donut::engine::PlanarView &self, const donut::app::BaseCamera &camera,
             float aspectRatio, float verticalFovRadians, float zNear) {
         self.SetMatrices(camera.GetWorldToViewMatrix(), donut::math::perspProjD3DStyleReverse(verticalFovRadians, aspectRatio, zNear));

@@ -148,6 +148,7 @@ from pydonut._pydonut import DeferredLightingPass
 from pydonut._pydonut import ForwardShadingPassCreateParameters
 from pydonut._pydonut import ForwardShadingPassContext
 from pydonut._pydonut import ForwardShadingPass
+from pydonut._pydonut import TemporalAntiAliasingJitter
 from pydonut._pydonut import TemporalAntiAliasingParameters
 from pydonut._pydonut import TemporalAntiAliasingCreateParameters
 from pydonut._pydonut import TemporalAntiAliasingPass
@@ -326,6 +327,7 @@ __all__ = (
     'ForwardShadingPassCreateParameters',
     'ForwardShadingPassContext',
     'ForwardShadingPass',
+    'TemporalAntiAliasingJitter',
     'TemporalAntiAliasingParameters',
     'TemporalAntiAliasingCreateParameters',
     'TemporalAntiAliasingPass',

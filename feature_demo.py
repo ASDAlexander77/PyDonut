@@ -80,6 +80,10 @@ if __name__ == "__main__":
             self.SsaoParams = pyd.SsaoParameters()
             self.ToneMappingParams = pyd.ToneMappingParameters()
             self.TemporalAntiAliasingParams = pyd.TemporalAntiAliasingParameters()
+            # Not a field of TemporalAntiAliasingParameters -- the jitter pattern lives on
+            # the pass itself (TemporalAntiAliasingPass.h:40-46), so it needs its own UI
+            # field. MSAA matches both the pass's own default and the C++ sample's.
+            self.TemporalAntiAliasingJitter = pyd.TemporalAntiAliasingJitter.MSAA
             self.SkyParams = pyd.SkyParameters()
             self.AntiAliasingMode = AntiAliasingMode.TEMPORAL
             self.EnableVsync = True
@@ -431,8 +435,20 @@ if __name__ == "__main__":
                 self.view = pyd.PlanarView()
                 self.viewPrevious = pyd.PlanarView()
 
+            # TAA needs a different sub-pixel offset every frame, otherwise TemporalResolve
+            # accumulates identical samples and a static camera gets no anti-aliasing at all.
+            # Jitter only in TEMPORAL mode, and clear it to (0, 0) in every other mode, so
+            # switching away does not leave a stale offset skewing the projection matrix
+            # (View.cpp:68-70 folds it into m_PixelOffsetMatrix on UpdateCache).
+            # taaPass is None on the first frame, before CreateRenderPasses has run.
+            if self.ui.AntiAliasingMode == AntiAliasingMode.TEMPORAL and self.taaPass is not None:
+                pixelOffsetX, pixelOffsetY = self.taaPass.GetCurrentPixelOffset()
+            else:
+                pixelOffsetX, pixelOffsetY = 0.0, 0.0
+
             viewport = pyd.Viewport(float(width), float(height))
             self.view.SetViewport(viewport)
+            self.view.SetPixelOffset(pixelOffsetX, pixelOffsetY)
             self.view.SetMatricesFromCamera(self.camera, width / height)
             self.view.UpdateCache()
 
@@ -441,6 +457,12 @@ if __name__ == "__main__":
             fbInfo = framebuffer.getFramebufferInfo()
             width, height = fbInfo.width, fbInfo.height
             sampleCount = SAMPLE_COUNTS[self.ui.AntiAliasingMode]
+
+            # GetCurrentPixelOffset switches on the pass's current jitter mode
+            # (TemporalAntiAliasingPass.cpp:335), so the mode has to be pushed in before
+            # SetupView reads the offset back out.
+            if self.taaPass is not None:
+                self.taaPass.SetJitter(self.ui.TemporalAntiAliasingJitter)
 
             # CreateRenderPasses reads self.view (SkyPass's constructor takes the composite
             # view), so SetupView must run before it -- and before the rebuild block below,
@@ -617,6 +639,13 @@ if __name__ == "__main__":
                     self.view,
                     self.view,
                 )
+                # Paired 1:1 with TemporalResolve, not with the frame: AdvanceFrame also
+                # ping-pongs the two resolve binding sets, which is what swaps the feedback
+                # pair's history and output roles (TemporalAntiAliasingPass.cpp:300-317).
+                # TEMPORAL and NONE share a sample count, so switching between them does not
+                # rebuild the pass -- calling this unconditionally would desynchronise the
+                # ping-pong from the resolves it belongs to.
+                self.taaPass.AdvanceFrame()
                 finalHdrColor = self.renderTargets.ResolvedColor
                 finalHdrFramebuffer = self.renderTargets.ResolvedFramebuffer
                 self.previousViewsValid = True

@@ -49,6 +49,31 @@ def test_cubemap_view_derives_from_iview() -> None:
     assert issubclass(pyd.CubemapView, pyd.IView)
 
 
+def test_planar_view_takes_a_flat_pixel_offset() -> None:
+    # dm::float2 decomposed into scalars -- donut math types never cross into Python, so
+    # the 2-tuple GetCurrentPixelOffset returns has to be unpacked at the call site.
+    view = pyd.PlanarView()
+    view.SetPixelOffset(0.25, -0.25)
+    view.UpdateCache()
+    with pytest.raises(TypeError):
+        view.SetPixelOffset((0.25, -0.25))
+
+
+def test_temporal_jitter_enum_matches_header() -> None:
+    assert pyd.TemporalAntiAliasingJitter.MSAA.value == 0
+    assert pyd.TemporalAntiAliasingJitter.Halton.value == 1
+    assert pyd.TemporalAntiAliasingJitter.R2.value == 2
+    assert pyd.TemporalAntiAliasingJitter.WhiteNoise.value == 3
+
+
+def test_temporal_pass_exposes_the_jitter_surface() -> None:
+    # Without these three, TemporalResolve accumulates sub-pixel-identical samples and a
+    # static camera gets no anti-aliasing at all.
+    assert hasattr(pyd.TemporalAntiAliasingPass, "SetJitter")
+    assert hasattr(pyd.TemporalAntiAliasingPass, "GetCurrentPixelOffset")
+    assert hasattr(pyd.TemporalAntiAliasingPass, "AdvanceFrame")
+
+
 def test_sky_parameters_defaults_match_header() -> None:
     p = pyd.SkyParameters()
     # brightness/glowIntensity are 0.1f in the header: float32 can't represent 0.1 exactly,
