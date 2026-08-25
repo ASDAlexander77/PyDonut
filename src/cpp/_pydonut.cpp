@@ -60,6 +60,7 @@
 #include <donut/render/SkyPass.h>
 #include <donut/render/SsaoPass.h>
 #include <donut/render/ToneMappingPasses.h>
+#include <donut/render/BloomPass.h>
 #include <donut/render/GeometryPasses.h>
 #include <donut/render/DrawStrategy.h>
 #include <nvrhi/utils.h>
@@ -2567,6 +2568,26 @@ PYBIND11_MODULE(_pydonut, m) {
         .def("GetExposureBuffer", [](donut::render::ToneMappingPass &self) -> nvrhi::IBuffer* {
             return self.GetExposureBuffer();
         }, py::return_value_policy::reference_internal);
+
+    // The FramebufferFactory is passed both at construction and at every Render call, and they
+    // are not always the same one: the sample blooms into the resolved framebuffer on the TAA
+    // path (FeatureDemo.cpp:1128) but into the HDR-or-resolved framebuffer on the MSAA path
+    // (FeatureDemo.cpp:1146). Both parameters are therefore exposed.
+    py::class_<donut::render::BloomPass, std::shared_ptr<donut::render::BloomPass>>(m, "BloomPass")
+        .def(py::init([](nvrhi::IDevice* device, const std::shared_ptr<donut::engine::ShaderFactory> &shaderFactory,
+                std::shared_ptr<donut::engine::CommonRenderPasses> commonPasses,
+                std::shared_ptr<donut::engine::FramebufferFactory> framebufferFactory,
+                const donut::engine::IView &compositeView) {
+            return new donut::render::BloomPass(device, shaderFactory, commonPasses, framebufferFactory, compositeView);
+        }), py::arg("device"), py::arg("shaderFactory"), py::arg("commonPasses"),
+            py::arg("framebufferFactory"), py::arg("compositeView"))
+        .def("Render", [](donut::render::BloomPass &self, nvrhi::ICommandList* commandList,
+                const std::shared_ptr<donut::engine::FramebufferFactory> &framebufferFactory,
+                const donut::engine::IView &compositeView, nvrhi::ITexture* sourceDestTexture,
+                float sigmaInPixels, float blendFactor) {
+            self.Render(commandList, framebufferFactory, compositeView, sourceDestTexture, sigmaInPixels, blendFactor);
+        }, py::arg("commandList"), py::arg("framebufferFactory"), py::arg("compositeView"),
+            py::arg("sourceDestTexture"), py::arg("sigmaInPixels"), py::arg("blendFactor"));
 
     py::class_<donut::engine::FramebufferFactory, std::shared_ptr<donut::engine::FramebufferFactory>>(m, "FramebufferFactory")
         .def(py::init<nvrhi::IDevice*>(), py::arg("device"))

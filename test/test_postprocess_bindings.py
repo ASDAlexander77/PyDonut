@@ -149,3 +149,20 @@ def test_tone_mapping_pass_omits_the_manual_histogram_path() -> None:
     assert not hasattr(pyd.ToneMappingPass, "ResetHistogram")
     assert not hasattr(pyd.ToneMappingPass, "AddFrameToHistogram")
     assert not hasattr(pyd.ToneMappingPass, "ComputeExposure")
+
+
+def test_bloom_pass_is_exported_with_render() -> None:
+    assert hasattr(pyd, "BloomPass")
+    assert hasattr(pyd.BloomPass, "Render")
+
+
+def test_bloom_render_takes_a_framebuffer_factory_per_call() -> None:
+    # BloomPass takes a FramebufferFactory at construction AND at every Render call, because
+    # the sample bloom's into different targets depending on AA mode (FeatureDemo.cpp:1128
+    # vs :1146). Assert the per-call parameter survives in the signature.
+    import inspect
+
+    doc = inspect.getdoc(pyd.BloomPass.Render) or ""
+    assert "framebufferFactory" in doc
+    assert "sigmaInPixels" in doc
+    assert "blendFactor" in doc
