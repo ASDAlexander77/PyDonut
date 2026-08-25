@@ -179,9 +179,13 @@ command-list methods, taking `(dest, destSubresources, src, srcSubresources)`.
 
 ### ImGui additions
 
-The sample's `UIRenderer` uses six ImGui functions that the binding does not yet have:
-`SliderFloat`, `DragFloat`, `CollapsingHeader`, `SameLine`, `TextUnformatted`, and
-`SetItemDefaultFocus`. These join the existing `def_static` set on the `ImGui` class.
+The sample's `UIRenderer` uses five ImGui functions that the binding does not yet have:
+`SliderFloat`, `DragFloat`, `CollapsingHeader`, `SameLine`, and `SetItemDefaultFocus`. These
+join the existing `def_static` set on the `ImGui` class.
+
+The original's sixth, `ImGui::TextUnformatted`, needs nothing: the existing `ImGui.Text` binding
+(`_pydonut.cpp:2753-2755`) already calls `TextUnformatted` internally, deliberately, so that
+Python string content can never be interpreted as a printf format string.
 
 `PushFont`/`PopFont`/`GetFontSize`/`GetIO` are used by the original's console and its
 scaled-font handling; since the console is out of scope, they are not bound.
