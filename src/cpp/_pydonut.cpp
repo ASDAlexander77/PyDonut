@@ -59,6 +59,7 @@
 #include <donut/render/TemporalAntiAliasingPass.h>
 #include <donut/render/SkyPass.h>
 #include <donut/render/SsaoPass.h>
+#include <donut/render/ToneMappingPasses.h>
 #include <donut/render/GeometryPasses.h>
 #include <donut/render/DrawStrategy.h>
 #include <nvrhi/utils.h>
@@ -2513,6 +2514,59 @@ PYBIND11_MODULE(_pydonut, m) {
                 const donut::render::SsaoParameters &params, const donut::engine::IView &compositeView) {
             self.Render(commandList, params, compositeView);
         }, py::arg("commandList"), py::arg("params"), py::arg("compositeView"));
+
+    py::class_<donut::render::ToneMappingParameters>(m, "ToneMappingParameters")
+        .def(py::init<>())
+        .def_readwrite("histogramLowPercentile", &donut::render::ToneMappingParameters::histogramLowPercentile)
+        .def_readwrite("histogramHighPercentile", &donut::render::ToneMappingParameters::histogramHighPercentile)
+        .def_readwrite("eyeAdaptationSpeedUp", &donut::render::ToneMappingParameters::eyeAdaptationSpeedUp)
+        .def_readwrite("eyeAdaptationSpeedDown", &donut::render::ToneMappingParameters::eyeAdaptationSpeedDown)
+        .def_readwrite("minAdaptedLuminance", &donut::render::ToneMappingParameters::minAdaptedLuminance)
+        .def_readwrite("maxAdaptedLuminance", &donut::render::ToneMappingParameters::maxAdaptedLuminance)
+        .def_readwrite("exposureBias", &donut::render::ToneMappingParameters::exposureBias)
+        .def_readwrite("whitePoint", &donut::render::ToneMappingParameters::whitePoint)
+        .def_readwrite("enableColorLUT", &donut::render::ToneMappingParameters::enableColorLUT);
+
+    // colorLUT is intentionally left unbound -- nothing in this repo builds a colour LUT
+    // texture. exposureBufferOverride IS bound and is not incidental: it is how eye adaptation
+    // survives a window resize, by handing the outgoing pass's exposure buffer to its
+    // replacement (FeatureDemo.cpp:831-840).
+    py::class_<donut::render::ToneMappingPass::CreateParameters>(m, "ToneMappingPassCreateParameters")
+        .def(py::init<>())
+        .def_readwrite("isTextureArray", &donut::render::ToneMappingPass::CreateParameters::isTextureArray)
+        .def_readwrite("histogramBins", &donut::render::ToneMappingPass::CreateParameters::histogramBins)
+        .def_readwrite("numConstantBufferVersions", &donut::render::ToneMappingPass::CreateParameters::numConstantBufferVersions)
+        .def_property("exposureBufferOverride",
+            [](const donut::render::ToneMappingPass::CreateParameters &p) -> nvrhi::IBuffer* { return p.exposureBufferOverride; },
+            [](donut::render::ToneMappingPass::CreateParameters &p, nvrhi::IBuffer* b) { p.exposureBufferOverride = b; },
+            py::return_value_policy::reference);
+
+    // Render/ResetHistogram/AddFrameToHistogram/ComputeExposure are deliberately not bound:
+    // SimpleRender runs the histogram and exposure steps internally, and is the only tone
+    // mapping entry point the sample uses (FeatureDemo.cpp:1158).
+    py::class_<donut::render::ToneMappingPass, std::shared_ptr<donut::render::ToneMappingPass>>(m, "ToneMappingPass")
+        .def(py::init([](nvrhi::IDevice* device, std::shared_ptr<donut::engine::ShaderFactory> shaderFactory,
+                std::shared_ptr<donut::engine::CommonRenderPasses> commonPasses,
+                std::shared_ptr<donut::engine::FramebufferFactory> framebufferFactory,
+                const donut::engine::IView &compositeView,
+                const donut::render::ToneMappingPass::CreateParameters &params) {
+            return new donut::render::ToneMappingPass(device, shaderFactory, commonPasses,
+                framebufferFactory, compositeView, params);
+        }), py::arg("device"), py::arg("shaderFactory"), py::arg("commonPasses"),
+            py::arg("framebufferFactory"), py::arg("compositeView"), py::arg("params"))
+        .def("SimpleRender", [](donut::render::ToneMappingPass &self, nvrhi::ICommandList* commandList,
+                const donut::render::ToneMappingParameters &params, const donut::engine::IView &compositeView,
+                nvrhi::ITexture* sourceTexture) {
+            self.SimpleRender(commandList, params, compositeView, sourceTexture);
+        }, py::arg("commandList"), py::arg("params"), py::arg("compositeView"), py::arg("sourceTexture"))
+        .def("AdvanceFrame", &donut::render::ToneMappingPass::AdvanceFrame, py::arg("frameTime"))
+        .def("ResetExposure", [](donut::render::ToneMappingPass &self, nvrhi::ICommandList* commandList,
+                float initialExposure) {
+            self.ResetExposure(commandList, initialExposure);
+        }, py::arg("commandList"), py::arg("initialExposure") = 0.f)
+        .def("GetExposureBuffer", [](donut::render::ToneMappingPass &self) -> nvrhi::IBuffer* {
+            return self.GetExposureBuffer();
+        }, py::return_value_policy::reference_internal);
 
     py::class_<donut::engine::FramebufferFactory, std::shared_ptr<donut::engine::FramebufferFactory>>(m, "FramebufferFactory")
         .def(py::init<nvrhi::IDevice*>(), py::arg("device"))

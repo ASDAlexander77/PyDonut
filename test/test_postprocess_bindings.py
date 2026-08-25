@@ -106,3 +106,42 @@ def test_ssao_parameters_are_writable() -> None:
 def test_ssao_pass_is_exported_with_render() -> None:
     assert hasattr(pyd, "SsaoPass")
     assert hasattr(pyd.SsaoPass, "Render")
+
+
+def test_tone_mapping_parameters_defaults_match_header() -> None:
+    p = pyd.ToneMappingParameters()
+    # 0.8f / 0.95f / 0.02f are not exactly representable, so widening the C++ float to a
+    # Python double leaves a residue and exact == would be unsatisfiable. The remaining
+    # defaults (1.0, 0.5, -0.5, 3.0) are binary-exact and stay on exact equality.
+    assert p.histogramLowPercentile == pytest.approx(0.8)
+    assert p.histogramHighPercentile == pytest.approx(0.95)
+    assert p.eyeAdaptationSpeedUp == 1.0
+    assert p.eyeAdaptationSpeedDown == 0.5
+    assert p.minAdaptedLuminance == pytest.approx(0.02)
+    assert p.maxAdaptedLuminance == 0.5
+    assert p.exposureBias == -0.5
+    assert p.whitePoint == 3.0
+    assert p.enableColorLUT is True
+
+
+def test_tone_mapping_create_parameters_defaults_match_header() -> None:
+    p = pyd.ToneMappingPassCreateParameters()
+    assert p.isTextureArray is False
+    assert p.histogramBins == 256
+    assert p.numConstantBufferVersions == 16
+    # exposureBufferOverride is how eye adaptation survives a resize; it starts unset.
+    assert p.exposureBufferOverride is None
+
+
+def test_tone_mapping_pass_exposes_the_simple_render_path() -> None:
+    assert hasattr(pyd.ToneMappingPass, "SimpleRender")
+    assert hasattr(pyd.ToneMappingPass, "AdvanceFrame")
+    assert hasattr(pyd.ToneMappingPass, "ResetExposure")
+    assert hasattr(pyd.ToneMappingPass, "GetExposureBuffer")
+
+
+def test_tone_mapping_pass_omits_the_manual_histogram_path() -> None:
+    # Render/ResetHistogram/AddFrameToHistogram/ComputeExposure are deliberately unbound:
+    # SimpleRender performs those steps internally and is the only path the sample takes.
+    assert not hasattr(pyd.ToneMappingPass, "AddFrameToHistogram")
+    assert not hasattr(pyd.ToneMappingPass, "ComputeExposure")

@@ -155,6 +155,9 @@ from pydonut._pydonut import SkyParameters
 from pydonut._pydonut import SkyPass
 from pydonut._pydonut import SsaoParameters
 from pydonut._pydonut import SsaoPass
+from pydonut._pydonut import ToneMappingParameters
+from pydonut._pydonut import ToneMappingPassCreateParameters
+from pydonut._pydonut import ToneMappingPass
 from pydonut._pydonut import FramebufferFactory
 from pydonut._pydonut import RenderView
 from pydonut._pydonut import RenderCompositeView
@@ -329,6 +332,9 @@ __all__ = (
     'SkyPass',
     'SsaoParameters',
     'SsaoPass',
+    'ToneMappingParameters',
+    'ToneMappingPassCreateParameters',
+    'ToneMappingPass',
     'FramebufferFactory',
     'RenderView',
     'RenderCompositeView',

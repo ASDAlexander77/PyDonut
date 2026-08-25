@@ -1382,6 +1382,36 @@ class SsaoPass():
     def __init__(self: SsaoPass, device: Device, shaderFactory: ShaderFactory, commonPasses: CommonRenderPasses, gbufferDepth: Texture, gbufferNormals: Texture, destinationTexture: Texture) -> None: ...
     def Render(self: SsaoPass, commandList: CommandList, params: SsaoParameters, compositeView: IView) -> None: ...
 
+class ToneMappingParameters():
+    histogramLowPercentile: float
+    histogramHighPercentile: float
+    eyeAdaptationSpeedUp: float
+    eyeAdaptationSpeedDown: float
+    minAdaptedLuminance: float
+    maxAdaptedLuminance: float
+    exposureBias: float
+    whitePoint: float
+    enableColorLUT: bool
+    def __init__(self: ToneMappingParameters) -> None: ...
+
+# colorLUT is intentionally left unbound. exposureBufferOverride carries eye adaptation
+# across a resize -- hand it the outgoing pass's GetExposureBuffer().
+class ToneMappingPassCreateParameters():
+    isTextureArray: bool
+    histogramBins: int
+    numConstantBufferVersions: int
+    exposureBufferOverride: Optional[Buffer]
+    def __init__(self: ToneMappingPassCreateParameters) -> None: ...
+
+# Render/ResetHistogram/AddFrameToHistogram/ComputeExposure are intentionally left unbound --
+# SimpleRender performs those steps internally.
+class ToneMappingPass():
+    def __init__(self: ToneMappingPass, device: Device, shaderFactory: ShaderFactory, commonPasses: CommonRenderPasses, framebufferFactory: FramebufferFactory, compositeView: IView, params: ToneMappingPassCreateParameters) -> None: ...
+    def SimpleRender(self: ToneMappingPass, commandList: CommandList, params: ToneMappingParameters, compositeView: IView, sourceTexture: Texture) -> None: ...
+    def AdvanceFrame(self: ToneMappingPass, frameTime: float) -> None: ...
+    def ResetExposure(self: ToneMappingPass, commandList: CommandList, initialExposure: float = 0.0) -> None: ...
+    def GetExposureBuffer(self: ToneMappingPass) -> Buffer: ...
+
 class FramebufferFactory():
     def __init__(self: FramebufferFactory, device: Device) -> None: ...
     def SetRenderTargets(self: FramebufferFactory, targets: list[Texture]) -> None: ...
