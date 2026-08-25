@@ -457,7 +457,10 @@ if __name__ == "__main__":
                 # without clearing first, the old and new render-target sets are both
                 # resident during Init(), doubling peak VRAM on every resize and AA switch
                 # (worst at 8x MSAA, where the G-buffer and HdrColor are all multisampled).
-                # No waitForIdle is needed: nvrhi defers destruction of in-flight resources.
+                # No waitForIdle is needed: NVRHI command lists hold refcounted references to
+                # every resource they touch until runGarbageCollection retires the fence, so
+                # releasing a Python-side reference cannot free a resource the GPU is still
+                # reading.
                 #
                 # skyPass and ssaoPass hold the same kind of stale binding sets (referencing
                 # ForwardFramebuffer/HdrColor, gbuffer.Depth, gbuffer.GBufferNormals and
@@ -471,6 +474,7 @@ if __name__ == "__main__":
                 self.bindingCache.Clear()
                 self.gbufferPass.ResetBindingCache()
                 self.deferredLightingPass.ResetBindingCache()
+                self.forwardPass.ResetBindingCache()
                 self.skyPass = None
                 self.ssaoPass = None
                 self.taaPass = None
@@ -486,6 +490,13 @@ if __name__ == "__main__":
                     else None
                 )
                 self.toneMappingPass = None
+
+                # TemporalFeedback1/2 come back from Init() with undefined contents --
+                # RenderTargets.Clear only clears the G-buffer and HdrColor -- and
+                # self.viewPrevious still carries the pre-resize viewport. Both make the
+                # history invalid, so the next frame must resolve with feedbackIsValid=False
+                # and skip RenderMotionVectors, exactly as on the very first frame.
+                self.previousViewsValid = False
 
                 self.renderTargets = RenderTargets()
                 self.renderTargets.Init(device, width, height, sampleCount)
@@ -815,6 +826,11 @@ if __name__ == "__main__":
         deviceManager.RemoveRenderPass(example)
 
     deviceManager.Shutdown()
+
+    # Same placement and gating as deferred_shading.py:383-384 -- after Shutdown(), so
+    # anything still reported is genuinely leaked rather than merely not yet torn down.
+    if is_debug:
+        deviceManager.ReportLiveObjects()
 
     del deviceManager
 
