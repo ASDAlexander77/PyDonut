@@ -57,6 +57,7 @@
 #include <donut/render/DeferredLightingPass.h>
 #include <donut/render/ForwardShadingPass.h>
 #include <donut/render/TemporalAntiAliasingPass.h>
+#include <donut/render/SkyPass.h>
 #include <donut/render/GeometryPasses.h>
 #include <donut/render/DrawStrategy.h>
 #include <nvrhi/utils.h>
@@ -2443,6 +2444,46 @@ PYBIND11_MODULE(_pydonut, m) {
                 donut::engine::PlanarView &compositeViewInput, donut::engine::PlanarView &compositeViewOutput) {
             self.TemporalResolve(commandList, params, feedbackIsValid, compositeViewInput, compositeViewOutput);
         }, py::arg("commandList"), py::arg("params"), py::arg("feedbackIsValid"), py::arg("compositeViewInput"), py::arg("compositeViewOutput"));
+
+    // SkyParameters' four dm::float3 fields (skyColor/horizonColor/groundColor/directionUp)
+    // follow this codebase's flat-scalar convention rather than being exposed as math types --
+    // same shape as DeferredLightingPassInputs.SetAmbientColors above.
+    py::class_<donut::render::SkyParameters>(m, "SkyParameters")
+        .def(py::init<>())
+        .def("SetSkyColor", [](donut::render::SkyParameters &self, float r, float g, float b) {
+            self.skyColor = donut::math::float3(r, g, b);
+        }, py::arg("r"), py::arg("g"), py::arg("b"))
+        .def("SetHorizonColor", [](donut::render::SkyParameters &self, float r, float g, float b) {
+            self.horizonColor = donut::math::float3(r, g, b);
+        }, py::arg("r"), py::arg("g"), py::arg("b"))
+        .def("SetGroundColor", [](donut::render::SkyParameters &self, float r, float g, float b) {
+            self.groundColor = donut::math::float3(r, g, b);
+        }, py::arg("r"), py::arg("g"), py::arg("b"))
+        .def("SetDirectionUp", [](donut::render::SkyParameters &self, float x, float y, float z) {
+            self.directionUp = donut::math::float3(x, y, z);
+        }, py::arg("x"), py::arg("y"), py::arg("z"))
+        .def_readwrite("brightness", &donut::render::SkyParameters::brightness)
+        .def_readwrite("horizonSize", &donut::render::SkyParameters::horizonSize)
+        .def_readwrite("glowSize", &donut::render::SkyParameters::glowSize)
+        .def_readwrite("glowIntensity", &donut::render::SkyParameters::glowIntensity)
+        .def_readwrite("glowSharpness", &donut::render::SkyParameters::glowSharpness)
+        .def_readwrite("maxLightRadiance", &donut::render::SkyParameters::maxLightRadiance);
+
+    // FillShaderParameters is deliberately not bound: it is a static helper for callers that
+    // drive the procedural sky constants themselves, which no sample in this repo does.
+    py::class_<donut::render::SkyPass, std::shared_ptr<donut::render::SkyPass>>(m, "SkyPass")
+        .def(py::init([](nvrhi::IDevice* device, const std::shared_ptr<donut::engine::ShaderFactory> &shaderFactory,
+                const std::shared_ptr<donut::engine::CommonRenderPasses> &commonPasses,
+                const std::shared_ptr<donut::engine::FramebufferFactory> &framebufferFactory,
+                const donut::engine::IView &compositeView) {
+            return new donut::render::SkyPass(device, shaderFactory, commonPasses, framebufferFactory, compositeView);
+        }), py::arg("device"), py::arg("shaderFactory"), py::arg("commonPasses"),
+            py::arg("framebufferFactory"), py::arg("compositeView"))
+        .def("Render", [](const donut::render::SkyPass &self, nvrhi::ICommandList* commandList,
+                const donut::engine::IView &compositeView, const donut::engine::DirectionalLight &light,
+                const donut::render::SkyParameters &params) {
+            self.Render(commandList, compositeView, light, params);
+        }, py::arg("commandList"), py::arg("compositeView"), py::arg("light"), py::arg("params"));
 
     py::class_<donut::engine::FramebufferFactory, std::shared_ptr<donut::engine::FramebufferFactory>>(m, "FramebufferFactory")
         .def(py::init<nvrhi::IDevice*>(), py::arg("device"))

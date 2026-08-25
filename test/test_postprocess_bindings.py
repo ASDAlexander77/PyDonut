@@ -30,6 +30,8 @@ name, a parameter default drifting away from the C++ header it mirrors.
 
 from __future__ import annotations
 
+import pytest
+
 import pydonut as pyd
 
 
@@ -45,3 +47,35 @@ def test_planar_view_derives_from_iview() -> None:
 
 def test_cubemap_view_derives_from_iview() -> None:
     assert issubclass(pyd.CubemapView, pyd.IView)
+
+
+def test_sky_parameters_defaults_match_header() -> None:
+    p = pyd.SkyParameters()
+    # brightness/glowIntensity are 0.1f in the header: float32 can't represent 0.1 exactly,
+    # so the widened-to-double value read back through pybind11 needs an approx comparison.
+    assert p.brightness == pytest.approx(0.1)
+    assert p.horizonSize == 30.0
+    assert p.glowSize == 5.0
+    assert p.glowIntensity == pytest.approx(0.1)
+    assert p.glowSharpness == 4.0
+    assert p.maxLightRadiance == 100.0
+
+
+def test_sky_parameters_are_writable() -> None:
+    p = pyd.SkyParameters()
+    p.brightness = 0.25
+    assert p.brightness == 0.25
+
+
+def test_sky_parameters_expose_flattened_float3_setters() -> None:
+    p = pyd.SkyParameters()
+    # dm::float3 fields are never exposed directly -- they are set as flat scalars.
+    p.SetSkyColor(0.1, 0.2, 0.3)
+    p.SetHorizonColor(0.4, 0.5, 0.6)
+    p.SetGroundColor(0.7, 0.8, 0.9)
+    p.SetDirectionUp(0.0, 1.0, 0.0)
+
+
+def test_sky_pass_is_exported_with_render() -> None:
+    assert hasattr(pyd, "SkyPass")
+    assert hasattr(pyd.SkyPass, "Render")
