@@ -2603,9 +2603,16 @@ PYBIND11_MODULE(_pydonut, m) {
                 float initialExposure) {
             self.ResetExposure(commandList, initialExposure);
         }, py::arg("commandList"), py::arg("initialExposure") = 0.f)
-        .def("GetExposureBuffer", [](donut::render::ToneMappingPass &self) -> nvrhi::IBuffer* {
-            return self.GetExposureBuffer();
-        }, py::return_value_policy::reference_internal);
+        // Owning by design: GetExposureBuffer() returns a BufferHandle *by value* (already
+        // AddRef'd), and DetachToShared hands that reference to Python rather than discarding
+        // it. The buffer therefore outlives the pass it came from, which is what the resize
+        // handoff needs -- exposureBufferOverride is a raw nvrhi::IBuffer*
+        // (ToneMappingPasses.h:92) that is only AddRef'd inside the replacement pass's
+        // constructor (ToneMappingPasses.cpp:103), so a non-owning handle parked in a Python
+        // variable across the old pass's destruction would already be dangling by then.
+        .def("GetExposureBuffer", [](donut::render::ToneMappingPass &self) {
+            return DetachToShared(self.GetExposureBuffer());
+        });
 
     // The FramebufferFactory is passed both at construction and at every Render call, and they
     // are not always the same one: the sample blooms into the resolved framebuffer on the TAA

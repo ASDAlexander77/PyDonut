@@ -1411,7 +1411,8 @@ class ToneMappingParameters():
     def __init__(self: ToneMappingParameters) -> None: ...
 
 # colorLUT is intentionally left unbound. exposureBufferOverride carries eye adaptation
-# across a resize -- hand it the outgoing pass's GetExposureBuffer().
+# across a resize -- hand it the outgoing pass's GetExposureBuffer(), whose Buffer owns a
+# reference of its own and so stays valid after the pass it came from is released.
 class ToneMappingPassCreateParameters():
     isTextureArray: bool
     histogramBins: int

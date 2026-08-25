@@ -349,7 +349,6 @@ if __name__ == "__main__":
                 self.exposureResetRequired = False
             else:
                 self.exposureResetRequired = True
-            self.pendingExposureBuffer = None
 
             self.toneMappingPass = pyd.ToneMappingPass(
                 device,
@@ -359,6 +358,12 @@ if __name__ == "__main__":
                 self.view,
                 toneMappingParams,
             )
+
+            # Released only AFTER construction: exposureBufferOverride is a raw
+            # nvrhi::IBuffer* (ToneMappingPasses.h:92) that the constructor is what AddRefs
+            # (ToneMappingPasses.cpp:103), so this reference is the buffer's only owner right
+            # up until the line above returns.
+            self.pendingExposureBuffer = None
 
             self.bloomPass = pyd.BloomPass(
                 device,
@@ -471,9 +476,10 @@ if __name__ == "__main__":
                 self.taaPass = None
                 self.bloomPass = None
 
-                # GetExposureBuffer is return_value_policy::reference_internal, so holding the
-                # buffer keeps the old pass alive until the new one AddRefs it -- capturing
-                # before releasing is what makes this safe rather than a dangling handle.
+                # GetExposureBuffer hands Python an owning reference (the binding wraps the
+                # returned BufferHandle in DetachToShared), so the buffer survives the old
+                # pass's destruction below and stays alive until CreateRenderPasses drops
+                # this reference -- after the replacement pass's constructor has AddRef'd it.
                 self.pendingExposureBuffer = (
                     self.toneMappingPass.GetExposureBuffer()
                     if self.toneMappingPass is not None
