@@ -397,10 +397,21 @@ if __name__ == "__main__":
                 # resident during Init(), doubling peak VRAM on every resize and AA switch
                 # (worst at 8x MSAA, where the G-buffer and HdrColor are all multisampled).
                 # No waitForIdle is needed: nvrhi defers destruction of in-flight resources.
+                #
+                # skyPass and ssaoPass hold the same kind of stale binding sets (referencing
+                # ForwardFramebuffer/HdrColor, gbuffer.Depth, gbuffer.GBufferNormals and
+                # AmbientOcclusion) but expose no ResetBindingCache/Clear method -- dropping
+                # the Python reference is the only way to release them, so they must be set to
+                # None here too, not just reassigned in CreateRenderPasses() below. Any future
+                # size-dependent pass added to CreateRenderPasses needs the same treatment: if
+                # it has no cache-reset method, release it here before Init() rather than only
+                # reassigning it later.
                 self.renderTargets = None
                 self.bindingCache.Clear()
                 self.gbufferPass.ResetBindingCache()
                 self.deferredLightingPass.ResetBindingCache()
+                self.skyPass = None
+                self.ssaoPass = None
 
                 self.renderTargets = RenderTargets()
                 self.renderTargets.Init(device, width, height, sampleCount)
