@@ -113,6 +113,32 @@ export SHADERMAKE_DXC_PATH=/path/to/dxc/bin/dxc   # Linux
 set SHADERMAKE_DXC_PATH=C:\path\to\dxc\bin\dxc.exe  # Windows (cmd)
 ```
 
+### 5. Enabling NSight Aftermath crash dumps (optional, both platforms)
+
+`aftermath.py` deliberately crashes the GPU to demonstrate NSight Aftermath crash dumps. The
+crashes work in any build, but *capturing* a dump needs the Aftermath SDK compiled in:
+
+```sh
+SKBUILD_CMAKE_DEFINE=PYDONUT_WITH_AFTERMATH=ON uv sync --reinstall-package pydonut
+```
+
+`--reinstall-package pydonut` is required: an environment variable changes none of the cache-key
+files listed in `pyproject.toml`, so uv would otherwise reuse the cached wheel. The option
+downloads the NSight Aftermath SDK from `developer.nvidia.com` at configure time, so this build
+needs network access.
+
+In such a build `pyd.AFTERMATH_AVAILABLE` is `True` and `DeviceCreationParameters` gains an
+`enableAftermath` field. **In a default build that field does not exist at all** — always guard
+access on `pyd.AFTERMATH_AVAILABLE`, as `aftermath.py` does.
+
+Dumps are written to `<directory containing the running executable>/crash_<timestamp>/`. Under
+PyDonut the executable is the Python interpreter, so they land next to `python.exe` in
+`.venv/Scripts/`, not in the project directory. The absolute path is logged when the dump is
+written.
+
+> Warning: triggering either crash resets the display driver. The screen blanks, the example
+> dies, and other GPU applications may die with it.
+
 ## Running the example
 
 `main.py` renders a basic textured triangle using `pydonut`:
