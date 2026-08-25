@@ -131,6 +131,8 @@ def test_tone_mapping_create_parameters_defaults_match_header() -> None:
     assert p.numConstantBufferVersions == 16
     # exposureBufferOverride is how eye adaptation survives a resize; it starts unset.
     assert p.exposureBufferOverride is None
+    # colorLUT is deliberately unbound -- nothing in this repo builds a colour LUT texture.
+    assert not hasattr(p, "colorLUT")
 
 
 def test_tone_mapping_pass_exposes_the_simple_render_path() -> None:
@@ -143,5 +145,7 @@ def test_tone_mapping_pass_exposes_the_simple_render_path() -> None:
 def test_tone_mapping_pass_omits_the_manual_histogram_path() -> None:
     # Render/ResetHistogram/AddFrameToHistogram/ComputeExposure are deliberately unbound:
     # SimpleRender performs those steps internally and is the only path the sample takes.
+    assert not hasattr(pyd.ToneMappingPass, "Render")
+    assert not hasattr(pyd.ToneMappingPass, "ResetHistogram")
     assert not hasattr(pyd.ToneMappingPass, "AddFrameToHistogram")
     assert not hasattr(pyd.ToneMappingPass, "ComputeExposure")
