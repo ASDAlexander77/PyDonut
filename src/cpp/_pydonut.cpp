@@ -1725,6 +1725,14 @@ PYBIND11_MODULE(_pydonut, m) {
     }, py::arg("name"));
     commandList.def("endMarker", &nvrhi::ICommandList::endMarker);
 
+    // Subresources are fixed at TextureSubresourceSet(0, 1, 0, 1) -- mip 0, array slice 0 --
+    // matching FeatureDemo.cpp:1138 and the same hide-the-subresource-set convention already
+    // used by clearTextureFloat/clearDepthStencilTexture above (which pass AllSubresources).
+    commandList.def("resolveTexture", [](nvrhi::ICommandList &self, nvrhi::ITexture* dest, nvrhi::ITexture* src) {
+        const nvrhi::TextureSubresourceSet subresources(0, 1, 0, 1);
+        self.resolveTexture(dest, subresources, src, subresources);
+    }, py::arg("dest"), py::arg("src"));
+
     // True only in builds configured with -DPYDONUT_WITH_AFTERMATH=ON. When False,
     // DeviceCreationParameters has no enableAftermath attribute at all and no crash dumps are
     // written -- the crashes still happen, they just go uncaptured.
@@ -2315,7 +2323,33 @@ PYBIND11_MODULE(_pydonut, m) {
         // FramebufferFactory instances directly, since it needs more control over them).
         .def("GetFramebuffer", [](donut::render::GBufferRenderTargets &self, donut::engine::PlanarView &view) -> nvrhi::IFramebuffer* {
             return self.GBufferFramebuffer->GetFramebuffer(view);
-        }, py::arg("view"), py::return_value_policy::reference_internal);
+        }, py::arg("view"), py::return_value_policy::reference_internal)
+        // The public texture handles from GBuffer.h. The example reads them by name to wire up
+        // SsaoPass (Depth + GBufferNormals), the TAA create parameters (Depth + MotionVectors)
+        // and the deferred lighting inputs.
+        .def_property_readonly("Depth", [](donut::render::GBufferRenderTargets &self) -> nvrhi::ITexture* {
+            return self.Depth;
+        }, py::return_value_policy::reference_internal)
+        .def_property_readonly("GBufferDiffuse", [](donut::render::GBufferRenderTargets &self) -> nvrhi::ITexture* {
+            return self.GBufferDiffuse;
+        }, py::return_value_policy::reference_internal)
+        .def_property_readonly("GBufferSpecular", [](donut::render::GBufferRenderTargets &self) -> nvrhi::ITexture* {
+            return self.GBufferSpecular;
+        }, py::return_value_policy::reference_internal)
+        .def_property_readonly("GBufferNormals", [](donut::render::GBufferRenderTargets &self) -> nvrhi::ITexture* {
+            return self.GBufferNormals;
+        }, py::return_value_policy::reference_internal)
+        .def_property_readonly("GBufferEmissive", [](donut::render::GBufferRenderTargets &self) -> nvrhi::ITexture* {
+            return self.GBufferEmissive;
+        }, py::return_value_policy::reference_internal)
+        .def_property_readonly("MotionVectors", [](donut::render::GBufferRenderTargets &self) -> nvrhi::ITexture* {
+            return self.MotionVectors;
+        }, py::return_value_policy::reference_internal)
+        .def_property_readonly("GBufferFramebuffer", [](donut::render::GBufferRenderTargets &self) {
+            return self.GBufferFramebuffer;
+        })
+        .def("GetSampleCount", &donut::render::GBufferRenderTargets::GetSampleCount)
+        .def("GetUseReverseProjection", &donut::render::GBufferRenderTargets::GetUseReverseProjection);
 
     py::class_<donut::render::GBufferFillPass::CreateParameters>(m, "GBufferFillPassCreateParameters")
         .def(py::init<>());

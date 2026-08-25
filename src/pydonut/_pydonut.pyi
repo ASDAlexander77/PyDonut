@@ -839,6 +839,9 @@ class CommandList():
     # faulting scope in an NSight Aftermath crash dump.
     def beginMarker(self: CommandList, name: str) -> None: ...
     def endMarker(self: CommandList) -> None: ...
+    # Resolves mip 0 / array slice 0 only; nvrhi::TextureSubresourceSet is not exposed to
+    # Python, matching clearTextureFloat and clearDepthStencilTexture.
+    def resolveTexture(self: CommandList, dest: Texture, src: Texture) -> None: ...
     # Disables nvrhi's automatic per-command-list resource-state tracking, needed when several
     # command lists are recorded concurrently against one shared resource. Pair with
     # setResourceStatesForFramebuffer + commitBarriers, then re-enable when done.
@@ -1266,6 +1269,16 @@ class GBufferRenderTargets():
     width: int
     height: int
     def GetFramebuffer(self: GBufferRenderTargets, view: PlanarView) -> Framebuffer: ...
+    # Public texture handles from GBuffer.h. All None until Init() has been called.
+    Depth: Optional[Texture]
+    GBufferDiffuse: Optional[Texture]
+    GBufferSpecular: Optional[Texture]
+    GBufferNormals: Optional[Texture]
+    GBufferEmissive: Optional[Texture]
+    MotionVectors: Optional[Texture]
+    GBufferFramebuffer: Optional[FramebufferFactory]
+    def GetSampleCount(self: GBufferRenderTargets) -> int: ...
+    def GetUseReverseProjection(self: GBufferRenderTargets) -> bool: ...
 
 class GBufferFillPassCreateParameters():
     def __init__(self: GBufferFillPassCreateParameters) -> None: ...

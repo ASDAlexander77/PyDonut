@@ -166,3 +166,32 @@ def test_bloom_render_takes_a_framebuffer_factory_per_call() -> None:
     assert "framebufferFactory" in doc
     assert "sigmaInPixels" in doc
     assert "blendFactor" in doc
+
+
+def test_gbuffer_render_targets_expose_their_textures() -> None:
+    rt = pyd.GBufferRenderTargets()
+    # Uninitialised (Init not called), so every handle is still null -- but the properties
+    # must exist and be readable, which is what the example relies on.
+    for name in (
+        "Depth",
+        "GBufferDiffuse",
+        "GBufferSpecular",
+        "GBufferNormals",
+        "GBufferEmissive",
+        "MotionVectors",
+        "GBufferFramebuffer",
+    ):
+        assert hasattr(rt, name), name
+        assert getattr(rt, name) is None
+
+
+def test_gbuffer_render_targets_report_sample_count() -> None:
+    rt = pyd.GBufferRenderTargets()
+    assert rt.GetSampleCount() == 0
+    assert rt.GetUseReverseProjection() is False
+
+
+def test_command_list_can_resolve_textures() -> None:
+    # Bound without subresource arguments, matching clearTextureFloat/clearDepthStencilTexture
+    # which likewise hide nvrhi::TextureSubresourceSet from Python.
+    assert hasattr(pyd.CommandList, "resolveTexture")
