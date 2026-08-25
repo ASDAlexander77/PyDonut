@@ -222,6 +222,11 @@ if __name__ == "__main__":
             self.deferredLightingPass: pyd.DeferredLightingPass | None = None
             self.skyPass: pyd.SkyPass | None = None
             self.ssaoPass: pyd.SsaoPass | None = None
+            self.taaPass: pyd.TemporalAntiAliasingPass | None = None
+            self.toneMappingPass: pyd.ToneMappingPass | None = None
+            self.bloomPass: pyd.BloomPass | None = None
+            self.exposureResetRequired = True
+            self.pendingExposureBuffer: pyd.Buffer | None = None
             self.opaqueDrawStrategy = pyd.InstancedOpaqueDrawStrategy()
             self.transparentDrawStrategy = pyd.TransparentDrawStrategy()
             self.descriptorTable: pyd.DescriptorTableManager | None = None
@@ -315,6 +320,47 @@ if __name__ == "__main__":
             else:
                 self.ssaoPass = None
 
+            taaParams = pyd.TemporalAntiAliasingCreateParameters()
+            taaParams.sourceDepth = self.renderTargets.gbuffer.Depth
+            taaParams.motionVectors = self.renderTargets.gbuffer.MotionVectors
+            taaParams.unresolvedColor = self.renderTargets.HdrColor
+            taaParams.resolvedColor = self.renderTargets.ResolvedColor
+            taaParams.feedback1 = self.renderTargets.TemporalFeedback1
+            taaParams.feedback2 = self.renderTargets.TemporalFeedback2
+            self.taaPass = pyd.TemporalAntiAliasingPass(
+                device, self.shaderFactory, self.m_CommonPasses, self.view, taaParams
+            )
+
+            # Carry the outgoing pass's exposure buffer into its replacement, so eye
+            # adaptation survives the resize instead of re-adapting from black
+            # (FeatureDemo.cpp:831-840). Driven from self.pendingExposureBuffer, captured
+            # in the release block in Render() -- NOT from self.toneMappingPass, which has
+            # already been set to None by the time this runs.
+            toneMappingParams = pyd.ToneMappingPassCreateParameters()
+            if self.pendingExposureBuffer is not None:
+                toneMappingParams.exposureBufferOverride = self.pendingExposureBuffer
+                self.exposureResetRequired = False
+            else:
+                self.exposureResetRequired = True
+            self.pendingExposureBuffer = None
+
+            self.toneMappingPass = pyd.ToneMappingPass(
+                device,
+                self.shaderFactory,
+                self.m_CommonPasses,
+                self.renderTargets.LdrFramebuffer,
+                self.view,
+                toneMappingParams,
+            )
+
+            self.bloomPass = pyd.BloomPass(
+                device,
+                self.shaderFactory,
+                self.m_CommonPasses,
+                self.renderTargets.ResolvedFramebuffer,
+                self.view,
+            )
+
         def CreateSunLight(self: FeatureDemo) -> None:
             """sponza-plus.scene.json declares no lights, so the sun is always synthesised
             here -- this mirrors FeatureDemo.cpp:619-627, which treats it as a fallback.
@@ -365,6 +411,9 @@ if __name__ == "__main__":
             self.camera.Animate(elapsedTimeSeconds)
             self.GetDeviceManager().SetInformativeWindowTitle(WINDOW_TITLE)
 
+            if self.toneMappingPass is not None:
+                self.toneMappingPass.AdvanceFrame(elapsedTimeSeconds)
+
         def SetupView(self: FeatureDemo, width: int, height: int) -> None:
             if self.view is None:
                 self.view = pyd.PlanarView()
@@ -412,6 +461,18 @@ if __name__ == "__main__":
                 self.deferredLightingPass.ResetBindingCache()
                 self.skyPass = None
                 self.ssaoPass = None
+                self.taaPass = None
+                self.bloomPass = None
+
+                # GetExposureBuffer is return_value_policy::reference_internal, so holding the
+                # buffer keeps the old pass alive until the new one AddRefs it -- capturing
+                # before releasing is what makes this safe rather than a dangling handle.
+                self.pendingExposureBuffer = (
+                    self.toneMappingPass.GetExposureBuffer()
+                    if self.toneMappingPass is not None
+                    else None
+                )
+                self.toneMappingPass = None
 
                 self.renderTargets = RenderTargets()
                 self.renderTargets.Init(device, width, height, sampleCount)
@@ -426,6 +487,10 @@ if __name__ == "__main__":
                 self.CreateRenderPasses()
 
             self.commandList.open()
+
+            if self.exposureResetRequired:
+                self.toneMappingPass.ResetExposure(self.commandList, 0.5)
+
             self.renderTargets.Clear(self.commandList)
 
             # RenderCompositeView takes a FramebufferFactory, NOT a Framebuffer
@@ -471,12 +536,77 @@ if __name__ == "__main__":
                     self.commandList, self.view, self.sunLight, self.ui.SkyParams
                 )
 
+            finalHdrColor = self.renderTargets.HdrColor
+            finalHdrFramebuffer = self.renderTargets.HdrFramebuffer
+
+            if self.ui.AntiAliasingMode == AntiAliasingMode.TEMPORAL:
+                if self.previousViewsValid:
+                    self.taaPass.RenderMotionVectors(
+                        self.commandList, self.view, self.viewPrevious
+                    )
+                self.taaPass.TemporalResolve(
+                    self.commandList,
+                    self.ui.TemporalAntiAliasingParams,
+                    self.previousViewsValid,
+                    self.view,
+                    self.view,
+                )
+                finalHdrColor = self.renderTargets.ResolvedColor
+                finalHdrFramebuffer = self.renderTargets.ResolvedFramebuffer
+                self.previousViewsValid = True
+            else:
+                if self.renderTargets.gbuffer.GetSampleCount() > 1:
+                    self.commandList.resolveTexture(
+                        self.renderTargets.ResolvedColor, self.renderTargets.HdrColor
+                    )
+                    finalHdrColor = self.renderTargets.ResolvedColor
+                    finalHdrFramebuffer = self.renderTargets.ResolvedFramebuffer
+                self.previousViewsValid = False
+
+            if self.ui.EnableBloom:
+                self.bloomPass.Render(
+                    self.commandList,
+                    finalHdrFramebuffer,
+                    self.view,
+                    finalHdrColor,
+                    self.ui.BloomSigma,
+                    self.ui.BloomAlpha,
+                )
+
+            # self.ui.ToneMappingParams is aliased, not copied: pyd.ToneMappingParameters has
+            # no copy constructor, and unlike the C++ original's local struct copy
+            # ("ToneMappingParameters toneMappingParams = m_ui.ToneMappingParams;"),
+            # `toneMappingParams = self.ui.ToneMappingParams` in Python binds the *same*
+            # object. Mutating the speed fields directly would therefore permanently zero
+            # eye adaptation on the UI's shared params the first time a reset fires (frame 1
+            # of every run) -- save/restore around the single SimpleRender call instead, so
+            # the one-frame-zero-speed effect stays local like the C++ copy achieves for free.
+            toneMappingParams = self.ui.ToneMappingParams
+            savedSpeeds = None
+            if self.exposureResetRequired:
+                savedSpeeds = (
+                    toneMappingParams.eyeAdaptationSpeedUp,
+                    toneMappingParams.eyeAdaptationSpeedDown,
+                )
+                toneMappingParams.eyeAdaptationSpeedUp = 0.0
+                toneMappingParams.eyeAdaptationSpeedDown = 0.0
+                self.exposureResetRequired = False
+
+            self.toneMappingPass.SimpleRender(
+                self.commandList, toneMappingParams, self.view, finalHdrColor
+            )
+
+            if savedSpeeds is not None:
+                toneMappingParams.eyeAdaptationSpeedUp, toneMappingParams.eyeAdaptationSpeedDown = savedSpeeds
+
             self.m_CommonPasses.BlitTexture(
-                self.commandList, framebuffer, self.renderTargets.HdrColor, self.bindingCache
+                self.commandList, framebuffer, self.renderTargets.LdrColor, self.bindingCache
             )
 
             self.commandList.close()
             device.executeCommandList(self.commandList)
+
+            self.viewPrevious = pyd.PlanarView(self.view)
 
     is_debug = "-debug" in sys.argv
 
