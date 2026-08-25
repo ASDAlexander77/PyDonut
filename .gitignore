@@ -12,3 +12,8 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Claude Code: settings.json is shared, but per-machine permission grants and the
+# scheduler lock are local state.
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
