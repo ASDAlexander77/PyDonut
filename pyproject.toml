@@ -48,6 +48,9 @@ search_path = [
     "test",
 ]
 
+[tool.pytest.ini_options]
+testpaths = ["test"]
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",

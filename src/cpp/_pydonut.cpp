@@ -2533,7 +2533,15 @@ PYBIND11_MODULE(_pydonut, m) {
         py::arg("button"), py::arg("action"), py::arg("mods"));
     thirdPersonCamera.def("MouseScrollUpdate", &donut::app::ThirdPersonCamera::MouseScrollUpdate, py::arg("xoffset"), py::arg("yoffset"));
 
-    py::class_<donut::engine::PlanarView> planarView(m, "PlanarView");
+    // ICompositeView/IView are registered as real polymorphic bases rather than having every
+    // pass signature hardcode PlanarView&: SkyPass/SsaoPass/ToneMappingPass/BloomPass all take
+    // const ICompositeView&, and there are already two concrete views bound (PlanarView,
+    // CubemapView). Same reasoning as IDrawStrategy/IGeometryPass above (see :2282-2290).
+    // Neither base is constructible from Python -- they exist purely to carry the conversion.
+    py::class_<donut::engine::ICompositeView>(m, "ICompositeView");
+    py::class_<donut::engine::IView, donut::engine::ICompositeView>(m, "IView");
+
+    py::class_<donut::engine::PlanarView, donut::engine::IView> planarView(m, "PlanarView");
     planarView.def(py::init<>());
     // Copy constructor: PlanarView has no Python-visible identity beyond its cached state, so
     // this is how Python takes a snapshot of "this frame's view" to keep around as "last
@@ -2639,7 +2647,7 @@ PYBIND11_MODULE(_pydonut, m) {
     // CubemapView splits one transform into 6 face view/proj matrices for cube-map/environment
     // rendering (see threaded_rendering.py). Its faces are a plain PlanarView[6] internally, so
     // GetFaceView returns the existing PlanarView type -- no new view hierarchy is exposed.
-    py::class_<donut::engine::CubemapView> cubemapView(m, "CubemapView");
+    py::class_<donut::engine::CubemapView, donut::engine::IView> cubemapView(m, "CubemapView");
     cubemapView.def(py::init<>());
     // Fetches the camera's world-to-view transform on the C++ side (consistent with
     // PlanarView.SetMatricesFromCamera not exposing dm::affine3 to Python either) and forwards
