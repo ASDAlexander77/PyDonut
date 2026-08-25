@@ -37,9 +37,18 @@ Crash dumps are only written when the module was built with -DPYDONUT_WITH_AFTER
 (check pyd.AFTERMATH_AVAILABLE). Without it the crashes still happen, just uncaptured.
 
 WHERE THE DUMPS GO: donut writes them to GetDirectoryWithExecutable() / "crash_<timestamp>"
-(AftermathCrashDump.cpp:206). Under PyDonut the executable is the interpreter, so dumps
-land next to python.exe in the venv's Scripts/ directory -- NOT in the project root. The
-absolute path is logged when the dump is written.
+(AftermathCrashDump.cpp:206), containing crash.nv-gpudmp plus a .nvdbg per shader. NOT to
+"Documents/NVIDIA Corporation/CrashDump" -- that is the NSight Aftermath Monitor's folder,
+and once an app calls GFSDK_Aftermath_EnableGpuCrashDumps it owns the dump itself.
+
+GetDirectoryWithExecutable() is GetModuleFileNameA(nullptr, ...), which reports the REAL
+running image, not sys.executable. A uv-created venv's Scripts/python.exe is only a
+trampoline, so dumps land beside the BASE interpreter, e.g.
+
+    %APPDATA%/uv/python/cpython-3.14.0-windows-x86_64-none/crash_<timestamp>/
+
+The absolute path is logged ("Aftermath crash dump written: ...") when the dump is written;
+it scrolls by as the display driver resets, so check the folder above if you miss it.
 """
 
 from __future__ import annotations

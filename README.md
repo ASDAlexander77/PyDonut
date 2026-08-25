@@ -131,10 +131,17 @@ In such a build `pyd.AFTERMATH_AVAILABLE` is `True` and `DeviceCreationParameter
 `enableAftermath` field. **In a default build that field does not exist at all** — always guard
 access on `pyd.AFTERMATH_AVAILABLE`, as `aftermath.py` does.
 
-Dumps are written to `<directory containing the running executable>/crash_<timestamp>/`. Under
-PyDonut the executable is the Python interpreter, so they land next to `python.exe` in
-`.venv/Scripts/`, not in the project directory. The absolute path is logged when the dump is
-written.
+Dumps are written to `<directory containing the running executable>/crash_<timestamp>/`, as
+`crash.nv-gpudmp` plus one `.nvdbg` per shader. They do *not* go to
+`Documents/NVIDIA Corporation/CrashDump/` -- that folder belongs to the NSight Aftermath
+Monitor, and an app that calls `GFSDK_Aftermath_EnableGpuCrashDumps` writes its own dumps.
+
+Donut resolves that directory with `GetModuleFileNameA(nullptr, ...)`, which reports the real
+running image rather than `sys.executable`. A uv-created venv's `Scripts/python.exe` is only a
+trampoline, so under PyDonut the dumps land next to the **base** interpreter, e.g.
+`%APPDATA%/uv/python/cpython-3.14.0-windows-x86_64-none/crash_<timestamp>/` -- not in
+`.venv/Scripts/` and not in the project directory. The absolute path is logged
+("Aftermath crash dump written: ...") when the dump is written.
 
 > Warning: triggering either crash resets the display driver. The screen blanks, the example
 > dies, and other GPU applications may die with it.
