@@ -823,7 +823,13 @@ Expected: FAIL — `AssertionError: Depth`
 
 - [ ] **Step 3: Add the `GBufferRenderTargets` accessors**
 
-In `src/cpp/_pydonut.cpp`, extend the existing `GBufferRenderTargets` binding (which currently ends with the `GetFramebuffer` lambda at :2312-2314). Add these before the terminating `;`:
+In `src/cpp/_pydonut.cpp`, extend the existing `GBufferRenderTargets` binding. It currently ends at :2314 with:
+
+```cpp
+        }, py::arg("view"), py::return_value_policy::reference_internal);
+```
+
+Change that trailing `);` to `)` — dropping only the semicolon — then append the chain below, which supplies the new terminating `;`:
 
 ```cpp
         // The public texture handles from GBuffer.h. The example reads them by name to wire up
@@ -947,7 +953,13 @@ Expected: FAIL — `AssertionError: SliderFloat`
 
 - [ ] **Step 3: Add the bindings**
 
-In `src/cpp/_pydonut.cpp`, change the `Button` binding (`_pydonut.cpp:2780-2782`) to end with a `,`-continued chain instead of `;`, and append:
+In `src/cpp/_pydonut.cpp`, the `ImGui` class chain currently ends at :2782 with:
+
+```cpp
+        }, py::arg("label"));
+```
+
+Change that trailing `);` to `)` — dropping only the semicolon — then append the chain below, which supplies the new terminating `;`:
 
 ```cpp
         // Out-params follow the (changed, newValue) tuple convention documented at the top of
