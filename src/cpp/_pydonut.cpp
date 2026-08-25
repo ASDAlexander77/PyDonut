@@ -58,6 +58,7 @@
 #include <donut/render/ForwardShadingPass.h>
 #include <donut/render/TemporalAntiAliasingPass.h>
 #include <donut/render/SkyPass.h>
+#include <donut/render/SsaoPass.h>
 #include <donut/render/GeometryPasses.h>
 #include <donut/render/DrawStrategy.h>
 #include <nvrhi/utils.h>
@@ -2484,6 +2485,34 @@ PYBIND11_MODULE(_pydonut, m) {
                 const donut::render::SkyParameters &params) {
             self.Render(commandList, compositeView, light, params);
         }, py::arg("commandList"), py::arg("compositeView"), py::arg("light"), py::arg("params"));
+
+    py::class_<donut::render::SsaoParameters>(m, "SsaoParameters")
+        .def(py::init<>())
+        .def_readwrite("amount", &donut::render::SsaoParameters::amount)
+        .def_readwrite("backgroundViewDepth", &donut::render::SsaoParameters::backgroundViewDepth)
+        .def_readwrite("radiusWorld", &donut::render::SsaoParameters::radiusWorld)
+        .def_readwrite("surfaceBias", &donut::render::SsaoParameters::surfaceBias)
+        .def_readwrite("powerExponent", &donut::render::SsaoParameters::powerExponent)
+        .def_readwrite("enableBlur", &donut::render::SsaoParameters::enableBlur)
+        .def_readwrite("blurSharpness", &donut::render::SsaoParameters::blurSharpness);
+
+    // Only the texture-taking constructor is bound. SsaoPass' other constructor takes a
+    // CreateParameters (which holds a dm::int2 that would need flattening) and pairs with
+    // CreateBindingSet(..., bindingSetIndex) for callers juggling several binding sets across
+    // views; nothing in this repo needs that, so neither is exposed. Render's bindingSetIndex
+    // is likewise fixed at its default of 0.
+    py::class_<donut::render::SsaoPass, std::shared_ptr<donut::render::SsaoPass>>(m, "SsaoPass")
+        .def(py::init([](nvrhi::IDevice* device, std::shared_ptr<donut::engine::ShaderFactory> shaderFactory,
+                std::shared_ptr<donut::engine::CommonRenderPasses> commonPasses, nvrhi::ITexture* gbufferDepth,
+                nvrhi::ITexture* gbufferNormals, nvrhi::ITexture* destinationTexture) {
+            return new donut::render::SsaoPass(device, shaderFactory, commonPasses, gbufferDepth,
+                gbufferNormals, destinationTexture);
+        }), py::arg("device"), py::arg("shaderFactory"), py::arg("commonPasses"),
+            py::arg("gbufferDepth"), py::arg("gbufferNormals"), py::arg("destinationTexture"))
+        .def("Render", [](donut::render::SsaoPass &self, nvrhi::ICommandList* commandList,
+                const donut::render::SsaoParameters &params, const donut::engine::IView &compositeView) {
+            self.Render(commandList, params, compositeView);
+        }, py::arg("commandList"), py::arg("params"), py::arg("compositeView"));
 
     py::class_<donut::engine::FramebufferFactory, std::shared_ptr<donut::engine::FramebufferFactory>>(m, "FramebufferFactory")
         .def(py::init<nvrhi::IDevice*>(), py::arg("device"))

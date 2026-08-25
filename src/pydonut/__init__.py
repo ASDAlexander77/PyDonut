@@ -153,6 +153,8 @@ from pydonut._pydonut import TemporalAntiAliasingCreateParameters
 from pydonut._pydonut import TemporalAntiAliasingPass
 from pydonut._pydonut import SkyParameters
 from pydonut._pydonut import SkyPass
+from pydonut._pydonut import SsaoParameters
+from pydonut._pydonut import SsaoPass
 from pydonut._pydonut import FramebufferFactory
 from pydonut._pydonut import RenderView
 from pydonut._pydonut import RenderCompositeView
@@ -325,6 +327,8 @@ __all__ = (
     'TemporalAntiAliasingPass',
     'SkyParameters',
     'SkyPass',
+    'SsaoParameters',
+    'SsaoPass',
     'FramebufferFactory',
     'RenderView',
     'RenderCompositeView',

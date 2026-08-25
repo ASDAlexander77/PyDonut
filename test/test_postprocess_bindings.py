@@ -79,3 +79,30 @@ def test_sky_parameters_expose_flattened_float3_setters() -> None:
 def test_sky_pass_is_exported_with_render() -> None:
     assert hasattr(pyd, "SkyPass")
     assert hasattr(pyd.SkyPass, "Render")
+
+
+def test_ssao_parameters_defaults_match_header() -> None:
+    p = pyd.SsaoParameters()
+    assert p.amount == 2.0
+    assert p.backgroundViewDepth == 100.0
+    assert p.radiusWorld == 0.5
+    # 0.1f is not exactly representable, so widening the C++ float to a Python double
+    # gives 0.10000000149011612. Exact == would be unsatisfiable. Values that ARE
+    # binary-exact (2.0, 100.0, 0.5, 16.0) stay on exact equality deliberately.
+    assert p.surfaceBias == pytest.approx(0.1)
+    assert p.powerExponent == 2.0
+    assert p.enableBlur is True
+    assert p.blurSharpness == 16.0
+
+
+def test_ssao_parameters_are_writable() -> None:
+    p = pyd.SsaoParameters()
+    p.amount = 3.5
+    p.enableBlur = False
+    assert p.amount == 3.5
+    assert p.enableBlur is False
+
+
+def test_ssao_pass_is_exported_with_render() -> None:
+    assert hasattr(pyd, "SsaoPass")
+    assert hasattr(pyd.SsaoPass, "Render")
