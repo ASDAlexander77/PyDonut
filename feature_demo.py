@@ -220,6 +220,7 @@ if __name__ == "__main__":
             self.bindingCache: pyd.BindingCache | None = None
             self.gbufferPass: pyd.GBufferFillPass | None = None
             self.deferredLightingPass: pyd.DeferredLightingPass | None = None
+            self.forwardPass: pyd.ForwardShadingPass | None = None
             self.skyPass: pyd.SkyPass | None = None
             self.ssaoPass: pyd.SsaoPass | None = None
             self.taaPass: pyd.TemporalAntiAliasingPass | None = None
@@ -287,6 +288,11 @@ if __name__ == "__main__":
             self.deferredLightingPass = pyd.DeferredLightingPass(device, self.m_CommonPasses)
             self.deferredLightingPass.Init(self.shaderFactory)
 
+            self.forwardPass = pyd.ForwardShadingPass(device, self.m_CommonPasses)
+            self.forwardPass.Init(
+                self.shaderFactory, pyd.ForwardShadingPassCreateParameters()
+            )
+
             return True
 
         def CreateRenderPasses(self: FeatureDemo) -> None:
@@ -297,6 +303,7 @@ if __name__ == "__main__":
             self.bindingCache.Clear()
             self.gbufferPass.ResetBindingCache()
             self.deferredLightingPass.ResetBindingCache()
+            self.forwardPass.ResetBindingCache()
 
             self.skyPass = pyd.SkyPass(
                 device,
@@ -496,40 +503,82 @@ if __name__ == "__main__":
             # RenderCompositeView takes a FramebufferFactory, NOT a Framebuffer
             # (src/cpp/_pydonut.cpp:2473), so pass GBufferFramebuffer -- the factory exposed by
             # Task 6 -- rather than calling GetFramebuffer(view) on it.
-            gbufferContext = pyd.GBufferFillPassContext()
-            pyd.RenderCompositeView(
-                self.commandList,
-                self.view,
-                self.viewPrevious,
-                self.renderTargets.gbuffer.GBufferFramebuffer,
-                self.scene.GetSceneGraph().GetRootNode(),
-                self.opaqueDrawStrategy,
-                self.gbufferPass,
-                gbufferContext,
-                self.ui.EnableMaterialEvents,
+            #
+            # The UI forces UseDeferredShading off under MSAA, but the UI is not the only path
+            # here -- ShowUI can be false, and UIData's defaults are set before any frame runs.
+            # Recompute the invariant at the point of use so the deferred path can never be
+            # entered with a multisampled, non-UAV HdrColor (FeatureDemo.cpp:1543-1544).
+            ambient = self.ui.AmbientIntensity
+            useDeferred = (
+                self.ui.UseDeferredShading
+                and self.renderTargets.gbuffer.GetSampleCount() == 1
             )
+            if useDeferred:
+                gbufferContext = pyd.GBufferFillPassContext()
+                pyd.RenderCompositeView(
+                    self.commandList,
+                    self.view,
+                    self.viewPrevious,
+                    self.renderTargets.gbuffer.GBufferFramebuffer,
+                    self.scene.GetSceneGraph().GetRootNode(),
+                    self.opaqueDrawStrategy,
+                    self.gbufferPass,
+                    gbufferContext,
+                    self.ui.EnableMaterialEvents,
+                )
 
-            if self.ui.EnableSsao and self.ssaoPass is not None:
-                self.ssaoPass.Render(self.commandList, self.ui.SsaoParams, self.view)
+                if self.ui.EnableSsao and self.ssaoPass is not None:
+                    self.ssaoPass.Render(self.commandList, self.ui.SsaoParams, self.view)
 
-            deferredInputs = pyd.DeferredLightingPassInputs()
-            deferredInputs.SetGBuffer(self.renderTargets.gbuffer)
-            deferredInputs.SetLights(self.scene.GetSceneGraph().GetLights())
-            deferredInputs.SetAmbientColors(
-                self.ui.AmbientIntensity * 0.2,
-                self.ui.AmbientIntensity * 0.2,
-                self.ui.AmbientIntensity * 0.2,
-                self.ui.AmbientIntensity * 0.1,
-                self.ui.AmbientIntensity * 0.1,
-                self.ui.AmbientIntensity * 0.1,
-            )
-            deferredInputs.ambientOcclusion = (
-                self.renderTargets.AmbientOcclusion
-                if (self.ui.EnableSsao and self.ssaoPass is not None)
-                else None
-            )
-            deferredInputs.output = self.renderTargets.HdrColor
-            self.deferredLightingPass.Render(self.commandList, self.view, deferredInputs)
+                deferredInputs = pyd.DeferredLightingPassInputs()
+                deferredInputs.SetGBuffer(self.renderTargets.gbuffer)
+                deferredInputs.SetLights(self.scene.GetSceneGraph().GetLights())
+                deferredInputs.SetAmbientColors(
+                    ambient * 0.2, ambient * 0.2, ambient * 0.2,
+                    ambient * 0.1, ambient * 0.1, ambient * 0.1,
+                )
+                deferredInputs.ambientOcclusion = (
+                    self.renderTargets.AmbientOcclusion
+                    if (self.ui.EnableSsao and self.ssaoPass is not None)
+                    else None
+                )
+                deferredInputs.output = self.renderTargets.HdrColor
+                self.deferredLightingPass.Render(self.commandList, self.view, deferredInputs)
+            else:
+                # Forward opaque. PrepareLights takes the light list plus the same ambient
+                # top/bottom colours the deferred path passes to SetAmbientColors.
+                forwardContext = pyd.ForwardShadingPassContext()
+                self.forwardPass.PrepareLights(
+                    forwardContext,
+                    self.commandList,
+                    self.scene.GetSceneGraph().GetLights(),
+                    ambient * 0.2, ambient * 0.2, ambient * 0.2,
+                    ambient * 0.1, ambient * 0.1, ambient * 0.1,
+                )
+                pyd.RenderCompositeView(
+                    self.commandList,
+                    self.view,
+                    self.viewPrevious,
+                    self.renderTargets.ForwardFramebuffer,
+                    self.scene.GetSceneGraph().GetRootNode(),
+                    self.opaqueDrawStrategy,
+                    self.forwardPass,
+                    forwardContext,
+                    self.ui.EnableMaterialEvents,
+                )
+
+                if self.ui.EnableTranslucency:
+                    pyd.RenderCompositeView(
+                        self.commandList,
+                        self.view,
+                        self.viewPrevious,
+                        self.renderTargets.ForwardFramebuffer,
+                        self.scene.GetSceneGraph().GetRootNode(),
+                        self.transparentDrawStrategy,
+                        self.forwardPass,
+                        forwardContext,
+                        self.ui.EnableMaterialEvents,
+                    )
 
             if self.ui.EnableProceduralSky and self.sunLight is not None:
                 self.skyPass.Render(
@@ -618,6 +667,106 @@ if __name__ == "__main__":
 
             self.viewPrevious = pyd.PlanarView(self.view)
 
+    class UIRenderer(pyd.ImGui_Renderer):
+        def __init__(
+            self: UIRenderer, deviceManager: pyd.DeviceManager, app: FeatureDemo, ui: UIData
+        ) -> None:
+            super().__init__(deviceManager)
+            self.app = app
+            self.ui = ui
+            pyd.ImGui.DisableIniFile()
+
+        def buildUI(self: UIRenderer) -> None:
+            if not self.ui.ShowUI:
+                return
+
+            pyd.ImGui.SetNextWindowPos(10.0, 10.0)
+            pyd.ImGui.Begin("Settings", _IMGUI_WINDOW_FLAGS_ALWAYS_AUTO_RESIZE)
+
+            aaNames = [m.name for m in AntiAliasingMode]
+            changed, index = pyd.ImGui.Combo(
+                "AA Mode", int(self.ui.AntiAliasingMode), aaNames
+            )
+            if changed:
+                self.ui.AntiAliasingMode = AntiAliasingMode(index)
+
+            # Deferred shading does not work with MSAA: DeferredLightingPass is a compute
+            # pass writing to `output`, but HdrColor is created with isUAV = (sampleCount
+            # == 1), so under MSAA there is no UAV to write to and NVRHI validation fires.
+            # FeatureDemo.cpp:1543-1544 resolves this by forcing the toggle off, with the
+            # comment "Deferred shading doesn't work with MSAA". Mirror that here.
+            msaaActive = self.ui.AntiAliasingMode >= AntiAliasingMode.MSAA_2X
+            if msaaActive:
+                self.ui.UseDeferredShading = False
+
+            _, self.ui.UseDeferredShading = pyd.ImGui.Checkbox(
+                "Deferred Shading", self.ui.UseDeferredShading
+            )
+            if msaaActive:
+                pyd.ImGui.SameLine()
+                pyd.ImGui.Text("(forced off under MSAA)")
+
+            _, self.ui.AmbientIntensity = pyd.ImGui.SliderFloat(
+                "Ambient Intensity", self.ui.AmbientIntensity, 0.0, 2.0
+            )
+
+            if pyd.ImGui.CollapsingHeader("Sky"):
+                _, self.ui.EnableProceduralSky = pyd.ImGui.Checkbox(
+                    "Procedural Sky", self.ui.EnableProceduralSky
+                )
+                _, self.ui.SkyParams.brightness = pyd.ImGui.SliderFloat(
+                    "Brightness", self.ui.SkyParams.brightness, 0.0, 1.0
+                )
+                _, self.ui.SkyParams.glowSize = pyd.ImGui.SliderFloat(
+                    "Glow Size", self.ui.SkyParams.glowSize, 0.0, 90.0
+                )
+                _, self.ui.SkyParams.glowIntensity = pyd.ImGui.SliderFloat(
+                    "Glow Intensity", self.ui.SkyParams.glowIntensity, 0.0, 1.0
+                )
+
+            if pyd.ImGui.CollapsingHeader("SSAO"):
+                _, self.ui.EnableSsao = pyd.ImGui.Checkbox("Enabled", self.ui.EnableSsao)
+                if self.app.ssaoPass is None:
+                    pyd.ImGui.SameLine()
+                    pyd.ImGui.Text("(unavailable under MSAA)")
+                _, self.ui.SsaoParams.amount = pyd.ImGui.SliderFloat(
+                    "Amount", self.ui.SsaoParams.amount, 0.0, 8.0
+                )
+                _, self.ui.SsaoParams.radiusWorld = pyd.ImGui.SliderFloat(
+                    "Radius", self.ui.SsaoParams.radiusWorld, 0.01, 2.0
+                )
+                _, self.ui.SsaoParams.surfaceBias = pyd.ImGui.SliderFloat(
+                    "Surface Bias", self.ui.SsaoParams.surfaceBias, 0.0, 1.0
+                )
+                _, self.ui.SsaoParams.powerExponent = pyd.ImGui.SliderFloat(
+                    "Power Exponent", self.ui.SsaoParams.powerExponent, 1.0, 4.0
+                )
+
+            if pyd.ImGui.CollapsingHeader("Bloom"):
+                _, self.ui.EnableBloom = pyd.ImGui.Checkbox("Enabled", self.ui.EnableBloom)
+                _, self.ui.BloomSigma = pyd.ImGui.SliderFloat(
+                    "Sigma", self.ui.BloomSigma, 1.0, 100.0
+                )
+                _, self.ui.BloomAlpha = pyd.ImGui.SliderFloat(
+                    "Alpha", self.ui.BloomAlpha, 0.0, 1.0
+                )
+
+            if pyd.ImGui.CollapsingHeader("Tone Mapping"):
+                _, self.ui.ToneMappingParams.exposureBias = pyd.ImGui.SliderFloat(
+                    "Exposure Bias", self.ui.ToneMappingParams.exposureBias, -4.0, 4.0
+                )
+                _, self.ui.ToneMappingParams.whitePoint = pyd.ImGui.SliderFloat(
+                    "White Point", self.ui.ToneMappingParams.whitePoint, 0.1, 10.0
+                )
+                _, self.ui.ToneMappingParams.eyeAdaptationSpeedUp = pyd.ImGui.SliderFloat(
+                    "Adaptation Up", self.ui.ToneMappingParams.eyeAdaptationSpeedUp, 0.0, 4.0
+                )
+                _, self.ui.ToneMappingParams.eyeAdaptationSpeedDown = pyd.ImGui.SliderFloat(
+                    "Adaptation Down", self.ui.ToneMappingParams.eyeAdaptationSpeedDown, 0.0, 4.0
+                )
+
+            pyd.ImGui.End()
+
     is_debug = "-debug" in sys.argv
 
     # On Windows, Donut's default log config shows errors as a blocking MessageBox instead
@@ -650,10 +799,13 @@ if __name__ == "__main__":
 
     uiData = UIData()
     example = FeatureDemo(deviceManager, uiData)
+    gui = UIRenderer(deviceManager, example, uiData)
 
-    if example.Init():
+    if example.Init() and gui.Init(example.shaderFactory):
         deviceManager.AddRenderPassToBack(example)
+        deviceManager.AddRenderPassToBack(gui)
         deviceManager.RunMessageLoop()
+        deviceManager.RemoveRenderPass(gui)
         deviceManager.RemoveRenderPass(example)
 
     deviceManager.Shutdown()
