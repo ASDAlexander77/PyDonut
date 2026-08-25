@@ -592,12 +592,22 @@ if __name__ == "__main__":
                 toneMappingParams.eyeAdaptationSpeedDown = 0.0
                 self.exposureResetRequired = False
 
-            self.toneMappingPass.SimpleRender(
-                self.commandList, toneMappingParams, self.view, finalHdrColor
-            )
-
-            if savedSpeeds is not None:
-                toneMappingParams.eyeAdaptationSpeedUp, toneMappingParams.eyeAdaptationSpeedDown = savedSpeeds
+            # try/finally: SimpleRender is expected to signal GPU-validation failures through
+            # log callbacks rather than exceptions (that's why the MSAA runs above logged
+            # NVRHI errors instead of raising), but nothing guarantees that stays true --
+            # a bare post-call restore would leave the UI's shared params permanently zeroed
+            # on any exception, which is exactly the corruption this save/restore exists to
+            # prevent.
+            try:
+                self.toneMappingPass.SimpleRender(
+                    self.commandList, toneMappingParams, self.view, finalHdrColor
+                )
+            finally:
+                if savedSpeeds is not None:
+                    (
+                        toneMappingParams.eyeAdaptationSpeedUp,
+                        toneMappingParams.eyeAdaptationSpeedDown,
+                    ) = savedSpeeds
 
             self.m_CommonPasses.BlitTexture(
                 self.commandList, framebuffer, self.renderTargets.LdrColor, self.bindingCache
