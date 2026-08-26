@@ -141,6 +141,9 @@ from pydonut._pydonut import GBufferRenderTargets
 from pydonut._pydonut import GBufferFillPassCreateParameters
 from pydonut._pydonut import GBufferFillPassContext
 from pydonut._pydonut import GBufferFillPass
+from pydonut._pydonut import DepthPassCreateParameters
+from pydonut._pydonut import DepthPassContext
+from pydonut._pydonut import DepthPass
 from pydonut._pydonut import PassthroughDrawStrategy
 from pydonut._pydonut import InstancedOpaqueDrawStrategy
 from pydonut._pydonut import TransparentDrawStrategy
@@ -322,6 +325,9 @@ __all__ = (
     'GBufferFillPassCreateParameters',
     'GBufferFillPassContext',
     'GBufferFillPass',
+    'DepthPassCreateParameters',
+    'DepthPassContext',
+    'DepthPass',
     'PassthroughDrawStrategy',
     'InstancedOpaqueDrawStrategy',
     'TransparentDrawStrategy',

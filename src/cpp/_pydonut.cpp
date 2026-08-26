@@ -55,6 +55,7 @@
 #include <donut/engine/ShadowMap.h>
 #include <donut/render/GBuffer.h>
 #include <donut/render/GBufferFillPass.h>
+#include <donut/render/DepthPass.h>
 #include <donut/render/DeferredLightingPass.h>
 #include <donut/render/ForwardShadingPass.h>
 #include <donut/render/TemporalAntiAliasingPass.h>
@@ -2387,6 +2388,31 @@ PYBIND11_MODULE(_pydonut, m) {
         .def(py::init<nvrhi::IDevice*, std::shared_ptr<donut::engine::CommonRenderPasses>>(), py::arg("device"), py::arg("commonPasses"))
         .def("Init", &donut::render::GBufferFillPass::Init, py::arg("shaderFactory"), py::arg("params"))
         .def("ResetBindingCache", &donut::render::GBufferFillPass::ResetBindingCache);
+
+    // Same trio shape as GBufferFillPass above. depthBias/depthBiasClamp/slopeScaledDepthBias
+    // are exposed because a shadow map is exactly the consumer that needs them; they take effect
+    // at Init(), so changing one means recreating the pass.
+    //
+    // Skipped: materialBindings (the pass creates its own MaterialBindingCache when this is
+    // null, and nothing in this repo constructs one) and PipelineKey (an internal detail of the
+    // pass's own pipeline cache).
+    py::class_<donut::render::DepthPass::CreateParameters>(m, "DepthPassCreateParameters")
+        .def(py::init<>())
+        .def_readwrite("depthBias", &donut::render::DepthPass::CreateParameters::depthBias)
+        .def_readwrite("depthBiasClamp", &donut::render::DepthPass::CreateParameters::depthBiasClamp)
+        .def_readwrite("slopeScaledDepthBias", &donut::render::DepthPass::CreateParameters::slopeScaledDepthBias)
+        .def_readwrite("trackLiveness", &donut::render::DepthPass::CreateParameters::trackLiveness)
+        .def_readwrite("useInputAssembler", &donut::render::DepthPass::CreateParameters::useInputAssembler)
+        .def_readwrite("numConstantBufferVersions", &donut::render::DepthPass::CreateParameters::numConstantBufferVersions);
+
+    py::class_<donut::render::DepthPass::Context, donut::render::GeometryPassContext>(m, "DepthPassContext")
+        .def(py::init<>());
+
+    py::class_<donut::render::DepthPass, donut::render::IGeometryPass, std::shared_ptr<donut::render::DepthPass>>(m, "DepthPass")
+        .def(py::init<nvrhi::IDevice*, std::shared_ptr<donut::engine::CommonRenderPasses>>(),
+            py::arg("device"), py::arg("commonPasses"))
+        .def("Init", &donut::render::DepthPass::Init, py::arg("shaderFactory"), py::arg("params"))
+        .def("ResetBindingCache", &donut::render::DepthPass::ResetBindingCache);
 
     py::class_<PyPassthroughDrawStrategy, donut::render::IDrawStrategy, std::shared_ptr<PyPassthroughDrawStrategy>>(m, "PassthroughDrawStrategy")
         .def(py::init<>())

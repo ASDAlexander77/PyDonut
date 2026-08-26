@@ -91,3 +91,35 @@ def test_cascaded_shadow_map_setup_takes_a_view_not_a_frustum() -> None:
     # rejects the shape a frustum would have had.
     with pytest.raises(TypeError):
         pyd.CascadedShadowMap.SetupForPlanarView(None, None, (0.0, 0.0, 0.0), 1.0, 1.0, 1.0)
+
+
+def test_depth_pass_trio_is_exported() -> None:
+    for name in ("DepthPass", "DepthPassContext", "DepthPassCreateParameters"):
+        assert hasattr(pyd, name), name
+
+
+def test_depth_pass_context_is_a_geometry_pass_context() -> None:
+    # RenderCompositeView threads this through, so it has to convert to the base.
+    assert issubclass(pyd.DepthPassContext, pyd.GeometryPassContext)
+
+
+def test_depth_pass_is_a_geometry_pass() -> None:
+    assert issubclass(pyd.DepthPass, pyd.IGeometryPass)
+
+
+def test_depth_pass_create_parameter_defaults_match_the_header() -> None:
+    # Mirrors DepthPass.h:75-88. A default drifting from the header is exactly what this
+    # GPU-free test layer exists to catch.
+    params = pyd.DepthPassCreateParameters()
+    assert params.depthBias == 0
+    assert params.depthBiasClamp == 0.0
+    assert params.slopeScaledDepthBias == 0.0
+    assert params.trackLiveness is True
+    assert params.useInputAssembler is False
+    assert params.numConstantBufferVersions == 16
+
+
+def test_depth_pass_create_parameters_skip_material_bindings() -> None:
+    # The pass builds its own MaterialBindingCache when this is null, and nothing in this repo
+    # constructs one -- so it is deliberately unbound rather than overlooked.
+    assert not hasattr(pyd.DepthPassCreateParameters(), "materialBindings")
