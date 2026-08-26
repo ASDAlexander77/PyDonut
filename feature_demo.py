@@ -724,10 +724,12 @@ if __name__ == "__main__":
             # here for peak VRAM: those same in-flight references are what would otherwise keep
             # the outgoing 64 MB cascade array resident while CreateShadowMap allocates its
             # replacement, and "the two arrays are never both resident" is a claim that method
-            # makes. Draining is affordable precisely because this is a discrete UI event; the
-            # block below runs on every resize and AA change and stalls no pipeline for the same
-            # reason -- it has no such both-resident window to close, having already dropped the
-            # binding sets that would create one.
+            # makes. Draining is affordable precisely because this is a discrete UI event.
+            #
+            # The block below has the SAME transient overlap -- dropping CPU-side references does
+            # not retire the in-flight command lists still holding the outgoing render targets --
+            # but it makes no never-both-resident claim and runs on every resize and AA change,
+            # so it absorbs the overlap rather than stall the pipeline on a drag.
             if self.ui.ShadowCascades != self.shadowMapCascades:
                 device.waitForIdle()
                 self.CreateShadowMap()
