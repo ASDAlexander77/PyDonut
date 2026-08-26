@@ -491,10 +491,19 @@ if __name__ == "__main__":
             """
             device = self.GetDevice()
 
-            # Released before the replacement is allocated, so the two 64 MB arrays are not both
-            # resident: the same reason the render-target rebuild block clears first. The light
-            # is unhooked first -- it holds a shared_ptr to the outgoing map, so dropping only
-            # this reference would keep it alive.
+            # Dropping self.shadowMap and sunLight.shadowMap is not enough to release the
+            # outgoing 64 MB array: DeferredLightingPass.m_BindingSets and
+            # ForwardShadingPass.m_ShadingBindingSets are unbounded caches keyed on (among other
+            # things) the shadow texture (BindingCache.h:34-36, used at
+            # DeferredLightingPass.cpp:266,286; ForwardShadingPass.cpp:395-399 keys directly on
+            # the texture handle), so a stale binding set referencing the old texture keeps it
+            # GPU-resident until that cache is cleared -- there is no size/count change here for
+            # IsUpdateRequired to catch, so nothing else evicts it. ResetBindingCache() on both
+            # lighting passes, mirroring the render-target rebuild block below, is what actually
+            # makes "the two arrays are never both resident" true: it drops those stale sets
+            # before the replacement map is allocated. The light is unhooked first -- it holds a
+            # shared_ptr to the outgoing map, so dropping only this reference would keep it
+            # alive.
             #
             # depthPass.ResetBindingCache() is deliberately NOT called: it clears material
             # bindings and vertex-buffer SRVs (DepthPass.cpp:91-95), neither of which references
@@ -504,6 +513,8 @@ if __name__ == "__main__":
             self.shadowFramebuffer = None
             if self.sunLight is not None:
                 self.sunLight.shadowMap = None
+            self.deferredLightingPass.ResetBindingCache()
+            self.forwardPass.ResetBindingCache()
 
             self.shadowMapCascades = self.ui.ShadowCascades
             self.shadowMap = pyd.CascadedShadowMap(
@@ -725,9 +736,32 @@ if __name__ == "__main__":
                 # reassigning it later.
                 self.renderTargets = None
                 self.bindingCache.Clear()
-                self.gbufferPass.ResetBindingCache()
                 self.deferredLightingPass.ResetBindingCache()
-                self.forwardPass.ResetBindingCache()
+
+                # gbufferPass and forwardPass are recreated here, not just reset. Both cache
+                # graphics pipelines keyed on the target FramebufferInfo -- sample count
+                # included -- and ResetBindingCache() (used above for deferredLightingPass) only
+                # drops cached *binding sets*; it does not touch that pipeline cache. On a second
+                # MSAA->MSAA rebuild (e.g. AA mode 4x -> 8x, with
+                # shadows on) the framebuffer's sample count changes under a forwardPass pipeline
+                # still cached from the previous rebuild, and NVRHI's validation layer floods
+                # with "framebuffer used in draw call does not match pipeline" and matching
+                # push-constant-size mismatches -- reproduced at ~1M messages/90s with only
+                # ResetBindingCache(), zero with the pass recreated instead
+                # (.superpowers/sdd/2026-08-26-feature-demo-stage2a-shadows/msaa-regression.md).
+                # Why shadows specifically are required to make the stale slot reachable is not
+                # established -- only that recreating the pass fixes it. gbufferPass has the
+                # identical pipeline-caching structure; it is only spared today because MSAA
+                # forces the deferred path off, leaving its stale-pipeline case unreachable. It
+                # is recreated here anyway, symmetrically with forwardPass, so that stays true by
+                # construction rather than by an unenforced assumption that nothing will ever
+                # flip the deferred path back on under MSAA.
+                self.gbufferPass = pyd.GBufferFillPass(device, self.m_CommonPasses)
+                self.gbufferPass.Init(self.shaderFactory, pyd.GBufferFillPassCreateParameters())
+                self.forwardPass = pyd.ForwardShadingPass(device, self.m_CommonPasses)
+                self.forwardPass.Init(
+                    self.shaderFactory, pyd.ForwardShadingPassCreateParameters()
+                )
                 self.skyPass = None
                 self.ssaoPass = None
                 self.taaPass = None
