@@ -233,3 +233,10 @@ def test_imgui_text_already_covers_text_unformatted() -> None:
     # TextUnformatted binding is needed or wanted.
     assert hasattr(pyd.ImGui, "Text")
     assert not hasattr(pyd.ImGui, "TextUnformatted")
+
+
+def test_shader_factory_can_clear_its_bytecode_cache() -> None:
+    # ClearCache drops ShaderFactory's bytecode cache (ShaderFactory.h:105) so that passes
+    # rebuilt after it re-read their .bin blobs from disk -- what feature_demo.py's "Reload
+    # Shaders" button is built on. Bound with no arguments, like the C++ method.
+    assert hasattr(pyd.ShaderFactory, "ClearCache")

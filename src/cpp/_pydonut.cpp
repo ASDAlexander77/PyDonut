@@ -1913,6 +1913,13 @@ PYBIND11_MODULE(_pydonut, m) {
     shaderFactory.def("CreateShaderLibrary", [](donut::engine::ShaderFactory &self, const std::string &fileName) {
         return DetachToShared(self.CreateShaderLibrary(fileName.c_str(), nullptr));
     }, py::arg("fileName"));
+    // Drops the bytecode cache so that shaders re-read their .bin blobs from disk on the
+    // next Create* call -- the whole of a hot shader reload on this side; recreating the
+    // passes that hold the compiled pipelines is the caller's job (see feature_demo.py's
+    // ReloadShaders). CreateAutoShader/CreateStaticShader/GetBytecode stay unbound: the
+    // first two select between a filesystem shader and a compiled-in blob, and nothing in
+    // this repo ships compiled-in blobs.
+    shaderFactory.def("ClearCache", &donut::engine::ShaderFactory::ClearCache);
 
     py::class_<donut::engine::BindingCache>(m, "BindingCache")
         .def(py::init<nvrhi::IDevice*>(), py::arg("device"))

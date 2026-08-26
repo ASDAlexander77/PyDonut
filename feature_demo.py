@@ -379,6 +379,56 @@ if __name__ == "__main__":
                 self.view,
             )
 
+        def ReloadShaders(self: FeatureDemo) -> None:
+            """Drops every compiled shader and rebuilds the passes holding pipelines from them.
+
+            ShaderFactory reads each .bin blob under bin/shaders once and caches the bytecode,
+            and every pass compiles its pipelines at construction -- so a shader rebuilt on
+            disk reaches the GPU only if the cache is cleared *and* the pipelines built from
+            it are recreated. Doing one without the other silently keeps rendering the old
+            shader, which is the failure this method exists to avoid.
+            """
+            device = self.GetDevice()
+
+            # The outgoing pipelines can still be referenced by frames in flight -- NVRHI
+            # retires a released object only once the fence it was last used behind has
+            # passed -- and the replacements are built immediately below. Drain first.
+            device.waitForIdle()
+
+            self.shaderFactory.ClearCache()
+
+            # CommonRenderPasses compiles the blit and material shaders in its constructor,
+            # so it is part of the reload, and it has to be rebuilt before the passes below,
+            # which each capture it. Every holder of the outgoing instance is either recreated
+            # here or by CreateRenderPasses, so no pass is left rendering against a mix of old
+            # and new. (ApplicationBase.m_CommonPasses is a settable property precisely so a
+            # Python subclass can do this -- see _pydonut.cpp:2945-2949.)
+            self.m_CommonPasses = pyd.CommonRenderPasses(device, self.shaderFactory)
+
+            self.gbufferPass = pyd.GBufferFillPass(device, self.m_CommonPasses)
+            self.gbufferPass.Init(self.shaderFactory, pyd.GBufferFillPassCreateParameters())
+
+            self.deferredLightingPass = pyd.DeferredLightingPass(device, self.m_CommonPasses)
+            self.deferredLightingPass.Init(self.shaderFactory)
+
+            self.forwardPass = pyd.ForwardShadingPass(device, self.m_CommonPasses)
+            self.forwardPass.Init(
+                self.shaderFactory, pyd.ForwardShadingPassCreateParameters()
+            )
+
+            # BlitTexture's cached binding sets were built against the *old* CommonRenderPasses'
+            # binding layout, so they cannot be reused with the instance created above.
+            self.bindingCache.Clear()
+
+            # The size-dependent passes -- sky, SSAO, TAA, tone mapping, bloom -- are rebuilt
+            # by Render()'s render-target path rather than here: dropping renderTargets routes
+            # the reload through the one release-then-reallocate block that already gets the
+            # ordering right (stale binding sets cleared before reallocation, the exposure
+            # buffer handed to the replacement tone-mapping pass, TAA history invalidated).
+            # Rebuilding them here would duplicate every one of those steps. The cost is one
+            # extra render-target reallocation, on a manual button press.
+            self.renderTargets = None
+
         def CreateSunLight(self: FeatureDemo) -> None:
             """sponza-plus.scene.json declares no lights, so the sun is always synthesised
             here -- this mirrors FeatureDemo.cpp:619-627, which treats it as a fallback.
@@ -483,6 +533,12 @@ if __name__ == "__main__":
             fbInfo = framebuffer.getFramebufferInfo()
             width, height = fbInfo.width, fbInfo.height
             sampleCount = SAMPLE_COUNTS[self.ui.AntiAliasingMode]
+
+            # Cleared before the reload rather than after, so a pass that throws on rebuild
+            # does not re-enter ReloadShaders on every subsequent frame.
+            if self.ui.ShaderReloadRequested:
+                self.ui.ShaderReloadRequested = False
+                self.ReloadShaders()
 
             # GetCurrentPixelOffset switches on the pass's current jitter mode
             # (TemporalAntiAliasingPass.cpp:335), so the mode has to be pushed in before
@@ -770,6 +826,11 @@ if __name__ == "__main__":
 
             pyd.ImGui.SetNextWindowPos(10.0, 10.0)
             pyd.ImGui.Begin("Settings", _IMGUI_WINDOW_FLAGS_ALWAYS_AUTO_RESIZE)
+
+            # Rebuild the shaders on disk first (ShaderMake, or another `uv sync`) -- this
+            # re-reads the .bin blobs, it does not compile HLSL.
+            if pyd.ImGui.Button("Reload Shaders"):
+                self.ui.ShaderReloadRequested = True
 
             aaNames = [m.name for m in AntiAliasingMode]
             changed, index = pyd.ImGui.Combo(
