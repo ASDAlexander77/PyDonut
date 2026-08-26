@@ -522,6 +522,49 @@ if __name__ == "__main__":
             self.shadowFramebuffer = pyd.FramebufferFactory(device)
             self.shadowFramebuffer.depthTarget = self.shadowMap.GetTexture()
 
+        def RenderShadowMap(self: FeatureDemo, commandList: pyd.CommandList) -> None:
+            """Fits the cascades to the current view, clears the map and fills every cascade.
+
+            Runs before the G-buffer fill or forward opaque pass: the lighting passes sample this
+            texture in the same frame.
+            """
+            assert self.shadowMap is not None and self.sunLight is not None
+
+            # The two fits differ in what they take off the view -- the tight one the view
+            # frustum, the stable one the projection frustum plus the inverse view matrix -- but
+            # the binding hides that, so both take the view itself.
+            setup = (
+                self.shadowMap.SetupForPlanarViewStable
+                if self.ui.UseStableCascades
+                else self.shadowMap.SetupForPlanarView
+            )
+            setup(
+                self.sunLight,
+                self.view,
+                self.ui.MaxShadowDistance,
+                SHADOW_LIGHT_SPACE_Z_UP,
+                SHADOW_LIGHT_SPACE_Z_DOWN,
+                self.ui.ShadowExponent,
+            )
+
+            self.shadowMap.Clear(commandList)
+
+            # One call fills every cascade: GetView() is the composite of the per-cascade planar
+            # views, and RenderCompositeView iterates it. viewPrev is None -- a shadow map has no
+            # history, and nothing in a depth-only pass reads motion vectors.
+            pyd.RenderCompositeView(
+                commandList,
+                self.shadowMap.GetView(),
+                None,
+                self.shadowFramebuffer,
+                self.scene.GetSceneGraph().GetRootNode(),
+                self.opaqueDrawStrategy,
+                self.depthPass,
+                self.depthContext,
+                self.ui.EnableMaterialEvents,
+                "ShadowMap",
+            )
+
         def CreateSunLight(self: FeatureDemo) -> None:
             """sponza-plus.scene.json declares no lights, so the sun is always synthesised
             here -- this mirrors FeatureDemo.cpp:619-627, which treats it as a fallback.
@@ -736,6 +779,15 @@ if __name__ == "__main__":
                 self.toneMappingPass.ResetExposure(self.commandList, 0.5)
 
             self.renderTargets.Clear(self.commandList)
+
+            # Assigning the map to the light is the entire wiring -- both lighting passes read
+            # light->shadowMap themselves. None is the off switch, and costs nothing but a null
+            # check inside those passes, so the toggle needs no pass rebuild.
+            if self.ui.EnableShadows:
+                self.RenderShadowMap(self.commandList)
+                self.sunLight.shadowMap = self.shadowMap
+            else:
+                self.sunLight.shadowMap = None
 
             # RenderCompositeView takes a FramebufferFactory, NOT a Framebuffer
             # (src/cpp/_pydonut.cpp:2473), so pass GBufferFramebuffer -- the factory exposed by
