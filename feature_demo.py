@@ -67,6 +67,19 @@ if __name__ == "__main__":
         AntiAliasingMode.MSAA_8X: 8,
     }
 
+    # Fixed rather than a UI slider: changing it needs the same recreate path as the cascade
+    # count, and a demo learns nothing from a resolution slider that the cascade slider does not
+    # already show.
+    SHADOW_MAP_RESOLUTION = 2048
+
+    # Minimum depth range of the shadow projection along the light direction, in world units:
+    # CascadedShadowMap takes max(cascade's own half-extent, this) for each side
+    # (CascadedShadowMap.cpp:137-138), so these only matter for the near cascades, where they are
+    # what keeps a caster above the camera from falling outside the box. Sized to Sponza with
+    # headroom; not UI controls, because the only correct setting is "big enough".
+    SHADOW_LIGHT_SPACE_Z_UP = 20.0
+    SHADOW_LIGHT_SPACE_Z_DOWN = 20.0
+
     class UIData:
         """Shared by reference between FeatureDemo and UIRenderer.
 
@@ -96,6 +109,15 @@ if __name__ == "__main__":
             self.EnableMaterialEvents = False
             self.AmbientIntensity = 1.0
             self.EnableAnimations = False
+            self.EnableShadows = True
+            self.UseStableCascades = True
+            self.ShadowCascades = 4
+            self.MaxShadowDistance = 50.0
+            # Must stay > 1.0: CascadedShadowMap.cpp:83 asserts on it, so a debug build aborts
+            # at exactly 1.0.
+            self.ShadowExponent = 4.0
+            self.ShadowFalloffDistance = 1.0
+            self.ShadowLitOutOfBounds = True
             self.ShaderReloadRequested = False
 
     class RenderTargets:
@@ -231,6 +253,11 @@ if __name__ == "__main__":
             self.taaPass: pyd.TemporalAntiAliasingPass | None = None
             self.toneMappingPass: pyd.ToneMappingPass | None = None
             self.bloomPass: pyd.BloomPass | None = None
+            self.shadowMap: pyd.CascadedShadowMap | None = None
+            self.shadowFramebuffer: pyd.FramebufferFactory | None = None
+            self.depthPass: pyd.DepthPass | None = None
+            self.depthContext = pyd.DepthPassContext()
+            self.shadowMapCascades = 0
             self.exposureResetRequired = True
             self.pendingExposureBuffer: pyd.Buffer | None = None
             self.opaqueDrawStrategy = pyd.InstancedOpaqueDrawStrategy()
@@ -298,6 +325,18 @@ if __name__ == "__main__":
             self.forwardPass.Init(
                 self.shaderFactory, pyd.ForwardShadingPassCreateParameters()
             )
+
+            # Size-independent, like the other geometry passes: it is created once here and
+            # only recreated on a shader reload. depthBias/slopeScaledDepthBias take effect at
+            # Init(), which is why they are constants rather than sliders -- a bias slider would
+            # mean recreating the pass on every drag.
+            depthParams = pyd.DepthPassCreateParameters()
+            depthParams.depthBias = 100
+            depthParams.slopeScaledDepthBias = 2.0
+            self.depthPass = pyd.DepthPass(device, self.m_CommonPasses)
+            self.depthPass.Init(self.shaderFactory, depthParams)
+
+            self.CreateShadowMap()
 
             return True
 
@@ -416,6 +455,15 @@ if __name__ == "__main__":
                 self.shaderFactory, pyd.ForwardShadingPassCreateParameters()
             )
 
+            # Holds pipelines compiled from the bytecode ClearCache just dropped, so it is
+            # rebuilt with the other geometry passes. The shadow map itself holds no shaders and
+            # is left alone.
+            depthParams = pyd.DepthPassCreateParameters()
+            depthParams.depthBias = 100
+            depthParams.slopeScaledDepthBias = 2.0
+            self.depthPass = pyd.DepthPass(device, self.m_CommonPasses)
+            self.depthPass.Init(self.shaderFactory, depthParams)
+
             # BlitTexture's cached binding sets were built against the *old* CommonRenderPasses'
             # binding layout, so they cannot be reused with the instance created above.
             self.bindingCache.Clear()
@@ -428,6 +476,51 @@ if __name__ == "__main__":
             # Rebuilding them here would duplicate every one of those steps. The cost is one
             # extra render-target reallocation, on a manual button press.
             self.renderTargets = None
+
+        def CreateShadowMap(self: FeatureDemo) -> None:
+            """(Re)builds the cascaded shadow map and the framebuffer factory over it.
+
+            Deliberately NOT part of CreateRenderPasses. That runs off
+            RenderTargets.IsUpdateRequired(width, height, sampleCount), and this map's size comes
+            from the UI, not the back buffer -- folding it in would destroy and reallocate a
+            64 MB texture array on every window resize and every AA-mode change, for nothing.
+
+            Called from Init, and again whenever the cascade count changes. The cascade count is
+            a construction parameter because the composite view GetView() returns is built once
+            in the constructor and never rebuilt (CascadedShadowMap.cpp:67).
+            """
+            device = self.GetDevice()
+
+            # Released before the replacement is allocated, so the two 64 MB arrays are not both
+            # resident: the same reason the render-target rebuild block clears first. The light
+            # is unhooked first -- it holds a shared_ptr to the outgoing map, so dropping only
+            # this reference would keep it alive.
+            #
+            # depthPass.ResetBindingCache() is deliberately NOT called: it clears material
+            # bindings and vertex-buffer SRVs (DepthPass.cpp:91-95), neither of which references
+            # the shadow texture. Nothing the pass caches becomes stale when this map is
+            # replaced.
+            self.shadowMap = None
+            self.shadowFramebuffer = None
+            if self.sunLight is not None:
+                self.sunLight.shadowMap = None
+
+            self.shadowMapCascades = self.ui.ShadowCascades
+            self.shadowMap = pyd.CascadedShadowMap(
+                device,
+                SHADOW_MAP_RESOLUTION,
+                self.shadowMapCascades,
+                0,  # no per-object shadows: they need light types stage 2b binds
+                pyd.Format.D32,
+                False,
+            )
+            self.shadowMap.SetFalloffDistance(self.ui.ShadowFalloffDistance)
+            self.shadowMap.SetLitOutOfBounds(self.ui.ShadowLitOutOfBounds)
+
+            # One factory serves every cascade: it caches framebuffers per subresource set
+            # (FramebufferFactory.cpp:30) and each cascade view carries its own array slice.
+            self.shadowFramebuffer = pyd.FramebufferFactory(device)
+            self.shadowFramebuffer.depthTarget = self.shadowMap.GetTexture()
 
         def CreateSunLight(self: FeatureDemo) -> None:
             """sponza-plus.scene.json declares no lights, so the sun is always synthesised
