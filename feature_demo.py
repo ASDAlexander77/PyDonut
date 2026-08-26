@@ -38,6 +38,7 @@ example renders with is created here and attached to the scene graph, not loaded
 from __future__ import annotations
 
 if __name__ == "__main__":
+    import math
     import sys
     from enum import IntEnum
     from pathlib import Path
@@ -237,6 +238,7 @@ if __name__ == "__main__":
             self.descriptorTable: pyd.DescriptorTableManager | None = None
             self.bindlessLayout: pyd.BindingLayout | None = None
             self.previousViewsValid = False
+            self.wallclockTime = 0.0
 
         def Init(self: FeatureDemo) -> bool:
             device = self.GetDevice()
@@ -425,7 +427,31 @@ if __name__ == "__main__":
 
         def Animate(self: FeatureDemo, elapsedTimeSeconds: float) -> None:
             self.camera.Animate(elapsedTimeSeconds)
+
+            # Pushed every frame rather than only when the checkbox changes: DeviceManager
+            # owns the swap-chain present interval and there is no change notification from
+            # the UI, so re-asserting the UI's value is what makes the toggle take effect.
+            self.GetDeviceManager().SetVsyncEnabled(self.ui.EnableVsync)
             self.GetDeviceManager().SetInformativeWindowTitle(WINDOW_TITLE)
+
+            # sponza-plus.scene.json's two BrainStem instances ("DancingRobot1/2") carry the
+            # only animation clips in the scene; without this they stand frozen in their bind
+            # pose. Same wallclock-modulo-duration loop as rt_bindless.py:212-221, including
+            # the per-clip offset that keeps the two robots out of lockstep.
+            #
+            # Apply() only writes scene-graph node transforms. The GPU-side consequences --
+            # transform propagation, the skinning compute dispatch, the instance-buffer
+            # upload -- all happen in Scene.Refresh(), which Render() calls once the command
+            # list is open. The duration guard is for clips that sample to a single keyframe:
+            # math.fmod(t, 0.0) raises ValueError rather than returning 0.
+            if self.ui.EnableAnimations and self.scene is not None:
+                self.wallclockTime += elapsedTimeSeconds
+                offset = 0.0
+                for anim in self.scene.GetSceneGraph().GetAnimations():
+                    duration = anim.GetDuration()
+                    if duration > 0.0:
+                        anim.Apply(math.fmod(self.wallclockTime + offset, duration))
+                    offset += 1.0
 
             if self.toneMappingPass is not None:
                 self.toneMappingPass.AdvanceFrame(elapsedTimeSeconds)
@@ -533,6 +559,22 @@ if __name__ == "__main__":
                 self.CreateRenderPasses()
 
             self.commandList.open()
+
+            # Propagates the node transforms Animate() just wrote through the scene graph and
+            # re-runs the skinning compute pass for the animated instances: Scene::Refresh is
+            # RefreshSceneGraph + RefreshBuffers (Scene.cpp:793-796), and UpdateSkinnedMeshes
+            # (Scene.cpp:707) lives inside the latter -- SceneGraph.Refresh() alone would move
+            # the joints without re-skinning the vertices they drive.
+            #
+            # Unconditional rather than gated on EnableAnimations, matching rt_bindless.py:475.
+            # SceneGraph::Refresh walks the whole graph every call -- that walk is what rolls
+            # each node's current transform into its previous one (SceneGraph.cpp:979-981),
+            # which is in turn what the G-buffer pass differences into motion vectors -- but
+            # the per-node work beyond that is gated on dirty flags, and UpdateSkinnedMeshes
+            # skips every instance not touched this frame or last (Scene.cpp:718-720). A still
+            # scene therefore costs the walk and nothing else, while anything that dirties the
+            # graph from outside the animation path still reaches the GPU the frame it happens.
+            self.scene.Refresh(self.commandList, self.GetFrameIndex())
 
             if self.exposureResetRequired:
                 self.toneMappingPass.ResetExposure(self.commandList, 0.5)
@@ -756,6 +798,27 @@ if __name__ == "__main__":
                 "Ambient Intensity", self.ui.AmbientIntensity, 0.0, 2.0
             )
 
+            _, self.ui.EnableVsync = pyd.ImGui.Checkbox("VSync", self.ui.EnableVsync)
+
+            _, self.ui.EnableAnimations = pyd.ImGui.Checkbox(
+                "Animations", self.ui.EnableAnimations
+            )
+
+            _, self.ui.EnableMaterialEvents = pyd.ImGui.Checkbox(
+                "Material Events", self.ui.EnableMaterialEvents
+            )
+
+            # Translucent geometry is drawn by a second RenderCompositeView over the
+            # transparent draw strategy, which only the forward path issues -- the deferred
+            # path has no equivalent, so say so rather than leaving a toggle that silently
+            # does nothing.
+            _, self.ui.EnableTranslucency = pyd.ImGui.Checkbox(
+                "Translucency", self.ui.EnableTranslucency
+            )
+            if self.ui.UseDeferredShading:
+                pyd.ImGui.SameLine()
+                pyd.ImGui.Text("(forward path only)")
+
             if pyd.ImGui.CollapsingHeader("Sky"):
                 _, self.ui.EnableProceduralSky = pyd.ImGui.Checkbox(
                     "Procedural Sky", self.ui.EnableProceduralSky
@@ -787,6 +850,41 @@ if __name__ == "__main__":
                 _, self.ui.SsaoParams.powerExponent = pyd.ImGui.SliderFloat(
                     "Power Exponent", self.ui.SsaoParams.powerExponent, 1.0, 4.0
                 )
+
+            if pyd.ImGui.CollapsingHeader("Temporal AA"):
+                if self.ui.AntiAliasingMode != AntiAliasingMode.TEMPORAL:
+                    pyd.ImGui.Text("(inactive -- AA Mode is not TEMPORAL)")
+
+                # Indexed through the member list rather than by .value: the enum is bound as
+                # a plain enum.Enum (not IntEnum), so its members do not convert to the combo's
+                # int index on their own and nothing guarantees the values stay 0..n-1.
+                jitterModes = list(pyd.TemporalAntiAliasingJitter)
+                changed, jitterIndex = pyd.ImGui.Combo(
+                    "Jitter",
+                    jitterModes.index(self.ui.TemporalAntiAliasingJitter),
+                    [j.name for j in jitterModes],
+                )
+                if changed:
+                    self.ui.TemporalAntiAliasingJitter = jitterModes[jitterIndex]
+
+                taaParams = self.ui.TemporalAntiAliasingParams
+                _, taaParams.newFrameWeight = pyd.ImGui.SliderFloat(
+                    "New Frame Weight", taaParams.newFrameWeight, 0.001, 1.0
+                )
+                _, taaParams.enableHistoryClamping = pyd.ImGui.Checkbox(
+                    "History Clamping", taaParams.enableHistoryClamping
+                )
+                _, taaParams.clampingFactor = pyd.ImGui.SliderFloat(
+                    "Clamping Factor", taaParams.clampingFactor, 0.0, 3.0
+                )
+                # DragFloat, not SliderFloat: the useful range spans four orders of magnitude
+                # around the 10000 default, which a linear slider cannot resolve at the low end.
+                _, taaParams.maxRadiance = pyd.ImGui.DragFloat(
+                    "Max Radiance", taaParams.maxRadiance, 10.0, 1.0, 100000.0
+                )
+                # useHistoryClampRelax is deliberately not offered: it needs the
+                # historyClampRelax mask texture, which nothing in this repo builds and which
+                # is left unbound for that reason (src/pydonut/_pydonut.pyi:1357-1358).
 
             if pyd.ImGui.CollapsingHeader("Bloom"):
                 _, self.ui.EnableBloom = pyd.ImGui.Checkbox("Enabled", self.ui.EnableBloom)
