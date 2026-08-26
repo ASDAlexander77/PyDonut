@@ -742,20 +742,39 @@ if __name__ == "__main__":
                 # graphics pipelines keyed on the target FramebufferInfo -- sample count
                 # included -- and ResetBindingCache() (used above for deferredLightingPass) only
                 # drops cached *binding sets*; it does not touch that pipeline cache. On a second
-                # MSAA->MSAA rebuild (e.g. AA mode 4x -> 8x, with
-                # shadows on) the framebuffer's sample count changes under a forwardPass pipeline
-                # still cached from the previous rebuild, and NVRHI's validation layer floods
-                # with "framebuffer used in draw call does not match pipeline" and matching
-                # push-constant-size mismatches -- reproduced at ~1M messages/90s with only
-                # ResetBindingCache(), zero with the pass recreated instead
+                # MSAA->MSAA rebuild (AA mode 4x -> 8x) the framebuffer's sample count changes
+                # under a forwardPass pipeline still cached from the previous rebuild, and
+                # NVRHI's validation layer reports exactly that: "The framebuffer used in the
+                # draw call does not match the framebuffer used to create the pipeline"
+                # (nvrhi/src/validation/validation-commandlist.cpp:640).
+                #
+                # Measured over a two-switch run (TEMPORAL -> MSAA_4X -> MSAA_8X), counting that
+                # message and "Push constant size" separately:
+                #
+                #   feature_demo.py under test          framebuffer errs   push-constant errs
+                #   this file, passes recreated                        0                    0
+                #   this file, ResetBindingCache only          1,215,158            1,467,081
+                #   stage-1 tip 6b246ae, no shadow code        1,568,414                    0
+                #
+                # (Counts are per run and the runs differ in length, so they compare only as
+                # zero vs. millions.) The framebuffer mismatch is therefore NOT something the
+                # shadow work introduced: it reproduces on the stage-1 tip, which contains no
+                # shadow code at all. What the shadow work adds is the *second* message.
+                # setGraphicsState logs the framebuffer error and returns early
+                # (validation-commandlist.cpp:645-648) before it reaches
+                # evaluatePushConstantSize (:651), so m_PipelinePushConstantSize keeps the last
+                # successful setGraphicsState's value -- with shadows on that is the shadow
+                # depth pass (DepthPushConstants, 16 bytes) and the forward pass then pushes 24.
+                # With shadows off nothing interleaves, so that counter reads 0 even while the
+                # framebuffer mismatch is flooding identically. Recreating the passes zeroes
+                # both, which is what says the mismatch itself is gone rather than hidden
                 # (.superpowers/sdd/2026-08-26-feature-demo-stage2a-shadows/msaa-regression.md).
-                # Why shadows specifically are required to make the stale slot reachable is not
-                # established -- only that recreating the pass fixes it. gbufferPass has the
-                # identical pipeline-caching structure; it is only spared today because MSAA
-                # forces the deferred path off, leaving its stale-pipeline case unreachable. It
-                # is recreated here anyway, symmetrically with forwardPass, so that stays true by
-                # construction rather than by an unenforced assumption that nothing will ever
-                # flip the deferred path back on under MSAA.
+                #
+                # gbufferPass has the identical pipeline-caching structure; it is only spared
+                # today because MSAA forces the deferred path off, leaving its stale-pipeline
+                # case unreachable. It is recreated here anyway, symmetrically with forwardPass,
+                # so that stays true by construction rather than by an unenforced assumption
+                # that nothing will ever flip the deferred path back on under MSAA.
                 self.gbufferPass = pyd.GBufferFillPass(device, self.m_CommonPasses)
                 self.gbufferPass.Init(self.shaderFactory, pyd.GBufferFillPassCreateParameters())
                 self.forwardPass = pyd.ForwardShadingPass(device, self.m_CommonPasses)
