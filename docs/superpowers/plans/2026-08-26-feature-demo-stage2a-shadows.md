@@ -569,11 +569,6 @@ def test_render_composite_view_takes_a_composite_view() -> None:
     assert "PlanarView" not in doc
 
 
-def test_render_composite_view_allows_no_previous_view() -> None:
-    # Shadow rendering has no previous view; the C++ has always accepted nullptr.
-    assert "Optional" in pyd.RenderCompositeView.__doc__
-
-
 def test_render_composite_view_keeps_material_events_ninth() -> None:
     # Five examples pass materialEvents positionally. passEvent is appended after it precisely
     # so those calls keep binding to the argument they meant.
@@ -665,7 +660,11 @@ def RenderCompositeView(commandList: CommandList, view: ICompositeView, viewPrev
 - [ ] **Step 5: Rebuild and run the tests**
 
 Run: `uv sync && uv run pytest -v`
-Expected: PASS — 43 tests.
+Expected: PASS — 42 tests.
+
+`viewPrev=None` has no assertion here on purpose: whether pybind11 renders `Optional[T]` for a
+`.none(true)` pointer argument is version-dependent, so a docstring test for it could fail for a
+reason unrelated to this code. Task 6 passes `None` for real, and the example run verifies it.
 
 - [ ] **Step 6: Verify every existing caller still runs**
 
@@ -1057,7 +1056,7 @@ Expected: no validation errors. MSAA is the interesting one — the shadow map i
 - [ ] **Step 6: Confirm the binding tests still pass**
 
 Run: `uv run pytest -v`
-Expected: 43 passed.
+Expected: 42 passed.
 
 - [ ] **Step 7: Commit**
 
