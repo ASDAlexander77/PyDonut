@@ -460,6 +460,13 @@ if __name__ == "__main__":
             graph.Refresh(0)
 
         def KeyboardUpdate(self: FeatureDemo, key: int, scancode: int, action: int, mods: int) -> bool:
+            # UIData.ShowUI is read by UIRenderer.buildUI but had nothing to set it -- without
+            # a binding the settings panel can never be dismissed to see the frame behind it.
+            # Raw GLFW codes with a comment, the convention the other examples already use
+            # (rt_bindless.py:198, threaded_rendering.py:197): no keycode enum is bound.
+            if key == 258 and action == 1:  # GLFW_KEY_TAB, GLFW_PRESS
+                self.ui.ShowUI = not self.ui.ShowUI
+
             self.camera.KeyboardUpdate(key, scancode, action, mods)
             return True
 
