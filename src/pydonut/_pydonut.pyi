@@ -1493,8 +1493,12 @@ class BloomPass():
 # Both setup calls take the PlanarView rather than a frustum -- donut math types never cross into
 # Python, and the two fits want different frustums off it (view frustum for the tight fit,
 # projection frustum plus inverse view matrix for the stable one). Both return True if any
-# cascade's view changed. numCascades must be in [1, 4] and exponent must be > 1, both asserted
-# in C++.
+# cascade's view changed.
+#
+# numCascades must be in [1, 4] and exponent must be > 1. Donut only asserts both, and asserts
+# are compiled out of the build this repo ships, so the bindings raise ValueError instead: an
+# out-of-range cascade count makes the lighting passes write past LightConstants.shadowCascades
+# (an int4), and exponent <= 1 breaks the cascade split solver -- both silently, in the image.
 class CascadedShadowMap(IShadowMap):
     def __init__(self: CascadedShadowMap, device: Device, resolution: int, numCascades: int, numPerObjectShadows: int, format: Format, isUAV: bool = False) -> None: ...
     def SetupForPlanarView(self: CascadedShadowMap, light: DirectionalLight, view: PlanarView, maxShadowDistance: float, lightSpaceZUp: float, lightSpaceZDown: float, exponent: float = 4.0) -> bool: ...

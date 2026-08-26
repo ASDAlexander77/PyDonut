@@ -77,6 +77,26 @@ def test_cascaded_shadow_map_surface() -> None:
         assert hasattr(pyd.CascadedShadowMap, name), name
 
 
+def test_cascaded_shadow_map_rejects_an_out_of_range_cascade_count() -> None:
+    # Donut only asserts 1 <= numCascades <= 4 (CascadedShadowMap.cpp:40-41) and asserts are
+    # compiled out of the build this repo ships, so the binding raises instead. Without the
+    # guard, m_Cascades is a std::vector and the count sails through: both lighting passes then
+    # write lightConstants.shadowCascades[cascade] for every cascade (DeferredLightingPass.cpp:
+    # 197, ForwardShadingPass.cpp:427) into an int4 (light_cb.h:59), corrupting the neighbouring
+    # constant-buffer fields with no crash and no message.
+    #
+    # Passing device=None is only safe because the guard runs before the device is touched --
+    # do NOT add an in-range count to this list, it would dereference the null device.
+    for count in (-1, 0, 5, 8):
+        with pytest.raises(ValueError):
+            pyd.CascadedShadowMap(None, 2048, count, 0, pyd.Format.D32)
+
+
+# The matching exponent > 1 guard on SetupForPlanarView/SetupForPlanarViewStable has no test
+# here: reaching either call needs a constructed shadow map, which needs a real device, and this
+# module is the GPU-free surface layer. It is verified by running feature_demo.py.
+
+
 def test_cascaded_shadow_map_skips_the_unsafe_cascade_setter() -> None:
     # SetNumberOfCascadesUnsafe only moves the count the *shaders* read; the composite view is
     # built once in the constructor (CascadedShadowMap.cpp:67) and never rebuilt, so lowering
@@ -90,8 +110,12 @@ def test_cascaded_shadow_map_setup_takes_a_view_not_a_frustum() -> None:
     # Nothing here constructs a shadow map (that needs a device), so this checks the bound
     # signature names a view type for `view` and that no frustum type appears anywhere in it.
     doc = pyd.CascadedShadowMap.SetupForPlanarView.__doc__
-    print(doc)
     assert doc is not None
+    # pybind11 renders the C++ type name here, not "PlanarView", because CascadedShadowMap is
+    # registered ahead of PlanarView in the module -- the same ordering hazard called out in
+    # test_render_composite_view_takes_a_composite_view. If PlanarView ever moves earlier, this
+    # assertion is what will fail, and the fix is to update the expected spelling, not to widen
+    # the check into one that would also pass for a frustum parameter.
     assert "view: donut::engine::PlanarView" in doc
     assert "Frustum" not in doc
 

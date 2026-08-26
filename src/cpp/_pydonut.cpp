@@ -572,6 +572,20 @@ struct Log {
     static void fatal(const std::string &msg) { donut::log::fatal("%s", msg.c_str()); }
 };
 
+// Both CascadedShadowMap setup calls only assert(exponent > 1) (CascadedShadowMap.cpp:83,154),
+// and asserts are compiled out of the build this repo ships. The cascade split fractions come
+// from dividing by it once per cascade (`near = far / exponent`, CascadedShadowMap.cpp:111,146
+// for the tight fit and :182,222 for the stable one), so exponent == 0 makes near infinite and
+// the corner lerp that builds each cascade's bounds produces inf/NaN, while 0 < exponent <= 1
+// puts near at or beyond far and inverts the split ordering. Neither is diagnosable from the
+// resulting image, so the binding rejects them.
+void RequireCascadeExponent(const char* call, float exponent)
+{
+    if (!(exponent > 1.0f))
+        throw py::value_error(std::string(call) + ": exponent must be > 1, got "
+            + std::to_string(exponent));
+}
+
 } // namespace
 
 PYBIND11_MODULE(_pydonut, m) {
@@ -2732,8 +2746,22 @@ PYBIND11_MODULE(_pydonut, m) {
     // change the count.
     py::class_<donut::render::CascadedShadowMap, donut::engine::IShadowMap,
         std::shared_ptr<donut::render::CascadedShadowMap>>(m, "CascadedShadowMap")
+        // numCascades is range-checked here because Donut only asserts it
+        // (CascadedShadowMap.cpp:40-41) and asserts are compiled out of the build this repo
+        // ships. m_Cascades is a std::vector, so an out-of-range count constructs happily and
+        // GetNumberOfCascades() reports it back; both lighting passes then run
+        // `for (cascade = 0; cascade < GetNumberOfCascades(); cascade++)
+        //  lightConstants.shadowCascades[cascade] = numShadows;` (DeferredLightingPass.cpp:197,
+        // ForwardShadingPass.cpp:427) where shadowCascades is an int4 (light_cb.h:59). The
+        // numShadows < {DEFERRED,FORWARD}_MAX_SHADOWS test alongside it bounds the shadows[]
+        // array, not that write: cascade indices 4-7 land in the adjacent perObjectShadows and
+        // shadowChannel fields (light_cb.h:60,62) and anything past 11 runs off the end of the
+        // struct. Silently wrong rendering, not a crash.
         .def(py::init([](nvrhi::IDevice* device, int resolution, int numCascades,
                 int numPerObjectShadows, nvrhi::Format format, bool isUAV) {
+            if (numCascades < 1 || numCascades > 4)
+                throw py::value_error("CascadedShadowMap: numCascades must be in [1, 4], got "
+                    + std::to_string(numCascades));
             return new donut::render::CascadedShadowMap(device, resolution, numCascades,
                 numPerObjectShadows, format, isUAV);
         }), py::arg("device"), py::arg("resolution"), py::arg("numCascades"),
@@ -2741,6 +2769,7 @@ PYBIND11_MODULE(_pydonut, m) {
         .def("SetupForPlanarView", [](donut::render::CascadedShadowMap &self,
                 const donut::engine::DirectionalLight &light, const donut::engine::PlanarView &view,
                 float maxShadowDistance, float lightSpaceZUp, float lightSpaceZDown, float exponent) {
+            RequireCascadeExponent("SetupForPlanarView", exponent);
             return self.SetupForPlanarView(light, view.GetViewFrustum(), maxShadowDistance,
                 lightSpaceZUp, lightSpaceZDown, exponent);
         }, py::arg("light"), py::arg("view"), py::arg("maxShadowDistance"),
@@ -2748,6 +2777,7 @@ PYBIND11_MODULE(_pydonut, m) {
         .def("SetupForPlanarViewStable", [](donut::render::CascadedShadowMap &self,
                 const donut::engine::DirectionalLight &light, const donut::engine::PlanarView &view,
                 float maxShadowDistance, float lightSpaceZUp, float lightSpaceZDown, float exponent) {
+            RequireCascadeExponent("SetupForPlanarViewStable", exponent);
             return self.SetupForPlanarViewStable(light, view.GetProjectionFrustum(),
                 view.GetInverseViewMatrix(), maxShadowDistance, lightSpaceZUp, lightSpaceZDown,
                 exponent);
