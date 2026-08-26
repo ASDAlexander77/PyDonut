@@ -2059,3 +2059,29 @@ git commit -m "Add the settings UI and forward-shading path to feature_demo.py"
 ## Stage 1 Done
 
 At this point `feature_demo.py` renders Sponza through both shading paths with sky, SSAO, TAA/MSAA, bloom and tone mapping, driven by a live settings panel, and `uv run pytest` covers the binding surface. Stage 2 (shadows, scene cameras, material/light editors) gets its own spec and plan.
+
+---
+
+## Post-plan: spec items the plan did not cover
+
+The plan's tasks were implemented as written, but four spec requirements had no step
+anywhere in it and were added afterwards. Each is listed here so a later stage can tell
+them apart from the plan's own work.
+
+| Gap | Commit | Why the plan missed it |
+| --- | --- | --- |
+| `SetupView` applies the TAA jitter (spec: "*builds the `PlanarView` / previous-`PlanarView` pair **and applies the TAA jitter***") | `f03ca16` | Task 8 step 5 wrote `SetupView` as viewport + matrices only. Without a per-frame sub-pixel offset, `TemporalResolve` accumulates identical samples: TEMPORAL mode anti-aliased nothing at all on a static camera. Needed four new bindings (`SetJitter`, `GetCurrentPixelOffset`, `AdvanceFrame`, `PlanarView.SetPixelOffset`) plus the `TemporalAntiAliasingJitter` enum. |
+| `EnableAnimations`, `EnableVsync`, `EnableTranslucency`, `EnableMaterialEvents` actually driven | `f431559` | Task 8 step 2 declared the fields (spec lists all four in `UIData`); no later task read three of them or gave the fourth a control. The visible consequence: `sponza-plus.scene.json`'s two BrainStem instances stood frozen, so the scene had no motion for TAA to resolve. Pulled `Scene.Refresh` into `Render` with it -- applying a clip only writes node transforms. |
+| `ShaderReloadRequested` implemented | `9cebafe` | Same origin: declared in task 8, never read. Needed the first `ShaderFactory.ClearCache` binding, since clearing the bytecode cache without recreating the pipelines built from it silently keeps rendering the old shader. |
+| `ShowUI` can be toggled | `e8f6692` | `UIRenderer.buildUI` early-returns on it (task 11 step 1) but nothing ever set it, so the settings panel could not be dismissed. Tab, via raw GLFW keycode as in the other examples. |
+
+Verification for all four ran under the D3D debug runtime and the NVRHI validation layer,
+with zero errors: 8400 frames across three shader reloads with the framerate returning to
+the vsync cap within one 300-frame window of each, the jitter offset cycling the full
+8-sample MSAA pattern in lockstep with the frame counter, both animation clips applied, and
+4800 frames alternating the UI on and off. `uv run pytest` is 25 passed (the plan's 21 plus
+four added with these).
+
+Not verified programmatically, and still worth a human's eyes: that a shader edited on disk
+visibly takes effect on reload (needs a rebuild against the running process), and the
+per-control visual checks in task 9 step 4-5, task 10 step 6-9 and task 11 step 4.
