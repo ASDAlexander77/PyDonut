@@ -263,6 +263,12 @@ if __name__ == "__main__":
             self.shadowMap: pyd.CascadedShadowMap | None = None
             self.shadowFramebuffer: pyd.FramebufferFactory | None = None
             self.depthPass: pyd.DepthPass | None = None
+            # Hoisted, unlike gbufferContext/forwardContext which are built per frame: the
+            # shadow depth pass is this context's only user, and RenderCompositeView is done
+            # with it by the time it returns, so one instance serves every frame. The
+            # inconsistency with the other two is cosmetic, and measured: the ctx probe in the
+            # MSAA dossier ran a fresh DepthPassContext per shadow render and came out identical
+            # to the control, so the sharing causes nothing.
             self.depthContext = pyd.DepthPassContext()
             self.shadowMapCascades = 0
             self.exposureResetRequired = True
@@ -516,18 +522,18 @@ if __name__ == "__main__":
             # IsUpdateRequired to catch, so nothing else evicts it. ResetBindingCache() on both
             # lighting passes, mirroring the render-target rebuild block below, is what actually
             # makes "the two arrays are never both resident" true: it drops those stale sets
-            # before the replacement map is allocated. The light is unhooked first -- it holds a
-            # shared_ptr to the outgoing map, so dropping only this reference would keep it
-            # alive.
+            # before the replacement map is allocated. The light is unhooked first, before
+            # self.shadowMap -- it holds a shared_ptr to the outgoing map, so dropping only this
+            # object's reference would keep it alive.
             #
             # depthPass.ResetBindingCache() is deliberately NOT called: it clears material
             # bindings and vertex-buffer SRVs (DepthPass.cpp:91-95), neither of which references
             # the shadow texture. Nothing the pass caches becomes stale when this map is
             # replaced.
-            self.shadowMap = None
-            self.shadowFramebuffer = None
             if self.sunLight is not None:
                 self.sunLight.shadowMap = None
+            self.shadowMap = None
+            self.shadowFramebuffer = None
             self.deferredLightingPass.ResetBindingCache()
             self.forwardPass.ResetBindingCache()
 
@@ -711,8 +717,19 @@ if __name__ == "__main__":
 
             # A discrete UI change, not a per-frame check that could thrash: shadowMapCascades is
             # what the current map was built with, so this fires once per slider change.
+            #
+            # The waitForIdle is not here for safety -- the render-target block below is right
+            # that NVRHI command lists keep every resource they touch alive until the fence
+            # retires, so releasing a Python reference can never free something in flight. It is
+            # here for peak VRAM: those same in-flight references are what would otherwise keep
+            # the outgoing 64 MB cascade array resident while CreateShadowMap allocates its
+            # replacement, and "the two arrays are never both resident" is a claim that method
+            # makes. Draining is affordable precisely because this is a discrete UI event; the
+            # block below runs on every resize and AA change and stalls no pipeline for the same
+            # reason -- it has no such both-resident window to close, having already dropped the
+            # binding sets that would create one.
             if self.ui.ShadowCascades != self.shadowMapCascades:
-                self.GetDevice().waitForIdle()
+                device.waitForIdle()
                 self.CreateShadowMap()
 
             # GetCurrentPixelOffset switches on the pass's current jitter mode
@@ -784,6 +801,16 @@ if __name__ == "__main__":
                 # framebuffer mismatch is flooding identically. Recreating the passes zeroes
                 # both, which is what says the mismatch itself is gone rather than hidden
                 # (.superpowers/sdd/2026-08-26-feature-demo-stage2a-shadows/msaa-regression.md).
+                #
+                # The recreation is unconditional: it happens on every pass through this block,
+                # not only when the sample count changed, and because ReloadShaders() sets
+                # renderTargets = None a shader reload builds both passes twice, once there and
+                # once here. Deliberate. The measurement above shows the stale pipeline is
+                # reachable more broadly than the "MSAA -> MSAA with shadows on" story it was
+                # first pinned to, so a narrower trigger risks letting the flood back in for a
+                # case nobody enumerated. This block runs on a resize, an AA-mode change or a
+                # shader reload -- never per frame -- so being unconditional costs two pass
+                # constructions on a discrete user action.
                 #
                 # gbufferPass has the identical pipeline-caching structure; it is only spared
                 # today because MSAA forces the deferred path off, leaving its stale-pipeline
@@ -1136,19 +1163,22 @@ if __name__ == "__main__":
                     "Cascade Distribution", self.ui.ShadowExponent, 1.01, 8.0
                 )
 
-                changed, falloff = pyd.ImGui.SliderFloat(
+                # These two are pushed straight at the live shadow map rather than read back
+                # out of the UI each frame, so they need the `changed` guard the other controls
+                # do not. The stored value is updated unconditionally all the same: gating the
+                # store on shadowMap as well would make the control snap back while no map
+                # exists, and CreateShadowMap replays both settings onto every new map.
+                changed, self.ui.ShadowFalloffDistance = pyd.ImGui.SliderFloat(
                     "Falloff Distance", self.ui.ShadowFalloffDistance, 0.0, 10.0
                 )
                 if changed and self.app.shadowMap is not None:
-                    self.ui.ShadowFalloffDistance = falloff
-                    self.app.shadowMap.SetFalloffDistance(falloff)
+                    self.app.shadowMap.SetFalloffDistance(self.ui.ShadowFalloffDistance)
 
-                changed, litOutOfBounds = pyd.ImGui.Checkbox(
+                changed, self.ui.ShadowLitOutOfBounds = pyd.ImGui.Checkbox(
                     "Lit Out Of Bounds", self.ui.ShadowLitOutOfBounds
                 )
                 if changed and self.app.shadowMap is not None:
-                    self.ui.ShadowLitOutOfBounds = litOutOfBounds
-                    self.app.shadowMap.SetLitOutOfBounds(litOutOfBounds)
+                    self.app.shadowMap.SetLitOutOfBounds(self.ui.ShadowLitOutOfBounds)
 
             if pyd.ImGui.CollapsingHeader("Sky"):
                 _, self.ui.EnableProceduralSky = pyd.ImGui.Checkbox(

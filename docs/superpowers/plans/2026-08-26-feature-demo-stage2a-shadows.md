@@ -552,7 +552,7 @@ The only task that changes an existing signature. Five other examples call these
 - Consumes: nothing.
 - Produces: `RenderCompositeView(commandList, view, viewPrev, framebufferFactory, rootNode, drawStrategy, pass_, passContext, materialEvents=False, passEvent=None)` where `view` is an `ICompositeView` and `viewPrev` may be `None`; and `RenderView(commandList, view, viewPrev, framebuffer, drawStrategy, pass_, context, materialEvents=False)` where both views are `IView` and `viewPrev` may be `None`. Task 6 calls the first with a `CascadedShadowMap.GetView()`.
 
-**`passEvent` goes LAST, after `materialEvents`** — not in the C++ parameter order. `feature_demo.py` and four other examples pass `materialEvents` as the ninth *positional* argument; inserting `passEvent` ahead of it would silently rebind those calls and fail with a type error.
+**`passEvent` goes LAST, after `materialEvents`** — not in the C++ parameter order. Five examples call `RenderCompositeView`, but only `feature_demo.py` passes `materialEvents`, as the ninth *positional* argument, at three call sites; the other four stop at `passContext`. One positional caller is enough: inserting `passEvent` ahead of `materialEvents` would rebind those three arguments from the bool they mean to a str, so the decision stands as written.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -570,8 +570,9 @@ def test_render_composite_view_takes_a_composite_view() -> None:
 
 
 def test_render_composite_view_keeps_material_events_ninth() -> None:
-    # Five examples pass materialEvents positionally. passEvent is appended after it precisely
-    # so those calls keep binding to the argument they meant.
+    # feature_demo.py passes materialEvents positionally, at three call sites; no other example
+    # passes it at all. passEvent is appended after it precisely so those three keep binding to
+    # the argument they meant instead of silently taking a str for a bool.
     doc = pyd.RenderCompositeView.__doc__
     assert doc.index("materialEvents") < doc.index("passEvent")
 
@@ -623,9 +624,10 @@ In `src/cpp/_pydonut.cpp`, replace lines 2686-2704 (both `m.def` blocks) with:
     //
     // passEvent is the marker name the C++ has always taken and this binding used to hardcode to
     // nullptr; naming the shadow pass makes it legible in a graphics capture. It is appended
-    // AFTER materialEvents rather than placed in the C++ parameter order on purpose: five
-    // examples pass materialEvents as the ninth positional argument, and inserting a parameter
-    // ahead of it would silently rebind every one of those calls.
+    // AFTER materialEvents rather than placed in the C++ parameter order on purpose: of the five
+    // examples that call this function, feature_demo.py passes materialEvents as the ninth
+    // positional argument (three call sites; the other four examples stop before it), and
+    // inserting a parameter ahead of it would silently rebind those bools to a str.
     m.def("RenderCompositeView", [](nvrhi::ICommandList* commandList, donut::engine::ICompositeView &view,
             donut::engine::ICompositeView* viewPrev,
             donut::engine::FramebufferFactory &framebufferFactory, std::shared_ptr<donut::engine::SceneGraphNode> rootNode,

@@ -244,11 +244,18 @@ as stage 1: no device, no rendering, catching re-export gaps, typo'd method name
 drifting from the headers they mirror. Coverage:
 
 - `IShadowMap` exported; `CascadedShadowMap` a subclass of it
-- `Light.shadowMap` accepts `None` and round-trips
+- `Light.shadowMap` defaults to `None` and accepts `None`. Round-tripping a *real* shadow map is
+  deliberately not covered here: constructing one needs a device, which this layer does not have.
+  It is exercised by running the example, where the sun light gets its map assigned every time
+  the cascade count changes.
 - `DepthPass`, `DepthPassContext`, `DepthPassCreateParameters` exported, with the create
   parameters' defaults matching `DepthPass.h:75-88`
 - `RenderCompositeView` still accepting a `PlanarView` (the widening's backward compatibility)
-- the flat-scalar rule: the setup calls reject a tuple where they take a view
+- the flat-scalar rule, checked by inspecting the bound signature rather than by calling: the
+  setup calls name a view type for `view` and no frustum type anywhere. Passing a tuple and
+  asserting `TypeError` was tried and rejected -- an earlier round found such a test passing for
+  the wrong reason, its `TypeError` coming from the unbound `self` rather than from the argument
+  under test, and no way to construct a valid `self` without a device.
 
 Runtime verification, by running the example:
 

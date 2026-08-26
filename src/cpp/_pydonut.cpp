@@ -2847,9 +2847,10 @@ PYBIND11_MODULE(_pydonut, m) {
     //
     // passEvent is the marker name the C++ has always taken and this binding used to hardcode to
     // nullptr; naming the shadow pass makes it legible in a graphics capture. It is appended
-    // AFTER materialEvents rather than placed in the C++ parameter order on purpose: five
-    // examples pass materialEvents as the ninth positional argument, and inserting a parameter
-    // ahead of it would silently rebind every one of those calls.
+    // AFTER materialEvents rather than placed in the C++ parameter order on purpose: of the five
+    // examples that call this function, feature_demo.py passes materialEvents as the ninth
+    // positional argument (three call sites; the other four examples stop before it), and
+    // inserting a parameter ahead of it would silently rebind those bools to a str.
     m.def("RenderCompositeView", [](nvrhi::ICommandList* commandList, donut::engine::ICompositeView &view,
             donut::engine::ICompositeView* viewPrev,
             donut::engine::FramebufferFactory &framebufferFactory, std::shared_ptr<donut::engine::SceneGraphNode> rootNode,

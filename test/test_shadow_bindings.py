@@ -163,8 +163,9 @@ def test_render_composite_view_takes_a_composite_view() -> None:
 
 
 def test_render_composite_view_keeps_material_events_ninth() -> None:
-    # Five examples pass materialEvents positionally. passEvent is appended after it precisely
-    # so those calls keep binding to the argument they meant.
+    # feature_demo.py passes materialEvents positionally, at three call sites; no other example
+    # passes it at all. passEvent is appended after it precisely so those three keep binding to
+    # the argument they meant instead of silently taking a str for a bool.
     doc = pyd.RenderCompositeView.__doc__
     assert doc.index("materialEvents") < doc.index("passEvent")
 
