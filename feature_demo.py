@@ -72,6 +72,13 @@ if __name__ == "__main__":
     # already show.
     SHADOW_MAP_RESOLUTION = 2048
 
+    # Depth bias for the shadow-map depth pass, in depth-buffer units and in units per unit of
+    # depth slope. Tuned against Sponza at the resolution above; they are the first thing to
+    # change if the shadows show acne (too little) or peter-panning (too much). Applied in one
+    # place only, CreateDepthPass.
+    SHADOW_DEPTH_BIAS = 100
+    SHADOW_SLOPE_SCALED_DEPTH_BIAS = 2.0
+
     # Minimum depth range of the shadow projection along the light direction, in world units:
     # CascadedShadowMap takes max(cascade's own half-extent, this) for each side
     # (CascadedShadowMap.cpp:137-138), so these only matter for the near cascades, where they are
@@ -327,14 +334,8 @@ if __name__ == "__main__":
             )
 
             # Size-independent, like the other geometry passes: it is created once here and
-            # only recreated on a shader reload. depthBias/slopeScaledDepthBias take effect at
-            # Init(), which is why they are constants rather than sliders -- a bias slider would
-            # mean recreating the pass on every drag.
-            depthParams = pyd.DepthPassCreateParameters()
-            depthParams.depthBias = 100
-            depthParams.slopeScaledDepthBias = 2.0
-            self.depthPass = pyd.DepthPass(device, self.m_CommonPasses)
-            self.depthPass.Init(self.shaderFactory, depthParams)
+            # only recreated on a shader reload.
+            self.CreateDepthPass(device)
 
             self.CreateShadowMap()
 
@@ -458,11 +459,7 @@ if __name__ == "__main__":
             # Holds pipelines compiled from the bytecode ClearCache just dropped, so it is
             # rebuilt with the other geometry passes. The shadow map itself holds no shaders and
             # is left alone.
-            depthParams = pyd.DepthPassCreateParameters()
-            depthParams.depthBias = 100
-            depthParams.slopeScaledDepthBias = 2.0
-            self.depthPass = pyd.DepthPass(device, self.m_CommonPasses)
-            self.depthPass.Init(self.shaderFactory, depthParams)
+            self.CreateDepthPass(device)
 
             # BlitTexture's cached binding sets were built against the *old* CommonRenderPasses'
             # binding layout, so they cannot be reused with the instance created above.
@@ -476,6 +473,24 @@ if __name__ == "__main__":
             # Rebuilding them here would duplicate every one of those steps. The cost is one
             # extra render-target reallocation, on a manual button press.
             self.renderTargets = None
+
+        def CreateDepthPass(self: FeatureDemo, device: pyd.Device) -> None:
+            """Builds the shadow-map depth pass. Called from Init and CreateRenderPasses.
+
+            One function rather than two copies because the two bias values are the tuning knob
+            here: shadow acne is the most likely reason a first shadowed frame looks wrong, and
+            the fix is a different constant. Split across two call sites, tuning one and not the
+            other would leave a shader reload silently changing the bias.
+
+            The biases are baked into the pass's pipelines at Init(), which is why they are
+            constants rather than sliders -- a bias slider would mean recreating the pass on
+            every drag.
+            """
+            depthParams = pyd.DepthPassCreateParameters()
+            depthParams.depthBias = SHADOW_DEPTH_BIAS
+            depthParams.slopeScaledDepthBias = SHADOW_SLOPE_SCALED_DEPTH_BIAS
+            self.depthPass = pyd.DepthPass(device, self.m_CommonPasses)
+            self.depthPass.Init(self.shaderFactory, depthParams)
 
         def CreateShadowMap(self: FeatureDemo) -> None:
             """(Re)builds the cascaded shadow map and the framebuffer factory over it.
