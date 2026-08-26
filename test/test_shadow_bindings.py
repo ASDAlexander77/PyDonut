@@ -87,10 +87,13 @@ def test_cascaded_shadow_map_skips_the_unsafe_cascade_setter() -> None:
 
 def test_cascaded_shadow_map_setup_takes_a_view_not_a_frustum() -> None:
     # The frustum is pulled off the view C++-side: donut math types never cross into Python.
-    # Nothing here constructs a shadow map (that needs a device), so this checks the signature
-    # rejects the shape a frustum would have had.
-    with pytest.raises(TypeError):
-        pyd.CascadedShadowMap.SetupForPlanarView(None, None, (0.0, 0.0, 0.0), 1.0, 1.0, 1.0)
+    # Nothing here constructs a shadow map (that needs a device), so this checks the bound
+    # signature names a view type for `view` and that no frustum type appears anywhere in it.
+    doc = pyd.CascadedShadowMap.SetupForPlanarView.__doc__
+    print(doc)
+    assert doc is not None
+    assert "view: donut::engine::PlanarView" in doc
+    assert "Frustum" not in doc
 
 
 def test_depth_pass_trio_is_exported() -> None:
@@ -123,3 +126,37 @@ def test_depth_pass_create_parameters_skip_material_bindings() -> None:
     # The pass builds its own MaterialBindingCache when this is null, and nothing in this repo
     # constructs one -- so it is deliberately unbound rather than overlooked.
     assert not hasattr(pyd.DepthPassCreateParameters(), "materialBindings")
+
+
+def test_render_composite_view_takes_a_composite_view() -> None:
+    # CascadedShadowMap.GetView() returns a CompositeView, which derives from ICompositeView and
+    # is NOT an IView (View.h:55,150) -- an IView parameter would reject the very argument this
+    # widening exists to accept. pybind11 renders the C++ type name here because ICompositeView
+    # is registered further down the module than this function.
+    doc = pyd.RenderCompositeView.__doc__
+    assert "ICompositeView" in doc
+    assert "PlanarView" not in doc
+
+
+def test_render_composite_view_keeps_material_events_ninth() -> None:
+    # Five examples pass materialEvents positionally. passEvent is appended after it precisely
+    # so those calls keep binding to the argument they meant.
+    doc = pyd.RenderCompositeView.__doc__
+    assert doc.index("materialEvents") < doc.index("passEvent")
+
+
+def test_planar_view_still_converts_to_both_widened_parameters() -> None:
+    # The widening's backward compatibility, checked where it actually lives: every existing
+    # caller passes a PlanarView, and it keeps binding because PlanarView derives from IView
+    # derives from ICompositeView. Calling the functions for real needs a device, so the five
+    # examples that do are run in this task's verification step instead.
+    assert issubclass(pyd.PlanarView, pyd.IView)
+    assert issubclass(pyd.IView, pyd.ICompositeView)
+
+
+def test_render_view_takes_an_iview() -> None:
+    # RenderView's C++ signature takes const IView*, not ICompositeView* (GeometryPasses.h:70-78),
+    # so it widens one step less far than RenderCompositeView.
+    doc = pyd.RenderView.__doc__
+    assert "IView" in doc
+    assert "PlanarView" not in doc

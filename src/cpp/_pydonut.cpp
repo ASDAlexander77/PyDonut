@@ -2238,7 +2238,7 @@ PYBIND11_MODULE(_pydonut, m) {
     // Light is abstract (pure virtual GetLightType()) -- bound base-only, so
     // SceneGraph.GetLights() can return a homogeneous list regardless of light subtype.
     // Registered as a polymorphic base with no methods bound, the same shape ICompositeView/
-    // IView take at :2756-2762. The interface itself exposes nothing to Python -- a concrete
+    // IView take at :2874-2875. The interface itself exposes nothing to Python -- a concrete
     // shadow map may re-expose some of its virtuals under its own type (see CascadedShadowMap's
     // GetView/GetTexture/GetNumberOfCascades). It exists so Light.shadowMap has a type to accept
     // and so CascadedShadowMap can derive from it Python-side. Not constructible: there is no
@@ -2796,24 +2796,44 @@ PYBIND11_MODULE(_pydonut, m) {
             return self.GetFramebuffer(view);
         }, py::arg("view"), py::return_value_policy::reference_internal);
 
-    m.def("RenderView", [](nvrhi::ICommandList* commandList, donut::engine::PlanarView &view, donut::engine::PlanarView &viewPrev,
-            nvrhi::IFramebuffer* framebuffer, donut::render::IDrawStrategy &drawStrategy, donut::render::IGeometryPass &pass,
+    // view/viewPrev are IView, not PlanarView: the C++ takes const IView* (GeometryPasses.h:70-78)
+    // and stage 1 bound only the concrete type it happened to call with. viewPrev accepts None --
+    // the C++ has always allowed nullptr, and a pass with no history has no previous view.
+    m.def("RenderView", [](nvrhi::ICommandList* commandList, donut::engine::IView &view,
+            donut::engine::IView* viewPrev,
+            nvrhi::IFramebuffer* framebuffer, donut::render::IDrawStrategy &drawStrategy,
+            donut::render::IGeometryPass &pass,
             donut::render::GeometryPassContext &context, bool materialEvents) {
-        donut::render::RenderView(commandList, &view, &viewPrev, framebuffer, drawStrategy, pass, context, materialEvents);
-    }, py::arg("commandList"), py::arg("view"), py::arg("viewPrev"), py::arg("framebuffer"), py::arg("drawStrategy"),
-       py::arg("pass"), py::arg("context"), py::arg("materialEvents") = false);
+        donut::render::RenderView(commandList, &view, viewPrev, framebuffer, drawStrategy, pass,
+            context, materialEvents);
+    }, py::arg("commandList"), py::arg("view"), py::arg("viewPrev").none(true), py::arg("framebuffer"),
+       py::arg("drawStrategy"), py::arg("pass"), py::arg("context"), py::arg("materialEvents") = false);
 
-    m.def("RenderCompositeView", [](nvrhi::ICommandList* commandList, donut::engine::PlanarView &view, donut::engine::PlanarView &viewPrev,
+    // view/viewPrev are ICompositeView -- one step wider than RenderView, because this is the
+    // call that renders a CascadedShadowMap's cascades in one go and CascadedShadowMap::GetView()
+    // returns a CompositeView, which derives from ICompositeView and is NOT an IView
+    // (View.h:55,150). PlanarView still converts, through IView.
+    //
+    // passEvent is the marker name the C++ has always taken and this binding used to hardcode to
+    // nullptr; naming the shadow pass makes it legible in a graphics capture. It is appended
+    // AFTER materialEvents rather than placed in the C++ parameter order on purpose: five
+    // examples pass materialEvents as the ninth positional argument, and inserting a parameter
+    // ahead of it would silently rebind every one of those calls.
+    m.def("RenderCompositeView", [](nvrhi::ICommandList* commandList, donut::engine::ICompositeView &view,
+            donut::engine::ICompositeView* viewPrev,
             donut::engine::FramebufferFactory &framebufferFactory, std::shared_ptr<donut::engine::SceneGraphNode> rootNode,
             donut::render::IDrawStrategy &drawStrategy, donut::render::IGeometryPass &pass,
-            donut::render::GeometryPassContext &passContext, bool materialEvents) {
-        donut::render::RenderCompositeView(commandList, &view, &viewPrev, framebufferFactory, rootNode,
-            drawStrategy, pass, passContext, nullptr, materialEvents);
-    }, py::arg("commandList"), py::arg("view"), py::arg("viewPrev"), py::arg("framebufferFactory"), py::arg("rootNode"),
-       py::arg("drawStrategy"), py::arg("pass"), py::arg("passContext"), py::arg("materialEvents") = false,
+            donut::render::GeometryPassContext &passContext, bool materialEvents,
+            std::optional<std::string> passEvent) {
+        donut::render::RenderCompositeView(commandList, &view, viewPrev, framebufferFactory, rootNode,
+            drawStrategy, pass, passContext, passEvent ? passEvent->c_str() : nullptr, materialEvents);
+    }, py::arg("commandList"), py::arg("view"), py::arg("viewPrev").none(true), py::arg("framebufferFactory"),
+       py::arg("rootNode"), py::arg("drawStrategy"), py::arg("pass"), py::arg("passContext"),
+       py::arg("materialEvents") = false, py::arg("passEvent") = py::none(),
        // See the comment on CommandList.open above -- released for threaded_rendering.py's
        // concurrent per-face recording. Safe: this walks read-only scene-graph/mesh/material
        // data and issues draws into the caller's own CommandList, touching no Python objects.
+       // Argument conversion (including passEvent's string) completes before the guard applies.
        py::call_guard<py::gil_scoped_release>());
 
     // BaseCamera is registered (opaque, no constructor -- Python never creates one directly)
