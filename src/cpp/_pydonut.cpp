@@ -52,6 +52,7 @@
 #include <donut/engine/TextureCache.h>
 #include <donut/engine/DescriptorTableManager.h>
 #include <donut/engine/FramebufferFactory.h>
+#include <donut/engine/ShadowMap.h>
 #include <donut/render/GBuffer.h>
 #include <donut/render/GBufferFillPass.h>
 #include <donut/render/DeferredLightingPass.h>
@@ -2234,6 +2235,14 @@ PYBIND11_MODULE(_pydonut, m) {
 
     // Light is abstract (pure virtual GetLightType()) -- bound base-only, so
     // SceneGraph.GetLights() can return a homogeneous list regardless of light subtype.
+    // Registered as a polymorphic base with no methods bound, the same shape ICompositeView/
+    // IView take at :2756-2762. Everything IShadowMap declares (GetWorldToUvzwMatrix,
+    // FillShadowConstants, GetUVRange, GetFadeRangeInTexels, IsLitOutOfBounds, GetCascade,
+    // GetPerObjectShadow) is called by the lighting passes in C++, never from Python. It
+    // exists so Light.shadowMap has a type to accept and so CascadedShadowMap can derive from
+    // it Python-side. Not constructible: there is no concrete IShadowMap.
+    py::class_<donut::engine::IShadowMap, std::shared_ptr<donut::engine::IShadowMap>>(m, "IShadowMap");
+
     py::class_<donut::engine::Light, donut::engine::SceneGraphLeaf, std::shared_ptr<donut::engine::Light>>(m, "Light")
         .def("SetDirection", [](const donut::engine::Light &self, double x, double y, double z) {
             self.SetDirection(donut::math::double3(x, y, z));
@@ -2245,7 +2254,16 @@ PYBIND11_MODULE(_pydonut, m) {
             LightConstants constants{};
             self.FillLightConstants(constants);
             return py::bytes(reinterpret_cast<const char*>(&constants), sizeof(constants));
-        });
+        })
+        // Assigning a shadow map to a light is the entire shadow wiring: both lighting passes
+        // read light->shadowMap themselves (DeferredLightingPass.cpp:163-192) to pull the
+        // texture, its size and the per-cascade constants, so there is no pass input to plumb.
+        // Assigning None is how the example's shadow toggle turns shadows off, with no pass
+        // rebuild and no binding cache to clear.
+        //
+        // shadowChannel is deliberately left unbound: it selects a channel in the
+        // shadowChannels texture, a screen-space shadow-mask path nothing here renders.
+        .def_readwrite("shadowMap", &donut::engine::Light::shadowMap);
 
     py::class_<donut::engine::DirectionalLight, donut::engine::Light, std::shared_ptr<donut::engine::DirectionalLight>>(m, "DirectionalLight")
         .def(py::init<>())

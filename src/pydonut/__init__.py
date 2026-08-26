@@ -119,6 +119,7 @@ from pydonut._pydonut import MeshInfo
 from pydonut._pydonut import SceneGraphLeaf
 from pydonut._pydonut import MeshInstance
 from pydonut._pydonut import SkinnedMeshInstance
+from pydonut._pydonut import IShadowMap
 from pydonut._pydonut import Light
 from pydonut._pydonut import DirectionalLight
 from pydonut._pydonut import SceneGraphAnimation
@@ -298,6 +299,7 @@ __all__ = (
     'SceneGraphLeaf',
     'MeshInstance',
     'SkinnedMeshInstance',
+    'IShadowMap',
     'Light',
     'DirectionalLight',
     'SceneGraphAnimation',

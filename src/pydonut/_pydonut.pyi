@@ -1091,11 +1091,19 @@ class SkinnedMeshInstance(MeshInstance):
     def GetPrototypeMesh(self: SkinnedMeshInstance) -> MeshInfo: ...
     def GetLastUpdateFrameIndex(self: SkinnedMeshInstance) -> int: ...
 
+# The interface a shadow map implements, registered as a polymorphic base only -- everything it
+# declares is called by the lighting passes in C++. Not constructible; see CascadedShadowMap.
+class IShadowMap():
+    pass
+
 class Light(SceneGraphLeaf):
     def SetDirection(self: Light, x: float, y: float, z: float) -> None: ...
     # Raw bytes of the engine's LightConstants struct, ready for CommandList.writeBuffer --
     # same pattern as PlanarView.FillPlanarViewConstants.
     def FillLightConstants(self: Light) -> bytes: ...
+    # Assigning this is the entire shadow wiring -- both lighting passes read it themselves.
+    # None means "this light casts no shadow", and is how a shadow toggle is implemented.
+    shadowMap: Optional[IShadowMap]
 
 class DirectionalLight(Light):
     def __init__(self: DirectionalLight) -> None: ...
