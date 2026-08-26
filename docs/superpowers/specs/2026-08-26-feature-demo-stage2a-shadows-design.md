@@ -139,10 +139,13 @@ pipeline cache).
 
 Three changes to the existing free-function bindings:
 
-1. `view` and `viewPrev` typed `IView` instead of `PlanarView`. The C++ already takes
-   `const ICompositeView*` (`GeometryPasses.h:82-83`); the narrow binding was stage 1 binding
-   only what stage 1 called. This is what lets one call render every cascade, by passing
-   `shadowMap.GetView()`.
+1. `view` and `viewPrev` typed **`ICompositeView`** — not `IView` — instead of `PlanarView`.
+   The C++ already takes `const ICompositeView*` (`GeometryPasses.h:82-83`); the narrow binding
+   was stage 1 binding only what stage 1 called. `ICompositeView` is the necessary width, not
+   merely the honest one: `CascadedShadowMap::GetView()` returns a `CompositeView`, which
+   derives from `ICompositeView` and is *not* an `IView` (`View.h:55,150`), so an `IView`
+   parameter would reject the very argument this widening exists to accept. `PlanarView` still
+   converts, through `IView`.
 2. `viewPrev` accepts `None`. The C++ allows null, and shadow rendering has no previous view.
 3. The dropped `passEvent` marker name is added as an optional argument, so the shadow pass shows
    up as `"ShadowMap"` in a graphics capture instead of an unnamed run of draws.
