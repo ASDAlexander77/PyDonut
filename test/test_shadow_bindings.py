@@ -56,3 +56,38 @@ def test_light_shadow_map_accepts_none() -> None:
     light = pyd.DirectionalLight()
     light.shadowMap = None
     assert light.shadowMap is None
+
+
+def test_cascaded_shadow_map_is_a_shadow_map() -> None:
+    assert issubclass(pyd.CascadedShadowMap, pyd.IShadowMap)
+
+
+def test_cascaded_shadow_map_surface() -> None:
+    for name in (
+        "SetupForPlanarView",
+        "SetupForPlanarViewStable",
+        "Clear",
+        "GetView",
+        "GetCascadeView",
+        "GetTexture",
+        "GetNumberOfCascades",
+        "SetLitOutOfBounds",
+        "SetFalloffDistance",
+    ):
+        assert hasattr(pyd.CascadedShadowMap, name), name
+
+
+def test_cascaded_shadow_map_skips_the_unsafe_cascade_setter() -> None:
+    # SetNumberOfCascadesUnsafe only moves the count the *shaders* read; the composite view is
+    # built once in the constructor (CascadedShadowMap.cpp:67) and never rebuilt, so lowering
+    # the count through it would leave GetView() still rendering every allocated slice. The
+    # cascade count is a construction parameter here instead -- see the spec.
+    assert not hasattr(pyd.CascadedShadowMap, "SetNumberOfCascadesUnsafe")
+
+
+def test_cascaded_shadow_map_setup_takes_a_view_not_a_frustum() -> None:
+    # The frustum is pulled off the view C++-side: donut math types never cross into Python.
+    # Nothing here constructs a shadow map (that needs a device), so this checks the signature
+    # rejects the shape a frustum would have had.
+    with pytest.raises(TypeError):
+        pyd.CascadedShadowMap.SetupForPlanarView(None, None, (0.0, 0.0, 0.0), 1.0, 1.0, 1.0)

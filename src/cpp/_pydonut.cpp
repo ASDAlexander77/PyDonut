@@ -62,6 +62,7 @@
 #include <donut/render/SsaoPass.h>
 #include <donut/render/ToneMappingPasses.h>
 #include <donut/render/BloomPass.h>
+#include <donut/render/CascadedShadowMap.h>
 #include <donut/render/GeometryPasses.h>
 #include <donut/render/DrawStrategy.h>
 #include <nvrhi/utils.h>
@@ -2236,11 +2237,11 @@ PYBIND11_MODULE(_pydonut, m) {
     // Light is abstract (pure virtual GetLightType()) -- bound base-only, so
     // SceneGraph.GetLights() can return a homogeneous list regardless of light subtype.
     // Registered as a polymorphic base with no methods bound, the same shape ICompositeView/
-    // IView take at :2756-2762. Everything IShadowMap declares (GetWorldToUvzwMatrix,
-    // FillShadowConstants, GetUVRange, GetFadeRangeInTexels, IsLitOutOfBounds, GetCascade,
-    // GetPerObjectShadow) is called by the lighting passes in C++, never from Python. It
-    // exists so Light.shadowMap has a type to accept and so CascadedShadowMap can derive from
-    // it Python-side. Not constructible: there is no concrete IShadowMap.
+    // IView take at :2756-2762. The interface itself exposes nothing to Python -- a concrete
+    // shadow map may re-expose some of its virtuals under its own type (see CascadedShadowMap's
+    // GetView/GetTexture/GetNumberOfCascades). It exists so Light.shadowMap has a type to accept
+    // and so CascadedShadowMap can derive from it Python-side. Not constructible: there is no
+    // concrete IShadowMap.
     py::class_<donut::engine::IShadowMap, std::shared_ptr<donut::engine::IShadowMap>>(m, "IShadowMap");
 
     py::class_<donut::engine::Light, donut::engine::SceneGraphLeaf, std::shared_ptr<donut::engine::Light>>(m, "Light")
@@ -2681,6 +2682,74 @@ PYBIND11_MODULE(_pydonut, m) {
             self.Render(commandList, framebufferFactory, compositeView, sourceDestTexture, sigmaInPixels, blendFactor);
         }, py::arg("commandList"), py::arg("framebufferFactory"), py::arg("compositeView"),
             py::arg("sourceDestTexture"), py::arg("sigmaInPixels"), py::arg("blendFactor"));
+
+    // Both setup calls take the PlanarView where C++ takes a dm::frustum (and, for the stable
+    // variant, a dm::affine3): donut math types never cross into Python, and the view already
+    // holds everything both fits need. They want *different* frustums -- the tight fit takes
+    // the view frustum, the stable fit the projection frustum plus the inverse view matrix,
+    // which is exactly what makes the stable fit independent of camera orientation
+    // (CascadedShadowMap.h:64-76). Both accessors are on IView (View.h:71-74).
+    //
+    // preViewTranslation is left at its 0 default and not exposed: it belongs to renderers that
+    // translate the world to keep the camera near the origin, which no example here does.
+    // numberOfCascades is left at its -1 default (meaning "all allocated cascades") because the
+    // cascade count is a *construction* parameter -- see the skip note below.
+    //
+    // Skipped: SetupForCubemapView and SetupPerObjectShadow (they need the light types and
+    // per-object shadow slices a later stage binds), SetupProxyViews, GetPerObjectView, and
+    // SetNumberOfCascadesUnsafe -- that setter only moves m_NumberOfCascades, which is what the
+    // shaders read, while m_CompositeView is built once in the constructor (CascadedShadowMap.
+    // cpp:67) and never rebuilt. Lowering the count through it would leave GetView() rendering
+    // every allocated slice, burning a scene depth pass per unused cascade and writing into
+    // slices whose view matrices were never set up. Recreating the map is the correct way to
+    // change the count.
+    py::class_<donut::render::CascadedShadowMap, donut::engine::IShadowMap,
+        std::shared_ptr<donut::render::CascadedShadowMap>>(m, "CascadedShadowMap")
+        .def(py::init([](nvrhi::IDevice* device, int resolution, int numCascades,
+                int numPerObjectShadows, nvrhi::Format format, bool isUAV) {
+            return new donut::render::CascadedShadowMap(device, resolution, numCascades,
+                numPerObjectShadows, format, isUAV);
+        }), py::arg("device"), py::arg("resolution"), py::arg("numCascades"),
+            py::arg("numPerObjectShadows"), py::arg("format"), py::arg("isUAV") = false)
+        .def("SetupForPlanarView", [](donut::render::CascadedShadowMap &self,
+                const donut::engine::DirectionalLight &light, const donut::engine::PlanarView &view,
+                float maxShadowDistance, float lightSpaceZUp, float lightSpaceZDown, float exponent) {
+            return self.SetupForPlanarView(light, view.GetViewFrustum(), maxShadowDistance,
+                lightSpaceZUp, lightSpaceZDown, exponent);
+        }, py::arg("light"), py::arg("view"), py::arg("maxShadowDistance"),
+            py::arg("lightSpaceZUp"), py::arg("lightSpaceZDown"), py::arg("exponent") = 4.0f)
+        .def("SetupForPlanarViewStable", [](donut::render::CascadedShadowMap &self,
+                const donut::engine::DirectionalLight &light, const donut::engine::PlanarView &view,
+                float maxShadowDistance, float lightSpaceZUp, float lightSpaceZDown, float exponent) {
+            return self.SetupForPlanarViewStable(light, view.GetProjectionFrustum(),
+                view.GetInverseViewMatrix(), maxShadowDistance, lightSpaceZUp, lightSpaceZDown,
+                exponent);
+        }, py::arg("light"), py::arg("view"), py::arg("maxShadowDistance"),
+            py::arg("lightSpaceZUp"), py::arg("lightSpaceZDown"), py::arg("exponent") = 4.0f)
+        .def("Clear", &donut::render::CascadedShadowMap::Clear, py::arg("commandList"))
+        // Returns the CompositeView holding one PlanarView per allocated cascade -- pass it
+        // straight to RenderCompositeView to fill every cascade in one call. Note this is an
+        // ICompositeView and *not* an IView: CompositeView derives from ICompositeView directly
+        // (View.h:150), which is why Task 4 widens RenderCompositeView to ICompositeView.
+        .def("GetView", [](donut::render::CascadedShadowMap &self) -> const donut::engine::ICompositeView* {
+            return &self.GetView();
+        }, py::return_value_policy::reference_internal)
+        // Raw pointer, not the shared_ptr C++ returns: PlanarView is registered with pybind11's
+        // default (unique_ptr) holder, so returning a shared_ptr<PlanarView> would not compile.
+        // reference_internal keeps the owning shadow map alive for as long as Python holds the
+        // view. The example renders every cascade through GetView(); this is here because
+        // inspecting one cascade's fit is the first thing wanted when cascades look wrong.
+        .def("GetCascadeView", [](donut::render::CascadedShadowMap &self, uint32_t cascade) -> donut::engine::PlanarView* {
+            return self.GetCascadeView(cascade).get();
+        }, py::arg("cascade"), py::return_value_policy::reference_internal)
+        .def("GetTexture", [](donut::render::CascadedShadowMap &self) -> nvrhi::ITexture* {
+            return self.GetTexture();
+        }, py::return_value_policy::reference_internal)
+        .def("GetNumberOfCascades", &donut::render::CascadedShadowMap::GetNumberOfCascades)
+        .def("SetLitOutOfBounds", &donut::render::CascadedShadowMap::SetLitOutOfBounds,
+            py::arg("litOutOfBounds"))
+        .def("SetFalloffDistance", &donut::render::CascadedShadowMap::SetFalloffDistance,
+            py::arg("distance"));
 
     py::class_<donut::engine::FramebufferFactory, std::shared_ptr<donut::engine::FramebufferFactory>>(m, "FramebufferFactory")
         .def(py::init<nvrhi::IDevice*>(), py::arg("device"))

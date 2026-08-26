@@ -161,6 +161,7 @@ from pydonut._pydonut import ToneMappingParameters
 from pydonut._pydonut import ToneMappingPassCreateParameters
 from pydonut._pydonut import ToneMappingPass
 from pydonut._pydonut import BloomPass
+from pydonut._pydonut import CascadedShadowMap
 from pydonut._pydonut import FramebufferFactory
 from pydonut._pydonut import RenderView
 from pydonut._pydonut import RenderCompositeView
@@ -341,6 +342,7 @@ __all__ = (
     'ToneMappingPassCreateParameters',
     'ToneMappingPass',
     'BloomPass',
+    'CascadedShadowMap',
     'FramebufferFactory',
     'RenderView',
     'RenderCompositeView',
