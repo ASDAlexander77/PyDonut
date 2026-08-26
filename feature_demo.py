@@ -802,7 +802,7 @@ if __name__ == "__main__":
                 # With shadows off nothing interleaves, so that counter reads 0 even while the
                 # framebuffer mismatch is flooding identically. Recreating the passes zeroes
                 # both, which is what says the mismatch itself is gone rather than hidden
-                # (.superpowers/sdd/2026-08-26-feature-demo-stage2a-shadows/msaa-regression.md).
+                # (docs/superpowers/specs/2026-08-26-msaa-double-switch-validation-flood.md).
                 #
                 # The recreation is unconditional: it happens on every pass through this block,
                 # not only when the sample count changed, and because ReloadShaders() sets
