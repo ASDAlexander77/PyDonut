@@ -683,6 +683,12 @@ if __name__ == "__main__":
                 self.ui.ShaderReloadRequested = False
                 self.ReloadShaders()
 
+            # A discrete UI change, not a per-frame check that could thrash: shadowMapCascades is
+            # what the current map was built with, so this fires once per slider change.
+            if self.ui.ShadowCascades != self.shadowMapCascades:
+                self.GetDevice().waitForIdle()
+                self.CreateShadowMap()
+
             # GetCurrentPixelOffset switches on the pass's current jitter mode
             # (TemporalAntiAliasingPass.cpp:335), so the mode has to be pushed in before
             # SetupView reads the offset back out.
@@ -1031,6 +1037,50 @@ if __name__ == "__main__":
             if self.ui.UseDeferredShading:
                 pyd.ImGui.SameLine()
                 pyd.ImGui.Text("(forward path only)")
+
+            if pyd.ImGui.CollapsingHeader("Shadows"):
+                _, self.ui.EnableShadows = pyd.ImGui.Checkbox("Enabled", self.ui.EnableShadows)
+
+                _, self.ui.UseStableCascades = pyd.ImGui.Checkbox(
+                    "Stable Cascades", self.ui.UseStableCascades
+                )
+                pyd.ImGui.SameLine()
+                pyd.ImGui.Text("(off = tighter fit, edges shimmer when turning)")
+
+                # Changing the count recreates the shadow map: the composite view is built once
+                # in the constructor, so the count cannot be lowered in place without leaving
+                # GetView() rendering slices that were never set up.
+                #
+                # A Combo, not a slider: ImGui.SliderInt is not bound (only SliderFloat is), and
+                # four discrete values do not need one. The index is the count minus one.
+                changed, cascadeIndex = pyd.ImGui.Combo(
+                    "Cascades", self.ui.ShadowCascades - 1, ["1", "2", "3", "4"]
+                )
+                if changed:
+                    self.ui.ShadowCascades = cascadeIndex + 1
+
+                _, self.ui.MaxShadowDistance = pyd.ImGui.SliderFloat(
+                    "Max Distance", self.ui.MaxShadowDistance, 5.0, 200.0
+                )
+                # Lower bound is 1.01, not 1.0: CascadedShadowMap.cpp:83 asserts exponent > 1,
+                # so a debug build aborts at exactly 1.0.
+                _, self.ui.ShadowExponent = pyd.ImGui.SliderFloat(
+                    "Cascade Distribution", self.ui.ShadowExponent, 1.01, 8.0
+                )
+
+                changed, falloff = pyd.ImGui.SliderFloat(
+                    "Falloff Distance", self.ui.ShadowFalloffDistance, 0.0, 10.0
+                )
+                if changed and self.app.shadowMap is not None:
+                    self.ui.ShadowFalloffDistance = falloff
+                    self.app.shadowMap.SetFalloffDistance(falloff)
+
+                changed, litOutOfBounds = pyd.ImGui.Checkbox(
+                    "Lit Out Of Bounds", self.ui.ShadowLitOutOfBounds
+                )
+                if changed and self.app.shadowMap is not None:
+                    self.ui.ShadowLitOutOfBounds = litOutOfBounds
+                    self.app.shadowMap.SetLitOutOfBounds(litOutOfBounds)
 
             if pyd.ImGui.CollapsingHeader("Sky"):
                 _, self.ui.EnableProceduralSky = pyd.ImGui.Checkbox(
