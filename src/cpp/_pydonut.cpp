@@ -2238,10 +2238,11 @@ PYBIND11_MODULE(_pydonut, m) {
     // Light is abstract (pure virtual GetLightType()) -- bound base-only, so
     // SceneGraph.GetLights() can return a homogeneous list regardless of light subtype.
     // Registered as a polymorphic base with no methods bound, the same shape ICompositeView/
-    // IView take at :2874-2875. The interface itself exposes nothing to Python -- a concrete
-    // shadow map may re-expose some of its virtuals under its own type (see CascadedShadowMap's
-    // GetView/GetTexture/GetNumberOfCascades). It exists so Light.shadowMap has a type to accept
-    // and so CascadedShadowMap can derive from it Python-side. Not constructible: there is no
+    // IView take (registered near the PlanarView bindings, further down this file). The
+    // interface itself exposes nothing to Python -- a concrete shadow map may re-expose some
+    // of its virtuals under its own type (see CascadedShadowMap's GetView/GetTexture/
+    // GetNumberOfCascades). It exists so Light.shadowMap has a type to accept and so
+    // CascadedShadowMap can derive from it Python-side. Not constructible: there is no
     // concrete IShadowMap.
     py::class_<donut::engine::IShadowMap, std::shared_ptr<donut::engine::IShadowMap>>(m, "IShadowMap");
 
