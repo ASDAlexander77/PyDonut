@@ -205,10 +205,12 @@ scene graph's root bounding box rather than guessed here.
 
 ### Existing code the new pass joins
 
-`depthPass.ResetBindingCache()` is added to two existing lists: the release block in `Render`
-that clears every cached binding set before render targets are reallocated, and `ReloadShaders`.
-`depthPass` is also recreated in `ReloadShaders` alongside the other geometry passes, since it
-holds pipelines compiled from the cleared bytecode.
+`depthPass` is recreated in `ReloadShaders` alongside the other geometry passes, since it holds
+pipelines compiled from the cleared bytecode. It is **not** added to the render-target release
+block, and `ResetBindingCache` is not called when the shadow map is replaced: that method clears
+material bindings and vertex-buffer SRVs (`DepthPass.cpp:91-95`), which reference neither the
+back-buffer-sized render targets nor the shadow texture. Adding it to either place would be
+copying the shape of the lines around it rather than a real dependency.
 
 The render-target release block does **not** become a pass registry this stage. It exists to
 sequence *back-buffer-sized* resources, and the shadow map is precisely the resource that does
