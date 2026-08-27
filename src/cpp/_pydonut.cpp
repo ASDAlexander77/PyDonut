@@ -2149,6 +2149,11 @@ PYBIND11_MODULE(_pydonut, m) {
         .def(py::init<>())
         .def_readwrite("name", &donut::engine::Material::name)
         .def_readwrite("domain", &donut::engine::Material::domain)
+        // Read-only: assigned by the scene graph when the material is registered, and only
+        // read back by the material editor window's "Material %d: %s" header
+        // (FeatureDemo.cpp:1689). Writing it from Python would desynchronise the material
+        // from the ID stage 3's MaterialID pass resolves.
+        .def_readonly("materialID", &donut::engine::Material::materialID)
         // Set by the app to make Scene.Refresh()/FinishedLoading() re-upload the material's
         // constant buffer -- e.g. after swapping baseOrDiffuseTexture (see rt_particles.py).
         .def_readwrite("dirty", &donut::engine::Material::dirty)
@@ -2379,6 +2384,11 @@ PYBIND11_MODULE(_pydonut, m) {
         .def(py::init<>())
         .def("SetLeaf", &donut::engine::SceneGraphNode::SetLeaf, py::arg("leaf"))
         .def("SetName", &donut::engine::SceneGraphNode::SetName, py::arg("name"))
+        // Marks this node's subtree as needing its content re-evaluated. The material editor
+        // calls it on the root when a material changes domain (FeatureDemo.cpp:1694-1695),
+        // because moving between the opaque and alpha-blended domains changes which draw list
+        // the material's geometry belongs to.
+        .def("InvalidateContent", &donut::engine::SceneGraphNode::InvalidateContent)
         // Places the node at a world position, oriented along a world direction. This is what
         // Light::SetPosition and Light::SetDirection do (SceneTypes.cpp:77-116), lifted to the
         // node because those two are declared on Light (SceneGraph.h:199-200) and so are not
@@ -2442,6 +2452,17 @@ PYBIND11_MODULE(_pydonut, m) {
             for (const auto &mesh : self.GetMeshes())
                 meshes.push_back(mesh);
             return meshes;
+        })
+        // ResourceTracker<Material> isn't a plain container pybind11/stl.h can convert
+        // automatically, so it's copied into a plain vector here -- the same treatment
+        // GetMeshes gets just above. Materials register through mesh geometry rather than as
+        // scene-graph leaves (SceneGraph.cpp:542), so this returns what the loaded meshes
+        // reference and is empty on a graph with no meshes.
+        .def("GetMaterials", [](const donut::engine::SceneGraph &self) {
+            std::vector<std::shared_ptr<donut::engine::Material>> materials;
+            for (const auto &material : self.GetMaterials())
+                materials.push_back(material);
+            return materials;
         })
         .def("GetMeshInstances", &donut::engine::SceneGraph::GetMeshInstances)
         // Baked animation clips attached anywhere in the graph (see SceneGraphAnimation above).
@@ -3333,9 +3354,15 @@ PYBIND11_MODULE(_pydonut, m) {
         // rt_particles.py's UserInterface, matching the C++ original's
         // ImGui::GetIO().IniFilename = nullptr).
         .def_static("DisableIniFile", []() { ImGui::GetIO().IniFilename = nullptr; })
-        .def_static("SetNextWindowPos", [](float x, float y, int cond) {
-            ImGui::SetNextWindowPos(ImVec2(x, y), cond);
-        }, py::arg("x"), py::arg("y"), py::arg("cond") = 0)
+        // pivot places the given point within the window itself: (0, 0) is its top-left
+        // corner (the default, and what every existing caller gets), (1, 0) its top-right.
+        // The material editor window is right-aligned with (1, 0) as in FeatureDemo.cpp:1687,
+        // which Python cannot do by computing x itself -- the window's width is not known
+        // until after it is drawn.
+        .def_static("SetNextWindowPos", [](float x, float y, int cond, float pivotX, float pivotY) {
+            ImGui::SetNextWindowPos(ImVec2(x, y), cond, ImVec2(pivotX, pivotY));
+        }, py::arg("x"), py::arg("y"), py::arg("cond") = 0,
+           py::arg("pivotX") = 0.0f, py::arg("pivotY") = 0.0f)
         // p_open is always null in this codebase's usage (no closable windows).
         .def_static("Begin", [](const std::string &name, int flags) {
             return ImGui::Begin(name.c_str(), nullptr, flags);
@@ -3412,12 +3439,27 @@ PYBIND11_MODULE(_pydonut, m) {
     // It draws into whatever ImGui window is current, so it is called from inside buildUI
     // between Begin and End. Returns whether the user changed anything.
     //
-    // MaterialEditor, FileDialog, FolderDialog and AzimuthElevationSliders from the same header
-    // stay unbound: the first three belong to later stages, and the last is an implementation
-    // detail of the editors above it.
+    // FileDialog and FolderDialog from the same header stay unbound: they belong to later
+    // stages. AzimuthElevationSliders stays unbound too, as an implementation detail of the
+    // editors above it.
     m.def("LightEditor", [](donut::engine::Light &light) {
         return donut::app::LightEditor(light);
     }, py::arg("light"));
+
+    // Donut's own material editor, drawn entirely from C++ (UserInterfaceUtils.h:42). Bound
+    // rather than ported for the same reason LightEditor above is. Returns whether the user
+    // changed anything, which the caller assigns to Material.dirty so the scene re-uploads the
+    // material's constant buffer.
+    //
+    // allowMaterialDomainChanges lets the editor move a material between the opaque and
+    // alpha-blended domains, which changes which draw list its geometry belongs to -- callers
+    // passing True must invalidate scene content when the domain actually changes.
+    //
+    // Takes a reference rather than a pointer so pybind rejects None with a TypeError; the C++
+    // signature takes Material* and would happily dereference a null.
+    m.def("MaterialEditor", [](donut::engine::Material &material, bool allowMaterialDomainChanges) {
+        return donut::app::MaterialEditor(&material, allowMaterialDomainChanges);
+    }, py::arg("material"), py::arg("allowMaterialDomainChanges"));
 
     py::class_<donut::app::AdapterInfo>(m, "AdapterInfo")
         .def(py::init<>())

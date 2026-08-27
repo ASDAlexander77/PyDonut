@@ -1018,6 +1018,9 @@ class Material():
     def __init__(self: Material) -> None: ...
     name: str
     domain: MaterialDomain
+    # Read-only: assigned by the scene graph, and only read back for the material editor
+    # window's header. Stage 3's MaterialID pass resolves picking to this value.
+    materialID: int
     # Set by the app to make Scene.Refresh()/FinishedLoading() re-upload the material's
     # constant buffer -- e.g. after swapping baseOrDiffuseTexture (see rt_particles.py).
     dirty: bool
@@ -1172,6 +1175,9 @@ class SceneGraphNode():
     def __init__(self: SceneGraphNode) -> None: ...
     def SetLeaf(self: SceneGraphNode, leaf: SceneGraphLeaf) -> None: ...
     def SetName(self: SceneGraphNode, name: str) -> None: ...
+    # Marks this node's subtree as needing its content re-evaluated -- called on the root when
+    # a material changes domain, since that moves its geometry between draw lists.
+    def InvalidateContent(self: SceneGraphNode) -> None: ...
     # Places the node at a world position, oriented along a world direction -- what
     # Light.SetPosition/SetDirection do, lifted to the node because those two are declared on
     # Light and so are unavailable on a SceneCamera. Call it *after* attaching the node: it
@@ -1197,6 +1203,9 @@ class SceneGraph():
     # way GetLights is.
     def GetCameras(self: SceneGraph) -> list[SceneCamera]: ...
     def GetMeshes(self: SceneGraph) -> list[MeshInfo]: ...
+    # Materials referenced by the graph's meshes. Empty on a graph with no meshes: materials
+    # register through mesh geometry, not as scene-graph leaves.
+    def GetMaterials(self: SceneGraph) -> list[Material]: ...
     def GetMeshInstances(self: SceneGraph) -> list[MeshInstance]: ...
     # Baked animation clips attached anywhere in the graph (see SceneGraphAnimation).
     def GetAnimations(self: SceneGraph) -> list[SceneGraphAnimation]: ...
@@ -1690,7 +1699,9 @@ class ImGui():
     @staticmethod
     def DisableIniFile() -> None: ...
     @staticmethod
-    def SetNextWindowPos(x: float, y: float, cond: int = 0) -> None: ...
+    # pivot places that point of the window at (x, y): (0, 0) is its top-left corner, (1, 0)
+    # its top-right, which is how the material editor window right-aligns itself.
+    def SetNextWindowPos(x: float, y: float, cond: int = 0, pivotX: float = 0.0, pivotY: float = 0.0) -> None: ...
     # p_open is always null in this codebase's usage (no closable windows).
     @staticmethod
     def Begin(name: str, flags: int = 0) -> bool: ...
@@ -1747,6 +1758,13 @@ class ImGui():
 # and returns whether anything changed. It draws into the current ImGui window, so call it from
 # inside a buildUI() override, between ImGui.Begin and ImGui.End.
 def LightEditor(light: Light) -> bool: ...
+
+# Donut's built-in material editor: emits the controls for the material's texture slots and
+# constants and returns whether anything changed. Draws into the current ImGui window, so call
+# it from inside a buildUI() override between ImGui.Begin and ImGui.End. When
+# allowMaterialDomainChanges is True the editor may change material.domain, and the caller must
+# then call InvalidateContent() on the scene graph's root node.
+def MaterialEditor(material: Material, allowMaterialDomainChanges: bool) -> bool: ...
 
 class PipelineCallbacks():
     beforeFrame: Optional[Callable[[DeviceManager, int], None]]

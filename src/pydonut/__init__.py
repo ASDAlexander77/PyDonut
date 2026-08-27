@@ -127,6 +127,7 @@ from pydonut._pydonut import PointLight
 from pydonut._pydonut import SceneCamera
 from pydonut._pydonut import PerspectiveCamera
 from pydonut._pydonut import LightEditor
+from pydonut._pydonut import MaterialEditor
 from pydonut._pydonut import SceneGraphAnimation
 from pydonut._pydonut import SceneGraphNode
 from pydonut._pydonut import SceneGraph
@@ -317,6 +318,7 @@ __all__ = (
     'SceneCamera',
     'PerspectiveCamera',
     'LightEditor',
+    'MaterialEditor',
     'SceneGraphAnimation',
     'SceneGraphNode',
     'SceneGraph',
