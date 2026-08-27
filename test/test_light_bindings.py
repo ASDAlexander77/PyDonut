@@ -81,3 +81,67 @@ def test_light_set_color_accepts_three_floats() -> None:
     light = pyd.DirectionalLight()
     light.SetColor(1.0, 0.5, 0.25)
     assert not hasattr(light, "GetColor")
+
+
+def test_spot_light_is_a_light() -> None:
+    assert issubclass(pyd.SpotLight, pyd.Light)
+
+
+def test_point_light_is_a_light() -> None:
+    assert issubclass(pyd.PointLight, pyd.Light)
+
+
+def test_spot_light_fields_round_trip() -> None:
+    light = pyd.SpotLight()
+    light.intensity = 60.0
+    light.radius = 0.05
+    light.range = 0.0
+    light.innerAngle = 20.0
+    light.outerAngle = 35.0
+    # approx throughout: these are C++ floats, so 0.05 does not survive a round trip exactly.
+    assert light.intensity == pytest.approx(60.0)
+    assert light.radius == pytest.approx(0.05)
+    assert light.range == pytest.approx(0.0)
+    assert light.innerAngle == pytest.approx(20.0)
+    assert light.outerAngle == pytest.approx(35.0)
+
+
+def test_point_light_fields_round_trip() -> None:
+    light = pyd.PointLight()
+    light.intensity = 20.0
+    light.radius = 0.05
+    light.range = 0.0
+    assert light.intensity == pytest.approx(20.0)
+    assert light.radius == pytest.approx(0.05)
+    assert light.range == pytest.approx(0.0)
+
+
+def test_local_lights_cast_no_shadow_by_default() -> None:
+    # Neither added light may get its own shadow map: DeferredLightingPass logs an error and
+    # returns without rendering the frame when two lights present different shadow textures
+    # (DeferredLightingPass.cpp:172-175).
+    assert pyd.SpotLight().shadowMap is None
+    assert pyd.PointLight().shadowMap is None
+
+
+def test_get_lights_returns_the_concrete_light_types() -> None:
+    # The Lights UI and LightEditor both depend on this: GetLights() is typed as a list of
+    # Light in C++, and pybind must hand back the most-derived registered type so the editor
+    # dispatches correctly and so `is` comparisons against the stored selection hold.
+    graph = pyd.SceneGraph()
+    root = graph.SetRootNode(pyd.SceneGraphNode())
+
+    spot = pyd.SpotLight()
+    point = pyd.PointLight()
+    # Capture return values to keep the SceneGraphNode references alive for pybind11 binding
+    _node_spot = graph.AttachLeafNode(root, spot)
+    _node_point = graph.AttachLeafNode(root, point)
+    spot.SetName("Spot")
+    point.SetName("Point")
+
+    lights = graph.GetLights()
+    assert [light.GetName() for light in lights] == ["Spot", "Point"]
+    assert isinstance(lights[0], pyd.SpotLight)
+    assert isinstance(lights[1], pyd.PointLight)
+    assert lights[0] is spot
+    assert lights[1] is point

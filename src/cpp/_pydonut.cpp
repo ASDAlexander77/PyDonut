@@ -2308,6 +2308,30 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_readwrite("irradiance", &donut::engine::DirectionalLight::irradiance)
         .def_readwrite("angularSize", &donut::engine::DirectionalLight::angularSize);
 
+    // SpotLight and PointLight (SceneGraph.h:218-233 and :235-248). Constructible, with every
+    // public field bound: editing them is the point of the stage they were added for.
+    //
+    // range = 0 means infinite range -- both FillLightConstants overrides encode it as an
+    // inverse range of zero (SceneTypes.cpp:193, :273), so it is not a degenerate value to
+    // guard against. Angles are in degrees; Donut converts them to radians when it fills the
+    // constants (SceneTypes.cpp:196-197).
+    //
+    // Store, SetProperty and Clone stay unbound on both: the JSON-serialisation and animation
+    // paths, which no example drives.
+    py::class_<donut::engine::SpotLight, donut::engine::Light, std::shared_ptr<donut::engine::SpotLight>>(m, "SpotLight")
+        .def(py::init<>())
+        .def_readwrite("intensity", &donut::engine::SpotLight::intensity)
+        .def_readwrite("radius", &donut::engine::SpotLight::radius)
+        .def_readwrite("range", &donut::engine::SpotLight::range)
+        .def_readwrite("innerAngle", &donut::engine::SpotLight::innerAngle)
+        .def_readwrite("outerAngle", &donut::engine::SpotLight::outerAngle);
+
+    py::class_<donut::engine::PointLight, donut::engine::Light, std::shared_ptr<donut::engine::PointLight>>(m, "PointLight")
+        .def(py::init<>())
+        .def_readwrite("intensity", &donut::engine::PointLight::intensity)
+        .def_readwrite("radius", &donut::engine::PointLight::radius)
+        .def_readwrite("range", &donut::engine::PointLight::range);
+
     // One baked animation clip attached to the scene graph (e.g. a glTF skinned character
     // animation) -- see SceneGraph.GetAnimations() below. Apply() drives every channel
     // (node transforms, morph/material properties) to their sampled values at `time`; the

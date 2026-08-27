@@ -122,6 +122,8 @@ from pydonut._pydonut import SkinnedMeshInstance
 from pydonut._pydonut import IShadowMap
 from pydonut._pydonut import Light
 from pydonut._pydonut import DirectionalLight
+from pydonut._pydonut import SpotLight
+from pydonut._pydonut import PointLight
 from pydonut._pydonut import SceneGraphAnimation
 from pydonut._pydonut import SceneGraphNode
 from pydonut._pydonut import SceneGraph
@@ -306,6 +308,8 @@ __all__ = (
     'IShadowMap',
     'Light',
     'DirectionalLight',
+    'SpotLight',
+    'PointLight',
     'SceneGraphAnimation',
     'SceneGraphNode',
     'SceneGraph',

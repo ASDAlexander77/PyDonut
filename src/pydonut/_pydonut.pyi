@@ -1121,6 +1121,25 @@ class DirectionalLight(Light):
     irradiance: float
     angularSize: float
 
+# A cone light. Angles are in degrees (Donut converts to radians when filling the light
+# constants); range = 0 means infinite range. Position and direction come from the owning
+# scene-graph node -- set them with Light.SetPosition/SetDirection *after* attaching.
+class SpotLight(Light):
+    def __init__(self: SpotLight) -> None: ...
+    intensity: float
+    radius: float
+    range: float
+    innerAngle: float
+    outerAngle: float
+
+# An omnidirectional light. range = 0 means infinite range. Position comes from the owning
+# scene-graph node -- set it with Light.SetPosition *after* attaching.
+class PointLight(Light):
+    def __init__(self: PointLight) -> None: ...
+    intensity: float
+    radius: float
+    range: float
+
 # One baked animation clip attached to the scene graph (e.g. a glTF skinned character
 # animation) -- see SceneGraph.GetAnimations(). Apply() drives every channel (node
 # transforms, morph/material properties) to their sampled values at `time`; the caller
