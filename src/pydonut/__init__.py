@@ -135,6 +135,7 @@ from pydonut._pydonut import SceneLoaded
 from pydonut._pydonut import BaseCamera
 from pydonut._pydonut import FirstPersonCamera
 from pydonut._pydonut import ThirdPersonCamera
+from pydonut._pydonut import SwitchableCamera
 from pydonut._pydonut import ICompositeView
 from pydonut._pydonut import IView
 from pydonut._pydonut import PlanarView
@@ -324,6 +325,7 @@ __all__ = (
     'BaseCamera',
     'FirstPersonCamera',
     'ThirdPersonCamera',
+    'SwitchableCamera',
     'ICompositeView',
     'IView',
     'PlanarView',

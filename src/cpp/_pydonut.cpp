@@ -3039,6 +3039,67 @@ PYBIND11_MODULE(_pydonut, m) {
         py::arg("button"), py::arg("action"), py::arg("mods"));
     thirdPersonCamera.def("MouseScrollUpdate", &donut::app::ThirdPersonCamera::MouseScrollUpdate, py::arg("xoffset"), py::arg("yoffset"));
 
+    // SwitchableCamera (Camera.h:249) bundles a FirstPersonCamera, a ThirdPersonCamera and an
+    // optional scene camera, and owns the switching, the copy-the-view-across-a-switch
+    // behaviour, and the routing of input to whichever user camera is active. Bound rather
+    // than reimplemented in Python for the same reason LightEditor was -- this repo calls
+    // Donut's helpers rather than porting their internals -- and because doing it in Python
+    // would need a matrix accessor this codebase deliberately does not have: the reference
+    // sample's CopyActiveCameraToFirstPerson (FeatureDemo.cpp:452-464) reads viewToWorld
+    // matrix components, which is exactly the work SwitchToFirstPerson does in C++
+    // (Camera.cpp:534-554).
+    //
+    // The input methods return False when a scene camera is active (Camera.cpp:585-650),
+    // which is the same gate the reference sample writes as `if (!m_ui.ActiveSceneCamera)`.
+    //
+    // NOTE: a default-constructed SwitchableCamera is in THIRD person -- m_UseFirstPerson
+    // defaults to false and m_SceneCamera starts null (Camera.h:259-261). A caller that wants
+    // to start in first person must say so explicitly.
+    py::class_<donut::app::SwitchableCamera>(m, "SwitchableCamera")
+        .def(py::init<>())
+        .def("SwitchToFirstPerson", &donut::app::SwitchableCamera::SwitchToFirstPerson,
+            py::arg("copyView") = true)
+        // targetDistance stays unbound: the value the C++ suggests is the distance to the
+        // object in the centre of the view, which needs the depth readback stage 3 adds.
+        .def("SwitchToThirdPerson", [](donut::app::SwitchableCamera &self, bool copyView) {
+            self.SwitchToThirdPerson(copyView);
+        }, py::arg("copyView") = true)
+        // The C++ guards a null camera with assert(!!sceneCamera) (Camera.cpp:578-582), which
+        // compiles out in this project's Release build -- a null would survive to become a
+        // dereference in the next frame's GetWorldToViewMatrix. Raise instead of relying on it.
+        .def("SwitchToSceneCamera", [](donut::app::SwitchableCamera &self,
+                const std::shared_ptr<donut::engine::SceneCamera> &sceneCamera) {
+            if (!sceneCamera)
+                throw std::invalid_argument("SwitchToSceneCamera requires a SceneCamera, not None");
+            self.SwitchToSceneCamera(sceneCamera);
+        }, py::arg("sceneCamera"))
+        .def("IsFirstPersonActive", &donut::app::SwitchableCamera::IsFirstPersonActive)
+        .def("IsThirdPersonActive", &donut::app::SwitchableCamera::IsThirdPersonActive)
+        .def("IsSceneCameraActive", &donut::app::SwitchableCamera::IsSceneCameraActive)
+        .def("GetSceneCamera", [](donut::app::SwitchableCamera &self) {
+            return self.GetSceneCamera();
+        })
+        // Both return references INTO the SwitchableCamera, so the returned wrapper has to keep
+        // its owner alive and must not be a copy -- reference_internal does both. A copy here
+        // would silently discard whatever the caller writes through the returned camera.
+        .def("GetFirstPersonCamera", &donut::app::SwitchableCamera::GetFirstPersonCamera,
+            py::return_value_policy::reference_internal)
+        .def("GetThirdPersonCamera", &donut::app::SwitchableCamera::GetThirdPersonCamera,
+            py::return_value_policy::reference_internal)
+        .def("KeyboardUpdate", &donut::app::SwitchableCamera::KeyboardUpdate,
+            py::arg("key"), py::arg("scancode"), py::arg("action"), py::arg("mods"))
+        .def("MousePosUpdate", &donut::app::SwitchableCamera::MousePosUpdate,
+            py::arg("xpos"), py::arg("ypos"))
+        .def("MouseButtonUpdate", &donut::app::SwitchableCamera::MouseButtonUpdate,
+            py::arg("button"), py::arg("action"), py::arg("mods"))
+        .def("MouseScrollUpdate", &donut::app::SwitchableCamera::MouseScrollUpdate,
+            py::arg("xoffset"), py::arg("yoffset"))
+        .def("Animate", &donut::app::SwitchableCamera::Animate, py::arg("deltaT"));
+    // GetActiveUserCamera and GetWorldToViewMatrix stay unbound: the first is an internal
+    // detail of the input routing that is already bound above, and the second returns a
+    // matrix, which SetMatricesFromSwitchableCamera consumes in C++. JoystickUpdate and
+    // JoystickButtonUpdate stay unbound -- no example handles joystick input.
+
     // ICompositeView/IView are registered as real polymorphic bases rather than having every
     // pass signature hardcode PlanarView&: SkyPass/SsaoPass/ToneMappingPass/BloomPass all take
     // const ICompositeView&, and there are already two concrete views bound (PlanarView,
@@ -3068,6 +3129,22 @@ PYBIND11_MODULE(_pydonut, m) {
             float aspectRatio, float verticalFovRadians, float zNear) {
         self.SetMatrices(camera.GetWorldToViewMatrix(), donut::math::perspProjD3DStyleReverse(verticalFovRadians, aspectRatio, zNear));
     }, py::arg("camera"), py::arg("aspectRatio"), py::arg("verticalFovRadians") = donut::math::PI_f * 0.25f, py::arg("zNear") = 0.1f);
+    // SceneCamera is a SceneGraphLeaf, not a BaseCamera, so SetMatricesFromCamera above cannot
+    // accept one, and SwitchableCamera::GetWorldToViewMatrix returns a dm::affine3 that must
+    // not cross into Python. Same shape as SetMatricesFromCamera, and reproduces what
+    // FeatureDemo.cpp:700-715 does inline: the caller's fov and near plane are used as-is
+    // unless a *perspective* scene camera is active, in which case that camera's own values
+    // win. GetSceneCameraProjectionParams (Camera.h:278) leaves both untouched otherwise, so
+    // the unconditional call is correct for the first-person and third-person cases too.
+    planarView.def("SetMatricesFromSwitchableCamera", [](donut::engine::PlanarView &self,
+            const donut::app::SwitchableCamera &camera,
+            float aspectRatio, float verticalFovRadians, float zNear) {
+        // Both are by-value parameters, so this overwrites the local copies, not the caller's.
+        camera.GetSceneCameraProjectionParams(verticalFovRadians, zNear);
+        self.SetMatrices(camera.GetWorldToViewMatrix(),
+            donut::math::perspProjD3DStyleReverse(verticalFovRadians, aspectRatio, zNear));
+    }, py::arg("camera"), py::arg("aspectRatio"),
+       py::arg("verticalFovRadians") = donut::math::PI_f * 0.25f, py::arg("zNear") = 0.1f);
     // Non-camera, non-reverse-Z view setup for static/orbiting subjects (see
     // deferred_shading.py): a combined yaw+pitch rotation, pushed back `distance` along
     // its own Z axis, with a regular (not reversed) D3D-style perspective projection.

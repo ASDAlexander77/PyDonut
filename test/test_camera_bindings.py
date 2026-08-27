@@ -109,3 +109,78 @@ def test_set_position_and_direction_writes_the_nodes_world_transform() -> None:
     graph.Refresh(0)
 
     assert node.GetWorldPosition() == pytest.approx((-8.0, 2.0, 0.0))
+
+
+def test_switchable_camera_starts_in_third_person() -> None:
+    # m_UseFirstPerson defaults to false and m_SceneCamera starts null (Camera.h:259-261), so
+    # a fresh SwitchableCamera is in THIRD person. The example starts first-person, so Init
+    # must switch explicitly. Pinned here because getting it wrong changes the example's
+    # starting camera silently, with nothing else to catch it.
+    camera = pyd.SwitchableCamera()
+    assert camera.IsThirdPersonActive()
+    assert not camera.IsFirstPersonActive()
+    assert not camera.IsSceneCameraActive()
+
+
+def test_switch_to_first_person_makes_it_active() -> None:
+    camera = pyd.SwitchableCamera()
+    camera.SwitchToFirstPerson(copyView=False)
+    assert camera.IsFirstPersonActive()
+    assert not camera.IsThirdPersonActive()
+
+
+def test_get_first_person_camera_returns_the_owned_camera_not_a_copy() -> None:
+    # Bound with return_value_policy::reference_internal. If it handed back a copy instead,
+    # Init's LookAt/SetMoveSpeed would be written to a temporary and thrown away -- the
+    # example would silently start at the origin. Two separate calls must see one object.
+    camera = pyd.SwitchableCamera()
+    camera.GetFirstPersonCamera().LookAt(0.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    assert camera.GetFirstPersonCamera().GetDir() == pytest.approx((1.0, 0.0, 0.0))
+
+
+def test_switch_to_scene_camera_activates_the_scene_camera() -> None:
+    graph, root = _graph_with_root()
+    sceneCamera = pyd.PerspectiveCamera()
+    graph.AttachLeafNode(root, sceneCamera)
+
+    camera = pyd.SwitchableCamera()
+    camera.SwitchToSceneCamera(sceneCamera)
+
+    assert camera.IsSceneCameraActive()
+    assert not camera.IsFirstPersonActive()
+    assert not camera.IsThirdPersonActive()
+    assert camera.GetSceneCamera() is sceneCamera
+
+
+def test_switch_to_scene_camera_rejects_none() -> None:
+    # C++ guards this with assert(!!sceneCamera) (Camera.cpp:578-582), which compiles out in
+    # this project's Release build -- a None would become a null dereference on the next
+    # frame's GetWorldToViewMatrix rather than an error here.
+    camera = pyd.SwitchableCamera()
+    with pytest.raises(ValueError):
+        camera.SwitchToSceneCamera(None)
+
+
+def test_set_matrices_from_switchable_camera_accepts_every_camera_state() -> None:
+    # No device needed: PlanarView and SwitchableCamera are both constructible standalone and
+    # this only computes matrices. PlanarView exposes no matrix getters, so this asserts the
+    # shim runs rather than checking the values -- including the scene-camera branch, where
+    # GetSceneCameraProjectionParams overrides fov and zNear. The rendered result is a manual
+    # check in tasks 4-5.
+    graph, root = _graph_with_root()
+    sceneCamera = pyd.PerspectiveCamera()
+    graph.AttachLeafNode(root, sceneCamera)
+    sceneCamera.verticalFov = 0.7
+    sceneCamera.zNear = 0.2
+
+    view = pyd.PlanarView()
+    camera = pyd.SwitchableCamera()
+
+    camera.SwitchToFirstPerson(copyView=False)
+    view.SetMatricesFromSwitchableCamera(camera, 16.0 / 9.0)
+
+    camera.SwitchToThirdPerson(copyView=False)
+    view.SetMatricesFromSwitchableCamera(camera, 16.0 / 9.0)
+
+    camera.SwitchToSceneCamera(sceneCamera)
+    view.SetMatricesFromSwitchableCamera(camera, 16.0 / 9.0)
