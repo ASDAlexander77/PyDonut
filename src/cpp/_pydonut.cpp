@@ -2226,29 +2226,11 @@ PYBIND11_MODULE(_pydonut, m) {
             [](donut::engine::MeshInfo &self, nvrhi::rt::IAccelStruct* as) { self.accelStruct = as; },
             py::return_value_policy::reference);
 
-    // SceneGraphLeaf is abstract (pure virtual Clone()) -- bound base-only, for MeshInstance/
-    // Light/DirectionalLight below to derive from and for SetLeaf()/AttachLeafNode() to accept.
-    py::class_<donut::engine::SceneGraphLeaf, std::shared_ptr<donut::engine::SceneGraphLeaf>>(m, "SceneGraphLeaf", py::dynamic_attr())
-        .def("SetName", [](py::object self, const std::string &name) {
-            auto &leaf = self.cast<donut::engine::SceneGraphLeaf &>();
-            leaf.SetName(name);
-            // Also store on Python side for unattached leaves
-            self.attr("__py_name__") = name;
-        }, py::arg("name"))
+    py::class_<donut::engine::SceneGraphLeaf, std::shared_ptr<donut::engine::SceneGraphLeaf>>(m, "SceneGraphLeaf")
+        .def("SetName", [](const donut::engine::SceneGraphLeaf &self, const std::string &name) { self.SetName(name); }, py::arg("name"))
         // Read back by feature_demo.py's light dropdown, which labels each entry with it
         // (FeatureDemo.cpp:1637-1643). SetName alone was enough while nothing read a name back.
-        .def("GetName", [](py::object self) -> std::string {
-            auto &leaf = self.cast<donut::engine::SceneGraphLeaf &>();
-            auto node = leaf.GetNode();
-            if (node)
-                return node->GetName();
-            // Fall back to Python-side storage for unattached leaves
-            try {
-                return self.attr("__py_name__").cast<std::string>();
-            } catch(...) {
-                return "";
-            }
-        });
+        .def("GetName", &donut::engine::SceneGraphLeaf::GetName);
 
     py::class_<donut::engine::MeshInstance, donut::engine::SceneGraphLeaf, std::shared_ptr<donut::engine::MeshInstance>>(m, "MeshInstance")
         .def(py::init<std::shared_ptr<donut::engine::MeshInfo>>(), py::arg("mesh"))

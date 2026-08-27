@@ -48,6 +48,7 @@ def _attached(light: pyd.Light) -> tuple[pyd.SceneGraph, pyd.SceneGraphNode]:
 
 def test_scene_graph_leaf_name_round_trips() -> None:
     light = pyd.DirectionalLight()
+    graph, node = _attached(light)
     light.SetName("Sun")
     assert light.GetName() == "Sun"
 
