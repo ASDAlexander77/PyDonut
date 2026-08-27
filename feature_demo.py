@@ -95,6 +95,14 @@ if __name__ == "__main__":
     SPOT_LIGHT_INTENSITY = 60.0
     LOCAL_LIGHT_RADIUS = 0.05
 
+    # The two demonstration scene cameras this example adds to Sponza. Vertical FOV is in
+    # RADIANS here, unlike the spot light's degrees -- PerspectiveCamera.verticalFov is what
+    # Donut reads directly. Written with math.radians so the unit is visible at the call site.
+    # Positions tuned by eye against Sponza's metre scale, like the light intensities above.
+    NAVE_CAMERA_FOV = math.radians(60.0)
+    GALLERY_CAMERA_FOV = math.radians(40.0)
+    SCENE_CAMERA_Z_NEAR = 0.1
+
     class UIData:
         """Shared by reference between FeatureDemo and UIRenderer.
 
@@ -257,7 +265,10 @@ if __name__ == "__main__":
             self.renderTargets: RenderTargets | None = None
             self.view: pyd.PlanarView | None = None
             self.viewPrevious: pyd.PlanarView | None = None
-            self.camera = pyd.FirstPersonCamera()
+            # SwitchableCamera owns a first-person camera, a third-person camera and the
+            # optional active scene camera, and routes input to whichever is active. Init
+            # picks the starting one -- a fresh SwitchableCamera is in *third* person.
+            self.camera = pyd.SwitchableCamera()
             self.commandList: pyd.CommandList | None = None
             self.bindingCache: pyd.BindingCache | None = None
             self.gbufferPass: pyd.GBufferFillPass | None = None
@@ -332,10 +343,17 @@ if __name__ == "__main__":
 
             self.CreateSunLight()
             self.CreateSceneLights()
+            self.CreateSceneCameras()
             self.scene.FinishedLoading(self.GetFrameIndex())
 
-            self.camera.LookAt(0.0, 1.8, 0.0, 1.0, 1.8, 0.0)
-            self.camera.SetMoveSpeed(3.0)
+            # copyView=False matters: a fresh SwitchableCamera is in third person
+            # (Camera.h:259-261), so copying the view would take it from the
+            # default-constructed third-person camera -- 30 units back, aimed at the origin --
+            # and overwrite the LookAt below.
+            self.camera.SwitchToFirstPerson(copyView=False)
+            firstPerson = self.camera.GetFirstPersonCamera()
+            firstPerson.LookAt(0.0, 1.8, 0.0, 1.0, 1.8, 0.0)
+            firstPerson.SetMoveSpeed(3.0)
 
             self.gbufferPass = pyd.GBufferFillPass(device, self.m_CommonPasses)
             self.gbufferPass.Init(self.shaderFactory, pyd.GBufferFillPassCreateParameters())
@@ -694,6 +712,45 @@ if __name__ == "__main__":
 
             graph.Refresh(0)
 
+        def CreateSceneCameras(self: FeatureDemo) -> None:
+            """Adds the two scene cameras the camera dropdown demonstrates.
+
+            sponza-plus.scene.json declares no cameras at all, so without these the dropdown
+            would offer only First-Person and Third-Person and nothing would exercise the
+            SceneCamera bindings -- the same reason CreateSunLight synthesises the sun.
+
+            Attach first, then name and place. SceneGraphLeaf.SetName writes through the
+            owning node and silently does nothing when the leaf has no node yet
+            (SceneGraph.cpp:40-47), and this project builds Release, so the assert meant to
+            catch that is compiled out.
+
+            SceneGraph::RegisterLeaf routes any SceneCamera into the graph's camera list
+            (SceneGraph.cpp:577-582), so an attached camera reaches GetCameras() with no
+            further registration -- exactly as an attached light reaches GetLights().
+
+            The two differ in vertical FOV as well as position, so switching between them
+            visibly changes the projection and not merely the viewpoint.
+            """
+            assert self.scene is not None
+            graph = self.scene.GetSceneGraph()
+            root = graph.GetRootNode()
+
+            nave = pyd.PerspectiveCamera()
+            nave.verticalFov = NAVE_CAMERA_FOV
+            nave.zNear = SCENE_CAMERA_Z_NEAR
+            naveNode = graph.AttachLeafNode(root, nave)
+            nave.SetName("Nave")
+            naveNode.SetPositionAndDirection(-8.0, 2.0, 0.0, 1.0, 0.0, 0.0)
+
+            gallery = pyd.PerspectiveCamera()
+            gallery.verticalFov = GALLERY_CAMERA_FOV
+            gallery.zNear = SCENE_CAMERA_Z_NEAR
+            galleryNode = graph.AttachLeafNode(root, gallery)
+            gallery.SetName("Gallery")
+            galleryNode.SetPositionAndDirection(0.0, 8.0, -4.0, 0.0, -0.4, 1.0)
+
+            graph.Refresh(0)
+
         def KeyboardUpdate(self: FeatureDemo, key: int, scancode: int, action: int, mods: int) -> bool:
             # UIData.ShowUI is read by UIRenderer.buildUI but had nothing to set it -- without
             # a binding the settings panel can never be dismissed to see the frame behind it.
@@ -701,6 +758,17 @@ if __name__ == "__main__":
             # (rt_bindless.py:198, threaded_rendering.py:197): no keycode enum is bound.
             if key == 258 and action == 1:  # GLFW_KEY_TAB, GLFW_PRESS
                 self.ui.ShowUI = not self.ui.ShowUI
+
+            # T cycles the camera, matching FeatureDemo.cpp:486-499: from a scene camera it
+            # returns to a user camera, otherwise it swaps first and third person. copyView
+            # defaults to True here (unlike Init), which is the point -- the new camera picks
+            # up where the old one was looking.
+            if key == 84 and action == 1:  # GLFW_KEY_T, GLFW_PRESS
+                if self.camera.IsFirstPersonActive():
+                    self.camera.SwitchToThirdPerson()
+                else:
+                    self.camera.SwitchToFirstPerson()
+                return True
 
             self.camera.KeyboardUpdate(key, scancode, action, mods)
             return True
@@ -711,6 +779,12 @@ if __name__ == "__main__":
 
         def MouseButtonUpdate(self: FeatureDemo, button: int, action: int, mods: int) -> bool:
             self.camera.MouseButtonUpdate(button, action, mods)
+            return True
+
+        def MouseScrollUpdate(self: FeatureDemo, xoffset: float, yoffset: float) -> bool:
+            # The example had no scroll handler while it only had a first-person camera, which
+            # does not use the wheel. The third-person camera zooms with it.
+            self.camera.MouseScrollUpdate(xoffset, yoffset)
             return True
 
         def BackBufferResizing(self: FeatureDemo) -> None:
@@ -767,8 +841,13 @@ if __name__ == "__main__":
             viewport = pyd.Viewport(float(width), float(height))
             self.view.SetViewport(viewport)
             self.view.SetPixelOffset(pixelOffsetX, pixelOffsetY)
-            self.view.SetMatricesFromCamera(self.camera, width / height)
+            self.view.SetMatricesFromSwitchableCamera(self.camera, width / height)
             self.view.UpdateCache()
+
+            # The third-person camera converts mouse drags into orbit and pan amounts using
+            # the view's own projection and viewport, so it needs the view fed back in after
+            # UpdateCache -- as in FeatureDemo.cpp:773.
+            self.camera.GetThirdPersonCamera().SetView(self.view)
 
         def Render(self: FeatureDemo, framebuffer: pyd.Framebuffer) -> None:
             device = self.GetDevice()
