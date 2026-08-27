@@ -169,6 +169,20 @@ returned wrapper must keep its owner alive, and must not be handed a copy.
 `SceneGraphLeaf::Clone()` pure (`SceneGraph.h:67`) and so is abstract, the same shape as `Light`.
 `PerspectiveCamera` (`SceneGraph.h:154-165`) is constructible with `zNear` and `verticalFov`.
 
+### `SceneGraphNode.SetPositionAndDirection(px, py, pz, dx, dy, dz)`
+
+Placing a synthesised camera needs one binding this spec did not originally anticipate.
+`SetPosition` and `SetDirection` are declared on `Light` (`SceneGraph.h:199-200`), **not** on
+`SceneGraphLeaf`, so a `PerspectiveCamera` does not inherit the setters `CreateSceneLights` uses.
+Their bodies (`SceneTypes.cpp:77-116`) are generic node-transform work — invert the parent
+transform, `lookatZ` the direction, `decomposeAffine`, `SetTransform` — so the equivalent binds
+once on `SceneGraphNode`, where the transform actually lives, and `CreateSceneCameras` calls it
+on the node `AttachLeafNode` returns.
+
+Composing `dm` math inside a shim like this is an established pattern in this file
+(`SetMatricesOrbit`, `setTransformScaleTranslation`) and keeps the math types in C++; it is not
+the same thing as reimplementing a Donut *pass*, which this project does not do.
+
 ### `SceneGraph.GetCameras()` and `SceneGraph.GetMaterials()`
 
 `GetCameras` (`SceneGraph.h:556`) returns a plain vector and binds directly. `GetMaterials`
