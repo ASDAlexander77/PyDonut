@@ -1072,6 +1072,8 @@ class MeshInfo():
 
 class SceneGraphLeaf():
     def SetName(self: SceneGraphLeaf, name: str) -> None: ...
+    # Read back by feature_demo.py's light dropdown to label each entry.
+    def GetName(self: SceneGraphLeaf) -> str: ...
 
 class MeshInstance(SceneGraphLeaf):
     def __init__(self: MeshInstance, mesh: MeshInfo) -> None: ...
@@ -1099,6 +1101,14 @@ class IShadowMap():
 
 class Light(SceneGraphLeaf):
     def SetDirection(self: Light, x: float, y: float, z: float) -> None: ...
+    # Flat scalars, like SetDirection -- donut math types never cross into Python. Both require
+    # the light to be attached to a scene graph first: Light::SetPosition and SetDirection
+    # assert when the light has no node (SceneTypes.cpp:82, :100). They do not clobber each
+    # other; SetDirection writes only rotation and scaling.
+    def SetPosition(self: Light, x: float, y: float, z: float) -> None: ...
+    # Setter only, matching SkyParameters' float3 fields -- nothing reads a colour back, and
+    # LightEditor writes the field from C++.
+    def SetColor(self: Light, r: float, g: float, b: float) -> None: ...
     # Raw bytes of the engine's LightConstants struct, ready for CommandList.writeBuffer --
     # same pattern as PlanarView.FillPlanarViewConstants.
     def FillLightConstants(self: Light) -> bytes: ...

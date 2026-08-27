@@ -2228,8 +2228,27 @@ PYBIND11_MODULE(_pydonut, m) {
 
     // SceneGraphLeaf is abstract (pure virtual Clone()) -- bound base-only, for MeshInstance/
     // Light/DirectionalLight below to derive from and for SetLeaf()/AttachLeafNode() to accept.
-    py::class_<donut::engine::SceneGraphLeaf, std::shared_ptr<donut::engine::SceneGraphLeaf>>(m, "SceneGraphLeaf")
-        .def("SetName", [](const donut::engine::SceneGraphLeaf &self, const std::string &name) { self.SetName(name); }, py::arg("name"));
+    py::class_<donut::engine::SceneGraphLeaf, std::shared_ptr<donut::engine::SceneGraphLeaf>>(m, "SceneGraphLeaf", py::dynamic_attr())
+        .def("SetName", [](py::object self, const std::string &name) {
+            auto &leaf = self.cast<donut::engine::SceneGraphLeaf &>();
+            leaf.SetName(name);
+            // Also store on Python side for unattached leaves
+            self.attr("__py_name__") = name;
+        }, py::arg("name"))
+        // Read back by feature_demo.py's light dropdown, which labels each entry with it
+        // (FeatureDemo.cpp:1637-1643). SetName alone was enough while nothing read a name back.
+        .def("GetName", [](py::object self) -> std::string {
+            auto &leaf = self.cast<donut::engine::SceneGraphLeaf &>();
+            auto node = leaf.GetNode();
+            if (node)
+                return node->GetName();
+            // Fall back to Python-side storage for unattached leaves
+            try {
+                return self.attr("__py_name__").cast<std::string>();
+            } catch(...) {
+                return "";
+            }
+        });
 
     py::class_<donut::engine::MeshInstance, donut::engine::SceneGraphLeaf, std::shared_ptr<donut::engine::MeshInstance>>(m, "MeshInstance")
         .def(py::init<std::shared_ptr<donut::engine::MeshInfo>>(), py::arg("mesh"))
@@ -2264,6 +2283,26 @@ PYBIND11_MODULE(_pydonut, m) {
         .def("SetDirection", [](const donut::engine::Light &self, double x, double y, double z) {
             self.SetDirection(donut::math::double3(x, y, z));
         }, py::arg("x"), py::arg("y"), py::arg("z"))
+        // Same shape as SetDirection: flat scalars in, nothing coming back. Light::SetPosition
+        // converts world space to parent-local and writes the node's translation itself
+        // (SceneTypes.cpp:77-93), which is why SceneGraphNode.SetTranslation stays unbound.
+        //
+        // Like SetDirection, this asserts when the light has no node (SceneTypes.cpp:82), so a
+        // light must be attached to the scene graph before it is placed. The two do not clobber
+        // each other: SetDirection writes only rotation and scaling (SceneGraph.cpp:282-291).
+        //
+        // The matching getters -- Light::GetPosition and GetDirection -- stay unbound: nothing
+        // in the examples reads either back, and the node's world position is already reachable
+        // through SceneGraphNode.GetWorldPosition.
+        .def("SetPosition", [](const donut::engine::Light &self, double x, double y, double z) {
+            self.SetPosition(donut::math::double3(x, y, z));
+        }, py::arg("x"), py::arg("y"), py::arg("z"))
+        // color is a dm::float3, so it takes flat scalars like SkyParameters' four float3
+        // fields below. Setter only, as those are: nothing in the examples reads a colour back,
+        // and LightEditor writes the field directly from C++.
+        .def("SetColor", [](donut::engine::Light &self, float r, float g, float b) {
+            self.color = donut::math::float3(r, g, b);
+        }, py::arg("r"), py::arg("g"), py::arg("b"))
         // Raw bytes of the engine's LightConstants struct, ready for CommandList.writeBuffer --
         // same pattern as PlanarView.FillPlanarViewConstants. Virtual, so this dispatches to
         // whichever concrete light type (DirectionalLight, etc.) the Python object actually is.
