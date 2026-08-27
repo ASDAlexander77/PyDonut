@@ -41,7 +41,8 @@ def _attached(light: pyd.Light) -> tuple[pyd.SceneGraph, pyd.SceneGraphNode]:
     every positional test needs this much scaffolding. No device is involved.
     """
     graph = pyd.SceneGraph()
-    root = graph.SetRootNode(pyd.SceneGraphNode())
+    graph.SetRootNode(pyd.SceneGraphNode())
+    root = graph.GetRootNode()
     node = graph.AttachLeafNode(root, light)
     return graph, node
 
@@ -129,13 +130,13 @@ def test_get_lights_returns_the_concrete_light_types() -> None:
     # Light in C++, and pybind must hand back the most-derived registered type so the editor
     # dispatches correctly and so `is` comparisons against the stored selection hold.
     graph = pyd.SceneGraph()
-    root = graph.SetRootNode(pyd.SceneGraphNode())
+    graph.SetRootNode(pyd.SceneGraphNode())
+    root = graph.GetRootNode()
 
     spot = pyd.SpotLight()
     point = pyd.PointLight()
-    # Capture return values to keep the SceneGraphNode references alive for pybind11 binding
-    _node_spot = graph.AttachLeafNode(root, spot)
-    _node_point = graph.AttachLeafNode(root, point)
+    graph.AttachLeafNode(root, spot)
+    graph.AttachLeafNode(root, point)
     spot.SetName("Spot")
     point.SetName("Point")
 
