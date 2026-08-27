@@ -2342,6 +2342,30 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_readwrite("radius", &donut::engine::PointLight::radius)
         .def_readwrite("range", &donut::engine::PointLight::range);
 
+    // SceneCamera (SceneGraph.h:145-152) is abstract: it inherits SceneGraphLeaf::Clone()
+    // pure (SceneGraph.h:67) and does not override it. Bound base-only with no constructor,
+    // the same shape as Light above, so GetCameras() can hand back concrete subtypes and so
+    // SwitchableCamera.SwitchToSceneCamera can accept them.
+    //
+    // GetViewToWorldMatrix and GetWorldToViewMatrix stay unbound: both return dm::affine3,
+    // which SwitchableCamera consumes internally (see SetMatricesFromSwitchableCamera).
+    py::class_<donut::engine::SceneCamera, donut::engine::SceneGraphLeaf,
+               std::shared_ptr<donut::engine::SceneCamera>>(m, "SceneCamera");
+
+    // PerspectiveCamera (SceneGraph.h:154-165). NOTE verticalFov is in RADIANS, unlike
+    // SpotLight's innerAngle/outerAngle, which are degrees.
+    //
+    // zFar and aspectRatio stay unbound: both are std::optional<float>, and the example
+    // leaves them unset to get the reverse-infinite projection and the viewport's own aspect
+    // ratio. Clone, Load and SetProperty stay unbound too -- the JSON and animation paths,
+    // which no example drives. OrthographicCamera (SceneGraph.h:167-178) is unbound entirely:
+    // nothing constructs one, and the projection shim only handles the perspective case.
+    py::class_<donut::engine::PerspectiveCamera, donut::engine::SceneCamera,
+               std::shared_ptr<donut::engine::PerspectiveCamera>>(m, "PerspectiveCamera")
+        .def(py::init<>())
+        .def_readwrite("zNear", &donut::engine::PerspectiveCamera::zNear)
+        .def_readwrite("verticalFov", &donut::engine::PerspectiveCamera::verticalFov);
+
     // One baked animation clip attached to the scene graph (e.g. a glTF skinned character
     // animation) -- see SceneGraph.GetAnimations() below. Apply() drives every channel
     // (node transforms, morph/material properties) to their sampled values at `time`; the
@@ -2355,6 +2379,36 @@ PYBIND11_MODULE(_pydonut, m) {
         .def(py::init<>())
         .def("SetLeaf", &donut::engine::SceneGraphNode::SetLeaf, py::arg("leaf"))
         .def("SetName", &donut::engine::SceneGraphNode::SetName, py::arg("name"))
+        // Places the node at a world position, oriented along a world direction. This is what
+        // Light::SetPosition and Light::SetDirection do (SceneTypes.cpp:77-116), lifted to the
+        // node because those two are declared on Light (SceneGraph.h:199-200) and so are not
+        // available on a SceneCamera -- CreateSceneCameras needs exactly this for the cameras
+        // it synthesises.
+        //
+        // Both halves are done together because they share the parent-transform inversion, and
+        // because Light does them as one pair in practice: attach, then position, then aim.
+        // Composing dm math inside a shim follows SetMatricesOrbit and
+        // setTransformScaleTranslation elsewhere in this file -- the math types stay in C++.
+        .def("SetPositionAndDirection", [](donut::engine::SceneGraphNode &self,
+                double px, double py, double pz, double dx, double dy, double dz) {
+            donut::engine::SceneGraphNode *parent = self.GetParent();
+            donut::math::daffine3 parentToWorld = donut::math::daffine3::identity();
+            if (parent)
+                parentToWorld = donut::math::daffine3(parent->GetLocalToWorldTransform());
+
+            const donut::math::double3 translation =
+                inverse(parentToWorld).transformPoint(donut::math::double3(px, py, pz));
+
+            const donut::math::daffine3 worldToLocal =
+                donut::math::lookatZ(donut::math::double3(dx, dy, dz));
+            const donut::math::daffine3 localToParent = inverse(worldToLocal * parentToWorld);
+
+            donut::math::dquat rotation;
+            donut::math::double3 scaling;
+            donut::math::decomposeAffine<double>(localToParent, nullptr, &rotation, &scaling);
+
+            self.SetTransform(&translation, &rotation, &scaling);
+        }, py::arg("px"), py::arg("py"), py::arg("pz"), py::arg("dx"), py::arg("dy"), py::arg("dz"))
         // The world-space translation component of this node's world transform, as (x, y, z)
         // -- math types aren't exposed to Python (see rt_particles.py's emitter-position lookup).
         .def("GetWorldPosition", [](const donut::engine::SceneGraphNode &self) {
@@ -2377,6 +2431,10 @@ PYBIND11_MODULE(_pydonut, m) {
         .def("AttachLeafNode", &donut::engine::SceneGraph::AttachLeafNode, py::arg("parent"), py::arg("leaf"))
         .def("Refresh", &donut::engine::SceneGraph::Refresh, py::arg("frameIndex"))
         .def("GetLights", &donut::engine::SceneGraph::GetLights)
+        // Scene cameras attached anywhere in the graph. SceneGraph::RegisterLeaf routes any
+        // SceneCamera into m_Cameras (SceneGraph.cpp:577-582), so a camera attached with
+        // AttachLeafNode shows up here with no extra registration -- exactly as a light does.
+        .def("GetCameras", &donut::engine::SceneGraph::GetCameras)
         // ResourceTracker<MeshInfo> isn't a plain container pybind11/stl.h can convert
         // automatically, so it's copied into a plain vector here.
         .def("GetMeshes", [](const donut::engine::SceneGraph &self) {

@@ -124,6 +124,8 @@ from pydonut._pydonut import Light
 from pydonut._pydonut import DirectionalLight
 from pydonut._pydonut import SpotLight
 from pydonut._pydonut import PointLight
+from pydonut._pydonut import SceneCamera
+from pydonut._pydonut import PerspectiveCamera
 from pydonut._pydonut import LightEditor
 from pydonut._pydonut import SceneGraphAnimation
 from pydonut._pydonut import SceneGraphNode
@@ -311,6 +313,8 @@ __all__ = (
     'DirectionalLight',
     'SpotLight',
     'PointLight',
+    'SceneCamera',
+    'PerspectiveCamera',
     'LightEditor',
     'SceneGraphAnimation',
     'SceneGraphNode',

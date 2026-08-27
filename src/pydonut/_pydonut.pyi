@@ -1144,6 +1144,22 @@ class PointLight(Light):
     radius: float
     range: float
 
+# A camera stored in the scene graph. Abstract (SceneGraphLeaf.Clone is pure and SceneCamera
+# does not override it), so it cannot be constructed -- it exists so GetCameras() can return
+# concrete subtypes and SwitchableCamera.SwitchToSceneCamera can accept them. Its position and
+# orientation come from the owning scene-graph node.
+class SceneCamera(SceneGraphLeaf): ...
+
+# A perspective scene camera. verticalFov is in RADIANS, unlike SpotLight's degrees. zFar and
+# aspectRatio are left unbound, so the projection is reverse-infinite and takes the viewport's
+# aspect ratio. Position and direction come from the owning scene-graph node: place it with
+# SceneGraphNode.SetPositionAndDirection on the node AttachLeafNode returns. Light's own
+# SetPosition/SetDirection are declared on Light, so a camera does not inherit them.
+class PerspectiveCamera(SceneCamera):
+    def __init__(self: PerspectiveCamera) -> None: ...
+    zNear: float
+    verticalFov: float
+
 # One baked animation clip attached to the scene graph (e.g. a glTF skinned character
 # animation) -- see SceneGraph.GetAnimations(). Apply() drives every channel (node
 # transforms, morph/material properties) to their sampled values at `time`; the caller
@@ -1156,6 +1172,11 @@ class SceneGraphNode():
     def __init__(self: SceneGraphNode) -> None: ...
     def SetLeaf(self: SceneGraphNode, leaf: SceneGraphLeaf) -> None: ...
     def SetName(self: SceneGraphNode, name: str) -> None: ...
+    # Places the node at a world position, oriented along a world direction -- what
+    # Light.SetPosition/SetDirection do, lifted to the node because those two are declared on
+    # Light and so are unavailable on a SceneCamera. Call it *after* attaching the node: it
+    # reads the parent's transform to convert world space to parent-local.
+    def SetPositionAndDirection(self: SceneGraphNode, px: float, py: float, pz: float, dx: float, dy: float, dz: float) -> None: ...
     # The world-space translation component of this node's world transform, as (x, y, z) --
     # math types aren't exposed to Python (see rt_particles.py's emitter-position lookup).
     def GetWorldPosition(self: SceneGraphNode) -> tuple[float, float, float]: ...
@@ -1172,6 +1193,9 @@ class SceneGraph():
     def AttachLeafNode(self: SceneGraph, parent: SceneGraphNode, leaf: SceneGraphLeaf) -> SceneGraphNode: ...
     def Refresh(self: SceneGraph, frameIndex: int) -> None: ...
     def GetLights(self: SceneGraph) -> list[Light]: ...
+    # Scene cameras attached anywhere in the graph -- populated by AttachLeafNode, the same
+    # way GetLights is.
+    def GetCameras(self: SceneGraph) -> list[SceneCamera]: ...
     def GetMeshes(self: SceneGraph) -> list[MeshInfo]: ...
     def GetMeshInstances(self: SceneGraph) -> list[MeshInstance]: ...
     # Baked animation clips attached anywhere in the graph (see SceneGraphAnimation).
