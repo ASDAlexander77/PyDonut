@@ -72,3 +72,13 @@ def test_material_editor_is_exported() -> None:
     # Begin and End. Presence only, the same treatment LightEditor gets in
     # test_light_bindings.py.
     assert callable(pyd.MaterialEditor)
+
+
+def test_material_domain_binds_all_six_values() -> None:
+    # Donut's real enum has six values (SceneTypes.h:171-181); this stage's material editor
+    # reads .domain off materials loaded from arbitrary scene data (which can use any of them)
+    # and its own domain-change combo can write any of them, so all six must round-trip.
+    material = pyd.Material()
+    for domain in pyd.MaterialDomain:
+        material.domain = domain
+        assert material.domain == domain

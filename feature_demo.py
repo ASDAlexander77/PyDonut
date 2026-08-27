@@ -1530,6 +1530,9 @@ if __name__ == "__main__":
             # top-right corner at the given point, which is the only way to right-align
             # without knowing the window's width beforehand.
             windowWidth, _ = self.app.GetDeviceManager().GetWindowDimensions()
+            # Assumes DisplayFramebufferScale == 1 (no DPI scaling reported to ImGui); on a scaled
+            # display this anchor would sit slightly off the true right edge, but ImGui's own
+            # on-screen clamping keeps the visible effect small.
             pyd.ImGui.SetNextWindowPos(float(windowWidth) - 10.0, 10.0, 0, 1.0, 0.0)
             pyd.ImGui.Begin("Material Editor", _IMGUI_WINDOW_FLAGS_ALWAYS_AUTO_RESIZE)
 
@@ -1544,16 +1547,22 @@ if __name__ == "__main__":
             # (FeatureDemo.cpp:1684 reads m_ui.SelectedMaterial, written by a MaterialID
             # readback). That readback is stage 3; this combo is transitional and goes away
             # with it, rather than being a deliberate departure from the original.
-            if pyd.ImGui.BeginCombo("Material", self.selectedMaterial.name):
+            # Sponza's glTF assigns no name to any of its materials (GltfImporter.cpp:914-915
+            # only sets one when the source file supplies it), so plain material.name labels
+            # would collide on the empty string "" -- every unnamed material's Selectable would
+            # share one ImGui ID. The already-unique materialID as an ID suffix fixes that.
+            previewName = self.selectedMaterial.name or "(unnamed)"
+            if pyd.ImGui.BeginCombo("Material", previewName):
                 for material in materials:
+                    label = f"{material.name or '(unnamed)'}##{material.materialID}"
                     if pyd.ImGui.Selectable(
-                        material.name, material is self.selectedMaterial
+                        label, material is self.selectedMaterial
                     ):
                         self.selectedMaterial = material
                 pyd.ImGui.EndCombo()
 
             material = self.selectedMaterial
-            pyd.ImGui.Text(f"Material {material.materialID}: {material.name}")
+            pyd.ImGui.Text(f"Material {material.materialID}: {material.name or '(unnamed)'}")
 
             previousDomain = material.domain
             material.dirty = pyd.MaterialEditor(material, True)

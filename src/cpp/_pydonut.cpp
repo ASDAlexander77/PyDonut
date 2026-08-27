@@ -2137,12 +2137,19 @@ PYBIND11_MODULE(_pydonut, m) {
         .def_readwrite("indexBufferDescriptor", &donut::engine::BufferGroup::indexBufferDescriptor)
         .def_readwrite("vertexBufferDescriptor", &donut::engine::BufferGroup::vertexBufferDescriptor);
 
-    // Only the domains this module's samples actually set (rt_particles.py's procedural
-    // particle material) plus Opaque (the default) -- matching the "only bind what's needed"
-    // convention used throughout.
+    // All six of Donut's real domains are bound (SceneTypes.h:171-181) -- Count is a sentinel,
+    // not a real domain, and stays unbound. Earlier stages (e.g. rt_bindless.py) only needed
+    // Opaque/AlphaBlended and documented the other four as an intentional limitation, but this
+    // stage's material editor reads .domain off materials loaded from arbitrary scene data
+    // (some of which use AlphaTested) and lets its own "Material Domain" combo write any of
+    // the six -- all six must round-trip or reading a loaded material's domain can raise.
     pybind11::native_enum<donut::engine::MaterialDomain>(m, "MaterialDomain", "enum.Enum")
         .value("Opaque", donut::engine::MaterialDomain::Opaque)
+        .value("AlphaTested", donut::engine::MaterialDomain::AlphaTested)
         .value("AlphaBlended", donut::engine::MaterialDomain::AlphaBlended)
+        .value("Transmissive", donut::engine::MaterialDomain::Transmissive)
+        .value("TransmissiveAlphaTested", donut::engine::MaterialDomain::TransmissiveAlphaTested)
+        .value("TransmissiveAlphaBlended", donut::engine::MaterialDomain::TransmissiveAlphaBlended)
         .finalize();
 
     py::class_<donut::engine::Material, std::shared_ptr<donut::engine::Material>>(m, "Material")
@@ -2409,8 +2416,13 @@ PYBIND11_MODULE(_pydonut, m) {
             const donut::math::double3 translation =
                 inverse(parentToWorld).transformPoint(donut::math::double3(px, py, pz));
 
+            // Two-arg lookatZ derives left/up from an explicit up vector rather than an arbitrary
+            // perpendicular -- needed because this shim places cameras (whose node transform IS
+            // their view orientation) as well as lights (where roll is meaningless and the
+            // single-arg overload was fine). World-up is the only sensible default here; nothing
+            // in this codebase needs roll control.
             const donut::math::daffine3 worldToLocal =
-                donut::math::lookatZ(donut::math::double3(dx, dy, dz));
+                donut::math::lookatZ(donut::math::double3(dx, dy, dz), donut::math::double3(0.0, 1.0, 0.0));
             const donut::math::daffine3 localToParent = inverse(worldToLocal * parentToWorld);
 
             donut::math::dquat rotation;

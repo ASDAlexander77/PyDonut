@@ -1007,12 +1007,15 @@ class BufferGroup():
     indexBufferDescriptor: Optional[DescriptorHandle]
     vertexBufferDescriptor: Optional[DescriptorHandle]
 
-# Only the domains this module's samples actually set (rt_particles.py's procedural particle
-# material) plus Opaque (the default) -- matching the "only bind what's needed" convention
-# used throughout.
+# All six of Donut's real domains (SceneTypes.h:171-181) -- Count is a sentinel, not a real
+# domain, and stays unbound.
 class MaterialDomain(Enum):
     Opaque = 0
+    AlphaTested = 1
     AlphaBlended = 2
+    Transmissive = 3
+    TransmissiveAlphaTested = 4
+    TransmissiveAlphaBlended = 5
 
 class Material():
     def __init__(self: Material) -> None: ...
@@ -1698,9 +1701,9 @@ class ImGui():
     # UserInterface, matching the C++ original's ImGui::GetIO().IniFilename = nullptr).
     @staticmethod
     def DisableIniFile() -> None: ...
-    @staticmethod
     # pivot places that point of the window at (x, y): (0, 0) is its top-left corner, (1, 0)
     # its top-right, which is how the material editor window right-aligns itself.
+    @staticmethod
     def SetNextWindowPos(x: float, y: float, cond: int = 0, pivotX: float = 0.0, pivotY: float = 0.0) -> None: ...
     # p_open is always null in this codebase's usage (no closable windows).
     @staticmethod
