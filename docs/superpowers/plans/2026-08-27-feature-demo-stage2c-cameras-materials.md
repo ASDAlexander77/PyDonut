@@ -973,11 +973,9 @@ If the example starts somewhere unexpected — 30 units out, aimed at the origin
 - [ ] **Step 10: Commit**
 
 ```bash
-git add feature_demo.py src/cpp/_pydonut.cpp src/pydonut/_pydonut.pyi
+git add feature_demo.py
 git commit -m "Switch feature_demo.py to SwitchableCamera and add two scene cameras"
 ```
-
-(Include the two `src/` files only if step 4's check required moving `SetPosition`/`SetDirection` up to `SceneGraphLeaf`.)
 
 ---
 
