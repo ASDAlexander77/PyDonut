@@ -21,18 +21,21 @@
 # * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # ******************************************************************************/
 
-"""Port of Donut's FeatureDemo sample -- stage 1 of 3.
+"""Port of Donut's FeatureDemo sample -- stages 1, 2a, 2b and 2c.
 
 Renders media/sponza-plus.scene.json through the full HDR pipeline: deferred or forward
-shading, a procedural sky, SSAO, TAA or MSAA, bloom, and tone mapping with eye adaptation.
+shading, a procedural sky, SSAO, TAA or MSAA, bloom, and tone mapping with eye adaptation,
+with cascaded sun shadows, a spot and a point light, a switchable first-person/third-person/
+scene camera, and live light and material editors.
 
-Stage 1 deliberately omits shadows, light probes, material/light editors, the scene-camera
-dropdown, MaterialID readback, MipMapGen, stereo and screenshots -- those arrive in stages 2
-and 3. DLSS, taskflow and the ImGui console are out of scope permanently: see
+Still to come in stage 3: light probes, MaterialID readback (which replaces the material
+editor's dropdown with right-click picking), MipMapGen, stereo and screenshots. DLSS,
+taskflow and the ImGui console are out of scope permanently: see
 docs/superpowers/specs/2026-08-25-feature-demo-stage1-design.md.
 
-NOTE: sponza-plus.scene.json declares no lights at all, so the directional "Sun" light this
-example renders with is created here and attached to the scene graph, not loaded.
+NOTE: sponza-plus.scene.json declares no lights and no cameras at all, so the "Sun",
+"Point" and "Spot" lights and the "Nave" and "Gallery" cameras this example offers are all
+created here and attached to the scene graph, not loaded.
 """
 
 from __future__ import annotations
@@ -1223,6 +1226,10 @@ if __name__ == "__main__":
             # UI reads it -- the same place the original keeps m_SelectedLight
             # (FeatureDemo.cpp:1445).
             self.selectedLight: pyd.Light | None = None
+            # Same reasoning as selectedLight: nothing outside the UI reads it. The original
+            # keeps the equivalent in m_ui.SelectedMaterial because its MaterialID readback
+            # writes it from outside the UI -- that readback is stage 3.
+            self.selectedMaterial: pyd.Material | None = None
             pyd.ImGui.DisableIniFile()
 
         def buildUI(self: UIRenderer) -> None:
@@ -1502,6 +1509,61 @@ if __name__ == "__main__":
                     "Adaptation Down", self.ui.ToneMappingParams.eyeAdaptationSpeedDown, 0.0, 4.0
                 )
 
+            pyd.ImGui.End()
+
+            # A second, separate window, as in FeatureDemo.cpp:1684-1698. Outside the Settings
+            # window's Begin/End: ImGui windows do not nest.
+            if self.app.scene is not None:
+                materials = self.app.scene.GetSceneGraph().GetMaterials()
+                if materials:
+                    self._buildMaterialEditorWindow(materials)
+
+        def _buildMaterialEditorWindow(
+            self: UIRenderer, materials: list[pyd.Material]
+        ) -> None:
+            """Draws the Material Editor window over the currently selected material.
+
+            Split out of buildUI purely for size -- buildUI is already long, and this is a
+            self-contained second window rather than another section of the settings panel.
+            """
+            # Right-aligned, matching FeatureDemo.cpp:1687: the pivot puts the window's
+            # top-right corner at the given point, which is the only way to right-align
+            # without knowing the window's width beforehand.
+            windowWidth, _ = self.app.GetDeviceManager().GetWindowDimensions()
+            pyd.ImGui.SetNextWindowPos(float(windowWidth) - 10.0, 10.0, 0, 1.0, 0.0)
+            pyd.ImGui.Begin("Material Editor", _IMGUI_WINDOW_FLAGS_ALWAYS_AUTO_RESIZE)
+
+            # MaterialEditor emits generically-labelled controls, and CollapsingHeader does not
+            # push an ID scope -- the same collision the Lights section is wrapped against.
+            pyd.ImGui.PushID("MaterialEditor")
+
+            if self.selectedMaterial is None:
+                self.selectedMaterial = materials[0]
+
+            # A dropdown stands in for the right-click viewport picking the original uses
+            # (FeatureDemo.cpp:1684 reads m_ui.SelectedMaterial, written by a MaterialID
+            # readback). That readback is stage 3; this combo is transitional and goes away
+            # with it, rather than being a deliberate departure from the original.
+            if pyd.ImGui.BeginCombo("Material", self.selectedMaterial.name):
+                for material in materials:
+                    if pyd.ImGui.Selectable(
+                        material.name, material is self.selectedMaterial
+                    ):
+                        self.selectedMaterial = material
+                pyd.ImGui.EndCombo()
+
+            material = self.selectedMaterial
+            pyd.ImGui.Text(f"Material {material.materialID}: {material.name}")
+
+            previousDomain = material.domain
+            material.dirty = pyd.MaterialEditor(material, True)
+
+            # Moving between the opaque and alpha-blended domains changes which draw list the
+            # material's geometry belongs to, so the scene has to re-evaluate its content.
+            if material.domain != previousDomain:
+                self.app.scene.GetSceneGraph().GetRootNode().InvalidateContent()
+
+            pyd.ImGui.PopID()
             pyd.ImGui.End()
 
     is_debug = "-debug" in sys.argv
