@@ -624,6 +624,13 @@ if __name__ == "__main__":
                     self.sunLight = light
                     if self.sunLight.irradiance <= 0.0:
                         self.sunLight.irradiance = 1.0
+                    # A scene-declared light is already attached, so GetName()/SetName() work
+                    # here same as below -- but the scene may not have named it, and an empty
+                    # name would show up as a blank, ID-colliding Selectable("") in the Lights
+                    # dropdown. Sponza declares no lights today, so this is latent, not currently
+                    # triggered.
+                    if not self.sunLight.GetName():
+                        self.sunLight.SetName("Sun")
                     return
 
             self.sunLight = pyd.DirectionalLight()
@@ -631,6 +638,11 @@ if __name__ == "__main__":
             self.sunLight.irradiance = 1.0
 
             graph.AttachLeafNode(graph.GetRootNode(), self.sunLight)
+            # SetName after AttachLeafNode, not next to the constructor above: SceneGraphLeaf.
+            # SetName only takes effect once the leaf is attached to a scene-graph node and
+            # silently no-ops otherwise (SceneGraph.cpp:40-47) -- with asserts compiled out in
+            # this project's Release build, moving this call back up would silently reintroduce
+            # a blank sun label in the Lights dropdown instead of failing loudly.
             self.sunLight.SetName("Sun")
             self.sunLight.SetDirection(0.1, -0.9, 0.1)
 
@@ -1248,6 +1260,13 @@ if __name__ == "__main__":
             lights = self.app.scene.GetSceneGraph().GetLights()
 
             if lights and pyd.ImGui.CollapsingHeader("Lights"):
+                # CollapsingHeader does not push an ImGui ID scope (ImGuiTreeNodeFlags_
+                # CollapsingHeader includes NoTreePushOnOpen), so LightEditor's "Radius" slider
+                # (for Point/Spot lights) would otherwise share an ImGui ID with the SSAO
+                # section's own "Radius" slider below, whenever both sections are open --
+                # dragging one could silently drive the other's value. PushID/PopID give this
+                # section's widgets their own ID namespace.
+                pyd.ImGui.PushID("LightEditor")
                 preview = (
                     self.selectedLight.GetName()
                     if self.selectedLight is not None
@@ -1274,6 +1293,7 @@ if __name__ == "__main__":
                 # sun's cascades included, since RenderShadowMap re-fits them every frame.
                 if self.selectedLight is not None:
                     pyd.LightEditor(self.selectedLight)
+                pyd.ImGui.PopID()
 
             if pyd.ImGui.CollapsingHeader("Sky"):
                 _, self.ui.EnableProceduralSky = pyd.ImGui.Checkbox(

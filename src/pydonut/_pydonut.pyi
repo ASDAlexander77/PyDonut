@@ -1071,8 +1071,12 @@ class MeshInfo():
     skinPrototype: Optional[MeshInfo]
 
 class SceneGraphLeaf():
+    # Only takes effect once this leaf is attached to a scene-graph node (SceneGraph.cpp:40-47)
+    # -- SceneGraphLeaf::SetName silently no-ops before that, and with asserts compiled out in
+    # this project's Release build there is nothing to catch the mistake at the call site.
     def SetName(self: SceneGraphLeaf, name: str) -> None: ...
-    # Read back by feature_demo.py's light dropdown to label each entry.
+    # Read back by feature_demo.py's light dropdown to label each entry. Same attach-first
+    # requirement as SetName: returns "" if the leaf isn't attached yet.
     def GetName(self: SceneGraphLeaf) -> str: ...
 
 class MeshInstance(SceneGraphLeaf):
@@ -1158,8 +1162,13 @@ class SceneGraphNode():
 
 class SceneGraph():
     def __init__(self: SceneGraph) -> None: ...
-    def SetRootNode(self: SceneGraph, root: SceneGraphNode) -> SceneGraphNode: ...
+    # Returns the *previous* root node (None on a fresh graph), not the node just passed in --
+    # use GetRootNode() to retrieve the node you just set. (SceneGraph.cpp:670-679)
+    def SetRootNode(self: SceneGraph, root: SceneGraphNode) -> Optional[SceneGraphNode]: ...
     def GetRootNode(self: SceneGraph) -> SceneGraphNode: ...
+    # If `leaf` is already attached to a node elsewhere, this clones it (SceneGraph.cpp:844-847)
+    # instead of moving it, so the returned node does not always wrap the same Python `leaf`
+    # object passed in -- fine as long as each leaf is only ever attached once.
     def AttachLeafNode(self: SceneGraph, parent: SceneGraphNode, leaf: SceneGraphLeaf) -> SceneGraphNode: ...
     def Refresh(self: SceneGraph, frameIndex: int) -> None: ...
     def GetLights(self: SceneGraph) -> list[Light]: ...
@@ -1668,6 +1677,14 @@ class ImGui():
     def SameLine() -> None: ...
     @staticmethod
     def SetItemDefaultFocus() -> None: ...
+    # CollapsingHeader does not push an ID scope (ImGuiTreeNodeFlags_CollapsingHeader includes
+    # NoTreePushOnOpen), so two sections with same-named widgets (e.g. two "Radius" sliders)
+    # share one ImGui ID and can drive each other's value while both are open. Wrap a section in
+    # PushID/PopID to give its widgets a distinct ID namespace.
+    @staticmethod
+    def PushID(str_id: str) -> None: ...
+    @staticmethod
+    def PopID() -> None: ...
 
 # Donut's built-in light editor: emits the controls appropriate to the light's concrete type
 # and returns whether anything changed. It draws into the current ImGui window, so call it from

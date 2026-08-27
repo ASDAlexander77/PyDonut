@@ -2227,7 +2227,13 @@ PYBIND11_MODULE(_pydonut, m) {
             [](donut::engine::MeshInfo &self, nvrhi::rt::IAccelStruct* as) { self.accelStruct = as; },
             py::return_value_policy::reference);
 
+    // SceneGraphLeaf is abstract (pure virtual Clone()) -- bound base-only, for MeshInstance/
+    // Light/DirectionalLight below to derive from and for SetLeaf()/AttachLeafNode() to accept.
     py::class_<donut::engine::SceneGraphLeaf, std::shared_ptr<donut::engine::SceneGraphLeaf>>(m, "SceneGraphLeaf")
+        // SetName/GetName only take effect once this leaf is attached to a scene-graph node
+        // (SceneGraph.cpp:40-47) -- SceneGraphLeaf::SetName silently no-ops before that, and in
+        // a Release build (this project builds with asserts compiled out) there is no assert to
+        // catch the mistake, so calling it too early just produces a blank name later.
         .def("SetName", [](const donut::engine::SceneGraphLeaf &self, const std::string &name) { self.SetName(name); }, py::arg("name"))
         // Read back by feature_demo.py's light dropdown, which labels each entry with it
         // (FeatureDemo.cpp:1637-1643). SetName alone was enough while nothing read a name back.
@@ -2251,17 +2257,20 @@ PYBIND11_MODULE(_pydonut, m) {
         .def("GetPrototypeMesh", &donut::engine::SkinnedMeshInstance::GetPrototypeMesh)
         .def("GetLastUpdateFrameIndex", &donut::engine::SkinnedMeshInstance::GetLastUpdateFrameIndex);
 
-    // Light is abstract (pure virtual GetLightType()) -- bound base-only, so
-    // SceneGraph.GetLights() can return a homogeneous list regardless of light subtype.
-    // Registered as a polymorphic base with no methods bound, the same shape ICompositeView/
-    // IView take (registered near the PlanarView bindings, further down this file). The
-    // interface itself exposes nothing to Python -- a concrete shadow map may re-expose some
-    // of its virtuals under its own type (see CascadedShadowMap's GetView/GetTexture/
-    // GetNumberOfCascades). It exists so Light.shadowMap has a type to accept and so
+    // IShadowMap is registered as a polymorphic base with no methods bound, the same shape
+    // ICompositeView/IView take (registered near the PlanarView bindings, further down this
+    // file). The interface itself exposes nothing to Python -- a concrete shadow map may
+    // re-expose some of its virtuals under its own type (see CascadedShadowMap's GetView/
+    // GetTexture/GetNumberOfCascades). It exists so Light.shadowMap has a type to accept and so
     // CascadedShadowMap can derive from it Python-side. Not constructible: there is no
     // concrete IShadowMap.
     py::class_<donut::engine::IShadowMap, std::shared_ptr<donut::engine::IShadowMap>>(m, "IShadowMap");
 
+    // Light is abstract (pure virtual GetLightType()) -- bound base-only. SceneGraph.GetLights()
+    // does NOT return a homogeneous base-typed list: pybind11's polymorphic downcasting means
+    // each element comes back as its most-derived registered type (DirectionalLight, SpotLight,
+    // PointLight -- see test_get_lights_returns_the_concrete_light_types), which is exactly what
+    // lets LightEditor's GetLightType() dispatch and the Lights UI's `is`-identity check work.
     py::class_<donut::engine::Light, donut::engine::SceneGraphLeaf, std::shared_ptr<donut::engine::Light>>(m, "Light")
         .def("SetDirection", [](const donut::engine::Light &self, double x, double y, double z) {
             self.SetDirection(donut::math::double3(x, y, z));
@@ -2355,8 +2364,16 @@ PYBIND11_MODULE(_pydonut, m) {
 
     py::class_<donut::engine::SceneGraph, std::shared_ptr<donut::engine::SceneGraph>>(m, "SceneGraph")
         .def(py::init<>())
+        // Returns the *previous* root node (SceneGraph.cpp:670-679), not the node just passed
+        // in -- None on a fresh graph. Use GetRootNode() to retrieve the node you just set.
         .def("SetRootNode", &donut::engine::SceneGraph::SetRootNode, py::arg("root"))
         .def("GetRootNode", &donut::engine::SceneGraph::GetRootNode)
+        // If `leaf` is already attached to a node elsewhere, AttachLeafNode clones it
+        // (SceneGraph.cpp:844-847) rather than moving it, so the returned node does not always
+        // wrap the exact same Python `leaf` object passed in. Harmless as long as each leaf is
+        // only ever attached once (true for this stage's lights, which is what lets the Lights
+        // UI's `is`-identity check work) -- but a future caller that re-attaches a leaf to move
+        // it between parents would get a node wrapping a clone, not the original.
         .def("AttachLeafNode", &donut::engine::SceneGraph::AttachLeafNode, py::arg("parent"), py::arg("leaf"))
         .def("Refresh", &donut::engine::SceneGraph::Refresh, py::arg("frameIndex"))
         .def("GetLights", &donut::engine::SceneGraph::GetLights)
@@ -3239,7 +3256,16 @@ PYBIND11_MODULE(_pydonut, m) {
             return ImGui::CollapsingHeader(label.c_str());
         }, py::arg("label"))
         .def_static("SameLine", []() { ImGui::SameLine(); })
-        .def_static("SetItemDefaultFocus", &ImGui::SetItemDefaultFocus);
+        .def_static("SetItemDefaultFocus", &ImGui::SetItemDefaultFocus)
+        // CollapsingHeader does NOT push an ID scope (ImGuiTreeNodeFlags_CollapsingHeader
+        // includes NoTreePushOnOpen), so widgets in two different collapsing sections with the
+        // same label (e.g. two "Radius" sliders) share one ImGui ID and can drive each other's
+        // value while both sections are open. PushID/PopID let a caller open its own ID scope
+        // around a section to avoid that collision (see feature_demo.py's Lights section, which
+        // wraps LightEditor in PushID("LightEditor") because LightEditor's "Radius" slider
+        // would otherwise collide with the SSAO section's own "Radius" slider).
+        .def_static("PushID", [](const std::string &str_id) { ImGui::PushID(str_id.c_str()); }, py::arg("str_id"))
+        .def_static("PopID", &ImGui::PopID);
 
     // Donut's own light editor, drawn entirely from C++: it dispatches on GetLightType() and
     // emits the right controls for a directional, point or spot light
