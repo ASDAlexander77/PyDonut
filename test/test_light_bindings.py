@@ -29,6 +29,8 @@ name, a field that silently did not round-trip.
 
 from __future__ import annotations
 
+import struct
+
 import pytest
 
 import pydonut as pyd
@@ -37,8 +39,9 @@ import pydonut as pyd
 def _attached(light: pyd.Light) -> tuple[pyd.SceneGraph, pyd.SceneGraphNode]:
     """Puts `light` under a fresh graph's root and returns the graph and the light's node.
 
-    SetPosition/SetDirection assert when a light has no node (SceneTypes.cpp:82, :100), so
-    every positional test needs this much scaffolding. No device is involved.
+    SetPosition/SetDirection assert when a light has no node (SceneTypes.cpp:82, :100), and
+    SceneGraphLeaf.SetName silently no-ops when the leaf has no node (SceneGraph.cpp:40-47), so
+    every positional or naming test needs this much scaffolding. No device is involved.
     """
     graph = pyd.SceneGraph()
     graph.SetRootNode(pyd.SceneGraphNode())
@@ -49,7 +52,10 @@ def _attached(light: pyd.Light) -> tuple[pyd.SceneGraph, pyd.SceneGraphNode]:
 
 def test_scene_graph_leaf_name_round_trips() -> None:
     light = pyd.DirectionalLight()
-    graph, node = _attached(light)
+    # Keep the (graph, node) tuple alive in `_`, even though neither name is used by name below:
+    # dropping the return value entirely lets Python garbage-collect the SceneGraph immediately,
+    # which detaches the node and makes SetName silently no-op (SceneGraph.cpp:40-47).
+    _ = _attached(light)
     light.SetName("Sun")
     assert light.GetName() == "Sun"
 
@@ -79,9 +85,24 @@ def test_light_set_direction_leaves_the_position_alone() -> None:
 def test_light_set_color_accepts_three_floats() -> None:
     # Setter only, matching SkyParameters' float3 fields -- there is no GetColor, because
     # nothing in the example reads a colour back and LightEditor writes the field from C++.
+    # Proven via FillLightConstants instead: it is already bound and reachable, and its
+    # LightConstants layout (light_cb.h:43-63) puts color right after direction(3f) +
+    # lightType(i) + position(3f) + radius(f), i.e. at byte offset 32, as 3 packed floats.
+    #
+    # The light is attached first (via _attached()) because DirectionalLight::FillLightConstants
+    # calls normalize(GetDirection()) (SceneTypes.cpp:133), which needs a valid node -- an
+    # unattached light would give a degenerate/zero direction.
     light = pyd.DirectionalLight()
+    # Keep the (graph, node) tuple alive in `_`: dropping it entirely would let Python
+    # garbage-collect the SceneGraph immediately and detach the node before FillLightConstants
+    # runs (see test_scene_graph_leaf_name_round_trips above for the same hazard).
+    _ = _attached(light)
     light.SetColor(1.0, 0.5, 0.25)
     assert not hasattr(light, "GetColor")
+
+    constants = light.FillLightConstants()
+    color = struct.unpack_from("<3f", constants, 32)
+    assert color == pytest.approx((1.0, 0.5, 0.25))
 
 
 def test_spot_light_is_a_light() -> None:
@@ -153,3 +174,14 @@ def test_light_editor_is_exported() -> None:
     # Begin and End. Presence only, the same treatment the ImGui surface gets in
     # test_postprocess_bindings.py:227.
     assert callable(pyd.LightEditor)
+
+
+def test_set_root_node_returns_the_previous_root_not_the_new_one() -> None:
+    # SceneGraph::SetRootNode (SceneGraph.cpp:670-679) returns the *previous* root, which is
+    # None on a fresh graph -- not the node just passed in. Two earlier tasks in this plan each
+    # wrote `root = graph.SetRootNode(node)` and used the (None) result as AttachLeafNode's
+    # parent, silently replacing the graph's root on every subsequent attach. Use
+    # GetRootNode() instead. This test pins the surprising return value so nobody reintroduces
+    # the mistake.
+    graph = pyd.SceneGraph()
+    assert graph.SetRootNode(pyd.SceneGraphNode()) is None
