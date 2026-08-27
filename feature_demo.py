@@ -1270,6 +1270,44 @@ if __name__ == "__main__":
                 "Animations", self.ui.EnableAnimations
             )
 
+            # Mirrors FeatureDemo.cpp:1548-1570, which places this right after the Animations
+            # checkbox. The preview shows the active scene camera's name, or which user camera
+            # is active. The scene is None until Init has loaded it.
+            if self.app.scene is not None:
+                sceneCameras = self.app.scene.GetSceneGraph().GetCameras()
+                activeSceneCamera = self.app.camera.GetSceneCamera()
+
+                if activeSceneCamera is not None:
+                    cameraPreview = activeSceneCamera.GetName()
+                elif self.app.camera.IsFirstPersonActive():
+                    cameraPreview = "First-Person"
+                else:
+                    cameraPreview = "Third-Person"
+
+                if pyd.ImGui.BeginCombo("Camera (T)", cameraPreview):
+                    # As in the Lights section, selection is driven by Selectable's return
+                    # value rather than the original's mutate-and-test pattern: the bound
+                    # Selectable(label, selected) -> bool returns the click, and the argument
+                    # only drives highlighting.
+                    #
+                    # copyView is left at its default True for every switch here, so the new
+                    # camera picks up the outgoing one's viewpoint -- the behaviour the
+                    # original gets from its CopyActiveCameraToFirstPerson call.
+                    if pyd.ImGui.Selectable(
+                        "First-Person", self.app.camera.IsFirstPersonActive()
+                    ):
+                        self.app.camera.SwitchToFirstPerson()
+                    if pyd.ImGui.Selectable(
+                        "Third-Person", self.app.camera.IsThirdPersonActive()
+                    ):
+                        self.app.camera.SwitchToThirdPerson()
+                    for sceneCamera in sceneCameras:
+                        if pyd.ImGui.Selectable(
+                            sceneCamera.GetName(), sceneCamera is activeSceneCamera
+                        ):
+                            self.app.camera.SwitchToSceneCamera(sceneCamera)
+                    pyd.ImGui.EndCombo()
+
             _, self.ui.EnableMaterialEvents = pyd.ImGui.Checkbox(
                 "Material Events", self.ui.EnableMaterialEvents
             )
