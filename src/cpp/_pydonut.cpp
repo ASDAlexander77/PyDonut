@@ -39,6 +39,7 @@
 #include <donut/app/ApplicationBase.h>
 #include <donut/app/Camera.h>
 #include <donut/app/imgui_renderer.h>
+#include <donut/app/UserInterfaceUtils.h>
 #include <imgui.h>
 #include <donut/core/log.h>
 #include <donut/core/vfs/VFS.h>
@@ -3239,6 +3240,23 @@ PYBIND11_MODULE(_pydonut, m) {
         }, py::arg("label"))
         .def_static("SameLine", []() { ImGui::SameLine(); })
         .def_static("SetItemDefaultFocus", &ImGui::SetItemDefaultFocus);
+
+    // Donut's own light editor, drawn entirely from C++: it dispatches on GetLightType() and
+    // emits the right controls for a directional, point or spot light
+    // (UserInterfaceUtils.cpp:364-377). Bound rather than ported for the same reason every
+    // render pass is bound rather than reimplemented, and because porting it would need three
+    // ImGui entry points nothing else here wants -- ColorEdit3, a logarithmic SliderFloat flag,
+    // and a double-typed SliderScalar.
+    //
+    // It draws into whatever ImGui window is current, so it is called from inside buildUI
+    // between Begin and End. Returns whether the user changed anything.
+    //
+    // MaterialEditor, FileDialog, FolderDialog and AzimuthElevationSliders from the same header
+    // stay unbound: the first three belong to later stages, and the last is an implementation
+    // detail of the editors above it.
+    m.def("LightEditor", [](donut::engine::Light &light) {
+        return donut::app::LightEditor(light);
+    }, py::arg("light"));
 
     py::class_<donut::app::AdapterInfo>(m, "AdapterInfo")
         .def(py::init<>())

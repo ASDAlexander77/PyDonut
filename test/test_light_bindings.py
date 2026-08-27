@@ -146,3 +146,10 @@ def test_get_lights_returns_the_concrete_light_types() -> None:
     assert isinstance(lights[1], pyd.PointLight)
     assert lights[0] is spot
     assert lights[1] is point
+
+
+def test_light_editor_is_exported() -> None:
+    # Never called from a test: it emits ImGui widgets, so it needs a live frame between
+    # Begin and End. Presence only, the same treatment the ImGui surface gets in
+    # test_postprocess_bindings.py:227.
+    assert callable(pyd.LightEditor)

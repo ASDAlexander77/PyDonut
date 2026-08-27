@@ -1669,6 +1669,11 @@ class ImGui():
     @staticmethod
     def SetItemDefaultFocus() -> None: ...
 
+# Donut's built-in light editor: emits the controls appropriate to the light's concrete type
+# and returns whether anything changed. It draws into the current ImGui window, so call it from
+# inside a buildUI() override, between ImGui.Begin and ImGui.End.
+def LightEditor(light: Light) -> bool: ...
+
 class PipelineCallbacks():
     beforeFrame: Optional[Callable[[DeviceManager, int], None]]
     beforeAnimate: Optional[Callable[[DeviceManager, int], None]]
