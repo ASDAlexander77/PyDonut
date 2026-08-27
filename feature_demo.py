@@ -1128,6 +1128,10 @@ if __name__ == "__main__":
             super().__init__(deviceManager)
             self.app = app
             self.ui = ui
+            # The selected light lives here rather than on UIData because nothing outside the
+            # UI reads it -- the same place the original keeps m_SelectedLight
+            # (FeatureDemo.cpp:1445).
+            self.selectedLight: pyd.Light | None = None
             pyd.ImGui.DisableIniFile()
 
         def buildUI(self: UIRenderer) -> None:
@@ -1236,6 +1240,40 @@ if __name__ == "__main__":
                 )
                 if changed and self.app.shadowMap is not None:
                     self.app.shadowMap.SetLitOutOfBounds(self.ui.ShadowLitOutOfBounds)
+
+            # Fetched before the header so an empty scene hides the section entirely, matching
+            # FeatureDemo.cpp:1635. This example always has three, but a different scene need
+            # not.
+            assert self.app.scene is not None
+            lights = self.app.scene.GetSceneGraph().GetLights()
+
+            if lights and pyd.ImGui.CollapsingHeader("Lights"):
+                preview = (
+                    self.selectedLight.GetName()
+                    if self.selectedLight is not None
+                    else "(None)"
+                )
+                if pyd.ImGui.BeginCombo("Select Light", preview):
+                    for light in lights:
+                        # The original passes &selected and then tests it
+                        # (FeatureDemo.cpp:1641-1648), which re-selects whatever the mouse
+                        # passes over. The bound Selectable returns the click instead, which is
+                        # the correct ImGui idiom, so the argument only drives highlighting.
+                        #
+                        # `is` is sound here: pybind hands back the same Python wrapper for a
+                        # C++ object that is still alive on the Python side, and holding the
+                        # selection is what keeps it alive.
+                        if pyd.ImGui.Selectable(light.GetName(), light is self.selectedLight):
+                            self.selectedLight = light
+                            pyd.ImGui.SetItemDefaultFocus()
+                    pyd.ImGui.EndCombo()
+
+                # Donut draws the whole editor, picking the controls from the light's concrete
+                # type. Its return value says whether anything changed; nothing here needs to
+                # act on that, because every field it writes is read fresh each frame -- the
+                # sun's cascades included, since RenderShadowMap re-fits them every frame.
+                if self.selectedLight is not None:
+                    pyd.LightEditor(self.selectedLight)
 
             if pyd.ImGui.CollapsingHeader("Sky"):
                 _, self.ui.EnableProceduralSky = pyd.ImGui.Checkbox(
