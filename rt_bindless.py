@@ -344,10 +344,9 @@ if __name__ == "__main__":
                 geometryDesc = pyd.GeometryDesc()
                 geometryDesc.setTriangles(triangles)
                 # The C++ original checks geometry.material.domain == MaterialDomain.AlphaTested
-                # here to leave alpha-tested geometry non-opaque for the AnyHit alpha test; that
-                # domain value isn't exposed to Python (only Opaque/AlphaBlended are), and this
+                # here to leave alpha-tested geometry non-opaque for the AnyHit alpha test; this
                 # port can't wire an AnyHit shader anyway (see CreateRayTracingPipeline), so
-                # every geometry is just flagged Opaque.
+                # every geometry is just flagged Opaque regardless of domain.
                 geometryDesc.flags = pyd.GeometryFlags.Opaque
                 geometryDescs.append(geometryDesc)
 

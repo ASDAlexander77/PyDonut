@@ -111,6 +111,27 @@ def test_set_position_and_direction_writes_the_nodes_world_transform() -> None:
     assert node.GetWorldPosition() == pytest.approx((-8.0, 2.0, 0.0))
 
 
+def test_set_position_and_direction_with_explicit_up_still_places_the_node() -> None:
+    # Regression test for the whole-branch-review fix that changed SetPositionAndDirection's
+    # C++ implementation from single-arg lookatZ(direction) to two-arg lookatZ(direction, up):
+    # the single-arg overload derives an arbitrary perpendicular for the node's up axis, which
+    # is fine for a Light (roll around the view axis is meaningless there) but rolls a
+    # SceneCamera's node transform -- which IS its view orientation -- roughly 90 deg away from
+    # world-up. Neither SceneGraphNode nor SceneCamera exposes anything that reads back
+    # orientation (no world-to-view/view-to-world matrix accessor is bound), so this cannot
+    # directly assert the resulting up vector without adding a new binding, which is out of
+    # scope for this fix wave. This therefore only pins that positioning still works with the
+    # two-arg overload (a regression on the position math, not a check that catches roll).
+    graph, root = _graph_with_root()
+    camera = pyd.PerspectiveCamera()
+    node = graph.AttachLeafNode(root, camera)
+
+    node.SetPositionAndDirection(-8.0, 2.0, 0.0, 1.0, 0.0, 0.0)
+    graph.Refresh(0)
+
+    assert node.GetWorldPosition() == pytest.approx((-8.0, 2.0, 0.0))
+
+
 def test_switchable_camera_starts_in_third_person() -> None:
     # m_UseFirstPerson defaults to false and m_SceneCamera starts null (Camera.h:259-261), so
     # a fresh SwitchableCamera is in THIRD person. The example starts first-person, so Init
