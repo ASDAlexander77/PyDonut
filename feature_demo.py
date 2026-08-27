@@ -87,6 +87,14 @@ if __name__ == "__main__":
     SHADOW_LIGHT_SPACE_Z_UP = 20.0
     SHADOW_LIGHT_SPACE_Z_DOWN = 20.0
 
+    # The two demonstration lights this example adds to Sponza. Intensity is luminous intensity
+    # in lm/sr, multiplied by the light's colour; radius is the light sphere's radius in world
+    # units. Starting points tuned by eye against Sponza's metre scale -- the Lights UI section
+    # is how they are explored further, so they are constants rather than UI state.
+    POINT_LIGHT_INTENSITY = 20.0
+    SPOT_LIGHT_INTENSITY = 60.0
+    LOCAL_LIGHT_RADIUS = 0.05
+
     class UIData:
         """Shared by reference between FeatureDemo and UIRenderer.
 
@@ -323,6 +331,7 @@ if __name__ == "__main__":
                 return False
 
             self.CreateSunLight()
+            self.CreateSceneLights()
             self.scene.FinishedLoading(self.GetFrameIndex())
 
             self.camera.LookAt(0.0, 1.8, 0.0, 1.0, 1.8, 0.0)
@@ -620,10 +629,56 @@ if __name__ == "__main__":
             self.sunLight = pyd.DirectionalLight()
             self.sunLight.angularSize = 0.53
             self.sunLight.irradiance = 1.0
-            self.sunLight.SetName("Sun")
 
             graph.AttachLeafNode(graph.GetRootNode(), self.sunLight)
+            self.sunLight.SetName("Sun")
             self.sunLight.SetDirection(0.1, -0.9, 0.1)
+
+            graph.Refresh(0)
+
+        def CreateSceneLights(self: FeatureDemo) -> None:
+            """Adds the spot and point light this stage demonstrates.
+
+            Unlike CreateSunLight there is no "reuse what the scene declared" branch. The sun is
+            the light the renderer needs and another scene might supply one; these two are the
+            example's own demonstration objects and are always synthesised.
+
+            Attach first, then place. Light.SetPosition, Light.SetDirection and
+            SceneGraphLeaf.SetName all assert (or silently no-op) when the light has no node
+            (SceneTypes.cpp:82, :100; SceneGraph.cpp:40-47), because all three work by writing
+            the owning node's transform or name. They do not clobber each other: SetDirection
+            writes only rotation and scaling (SceneGraph.cpp:282-291).
+
+            Neither light gets a shadow map, and that is load-bearing rather than unfinished.
+            DeferredLightingPass logs an error and returns *without rendering the frame* if two
+            lights present different shadow textures (DeferredLightingPass.cpp:172-175), and a
+            CascadedShadowMap cannot be shared with a local light -- that needs
+            SetupPerObjectShadow, which is unbound. Only the sun casts.
+
+            Nothing else changes to light the scene with these: both shading paths already
+            submit the whole GetLights() list, and both build their constants through the
+            virtual FillLightConstants, which SpotLight and PointLight override.
+            """
+            assert self.scene is not None
+            graph = self.scene.GetSceneGraph()
+            root = graph.GetRootNode()
+
+            point = pyd.PointLight()
+            point.intensity = POINT_LIGHT_INTENSITY
+            point.radius = LOCAL_LIGHT_RADIUS
+            graph.AttachLeafNode(root, point)
+            point.SetName("Point")
+            point.SetPosition(-4.0, 2.0, 0.0)
+
+            spot = pyd.SpotLight()
+            spot.intensity = SPOT_LIGHT_INTENSITY
+            spot.radius = LOCAL_LIGHT_RADIUS
+            spot.innerAngle = 20.0
+            spot.outerAngle = 35.0
+            graph.AttachLeafNode(root, spot)
+            spot.SetName("Spot")
+            spot.SetPosition(4.0, 5.0, 0.0)
+            spot.SetDirection(-0.2, -1.0, 0.0)
 
             graph.Refresh(0)
 
