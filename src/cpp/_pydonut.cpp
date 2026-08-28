@@ -65,6 +65,7 @@
 #include <donut/render/SkyPass.h>
 #include <donut/render/SsaoPass.h>
 #include <donut/render/MipMapGenPass.h>
+#include <donut/render/LightProbeProcessingPass.h>
 #include <donut/render/ToneMappingPasses.h>
 #include <donut/render/BloomPass.h>
 #include <donut/render/CascadedShadowMap.h>
@@ -2983,6 +2984,58 @@ PYBIND11_MODULE(_pydonut, m) {
         // Debug only: blits the levels in a spiral over `target`, which must be large enough.
         .def("Display", &donut::render::MipMapGenPass::Display,
             py::arg("commonPasses"), py::arg("commandList"), py::arg("target"));
+
+    // Turns a rendered environment cube map into the two maps a LightProbe samples: a diffuse
+    // irradiance cube and a roughness-filtered specular cube, plus the split-sum environment
+    // BRDF LUT shared by every probe (LightProbeProcessingPass.h:93-137).
+    //
+    // RenderDiffuseMap and RenderSpecularMap DROP their nvrhi::TextureSubresourceSet parameter
+    // and pass AllSubresources internally. That type is not exposed to Python anywhere,
+    // AllSubresources is what the sample passes at both call sites (FeatureDemo.cpp:1413, :1419),
+    // and clearTextureFloat/clearDepthStencilTexture/resolveTexture above already fold the same
+    // argument away. Adding a subresource-set type for two call sites that both want "all"
+    // would be the tail wagging the dog.
+    py::class_<donut::render::LightProbeProcessingPass, std::shared_ptr<donut::render::LightProbeProcessingPass>>(
+        m, "LightProbeProcessingPass")
+        .def(py::init<nvrhi::IDevice*, std::shared_ptr<donut::engine::ShaderFactory>,
+                std::shared_ptr<donut::engine::CommonRenderPasses>, uint32_t, nvrhi::Format>(),
+            py::arg("device"), py::arg("shaderFactory"), py::arg("commonPasses"),
+            py::arg("intermediateTextureSize") = 1024,
+            py::arg("intermediateTextureFormat") = nvrhi::Format::RGBA16_FLOAT)
+        // Bound for completeness; nothing in this repo calls it. The sample does not either.
+        .def("BlitCubemap", &donut::render::LightProbeProcessingPass::BlitCubemap,
+            py::arg("commandList"), py::arg("inCubeMap"), py::arg("inBaseArraySlice"), py::arg("inMipLevel"),
+            py::arg("outCubeMap"), py::arg("outBaseArraySlice"), py::arg("outMipLevel"))
+        .def("GenerateCubemapMips", &donut::render::LightProbeProcessingPass::GenerateCubemapMips,
+            py::arg("commandList"), py::arg("cubeMap"), py::arg("baseArraySlice"),
+            py::arg("sourceMipLevel"), py::arg("levelsToGenerate"))
+        .def("RenderDiffuseMap", [](donut::render::LightProbeProcessingPass &self,
+                nvrhi::ICommandList* commandList, nvrhi::ITexture* inEnvironmentMap,
+                nvrhi::ITexture* outDiffuseMap, uint32_t outBaseArraySlice, uint32_t outMipLevel) {
+            self.RenderDiffuseMap(commandList, inEnvironmentMap, nvrhi::AllSubresources,
+                outDiffuseMap, outBaseArraySlice, outMipLevel);
+        }, py::arg("commandList"), py::arg("inEnvironmentMap"),
+           py::arg("outDiffuseMap"), py::arg("outBaseArraySlice"), py::arg("outMipLevel"))
+        // The out-parameter is named outSpecularMap here, not outDiffuseMap as the header has it
+        // (LightProbeProcessingPass.h:131) -- a copy-paste slip in donut, not a real alias.
+        .def("RenderSpecularMap", [](donut::render::LightProbeProcessingPass &self,
+                nvrhi::ICommandList* commandList, float roughness, nvrhi::ITexture* inEnvironmentMap,
+                nvrhi::ITexture* outSpecularMap, uint32_t outBaseArraySlice, uint32_t outMipLevel) {
+            self.RenderSpecularMap(commandList, roughness, inEnvironmentMap, nvrhi::AllSubresources,
+                outSpecularMap, outBaseArraySlice, outMipLevel);
+        }, py::arg("commandList"), py::arg("roughness"), py::arg("inEnvironmentMap"),
+           py::arg("outSpecularMap"), py::arg("outBaseArraySlice"), py::arg("outMipLevel"))
+        .def("RenderEnvironmentBrdfTexture", &donut::render::LightProbeProcessingPass::RenderEnvironmentBrdfTexture,
+            py::arg("commandList"))
+        // Raw ITexture* owned by the pass. reference (not reference_internal) matches the other
+        // texture getters in this module; the caller is responsible for not outliving the pass,
+        // which is why feature_demo.py disables every probe when it recreates this pass.
+        .def("GetEnvironmentBrdfTexture", &donut::render::LightProbeProcessingPass::GetEnvironmentBrdfTexture,
+            py::return_value_policy::reference)
+        // Drops the framebuffer, PSO and binding-set caches. Correct for a caller that KEEPS the
+        // pass but has invalidated what it cached. feature_demo.py's shader reload recreates the
+        // pass instead -- the constructor is what compiles its five shaders.
+        .def("ResetCaches", &donut::render::LightProbeProcessingPass::ResetCaches);
 
     py::class_<donut::render::ToneMappingParameters>(m, "ToneMappingParameters")
         .def(py::init<>())

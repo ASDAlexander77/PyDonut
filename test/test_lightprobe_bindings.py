@@ -151,3 +151,65 @@ def test_set_light_probes_empty_list_is_the_off_switch() -> None:
     # it passes [] rather than needing a way to null the pointer.
     inputs = pyd.DeferredLightingPassInputs()
     assert inputs.SetLightProbes([]) is None
+
+
+def test_light_probe_processing_pass_is_re_exported() -> None:
+    assert "LightProbeProcessingPass" in pyd.__all__
+
+
+def test_light_probe_processing_pass_exposes_every_method() -> None:
+    # All seven bind. BlitCubemap is the one the sample never calls, but it is a single line and
+    # omitting it would leave a visibly incomplete class.
+    for name in ("BlitCubemap", "GenerateCubemapMips", "RenderDiffuseMap", "RenderSpecularMap",
+                 "RenderEnvironmentBrdfTexture", "GetEnvironmentBrdfTexture", "ResetCaches"):
+        assert hasattr(pyd.LightProbeProcessingPass, name), name
+
+
+def test_light_probe_processing_pass_constructor_defaults() -> None:
+    # LightProbeProcessingPass.h:93-99. feature_demo.py passes neither, so the defaults are what
+    # it actually runs with.
+    doc = pyd.LightProbeProcessingPass.__init__.__doc__
+    assert doc is not None
+    assert "intermediateTextureSize: typing.SupportsInt | typing.SupportsIndex = 1024" in doc
+    assert "intermediateTextureFormat: pydonut._pydonut.Format = " in doc
+    assert "RGBA16_FLOAT" in doc
+
+
+def test_render_diffuse_map_folds_away_the_subresource_set() -> None:
+    # C++ takes nvrhi::TextureSubresourceSet inSubresources (LightProbeProcessingPass.h:118).
+    # That type is not exposed to Python anywhere, AllSubresources is what the sample passes
+    # (FeatureDemo.cpp:1413), and the existing clear/resolve bindings already set the precedent
+    # of folding the subresource argument away. So the parameter is absent, not optional.
+    doc = pyd.LightProbeProcessingPass.RenderDiffuseMap.__doc__
+    assert doc is not None
+    assert "inSubresources" not in doc
+    assert "TextureSubresourceSet" not in doc
+    assert "inEnvironmentMap" in doc
+    assert "outDiffuseMap" in doc
+
+
+def test_render_specular_map_takes_roughness_before_the_source() -> None:
+    # Argument order matches C++ (LightProbeProcessingPass.h:126-132): roughness precedes the
+    # environment map. feature_demo.py loops mip levels computing roughness per level, so
+    # getting this backwards would silently pass a mip index as a roughness.
+    doc = pyd.LightProbeProcessingPass.RenderSpecularMap.__doc__
+    assert doc is not None
+    assert doc.index("roughness") < doc.index("inEnvironmentMap")
+    assert "inSubresources" not in doc
+
+
+def test_render_specular_map_names_its_own_target() -> None:
+    # donut's header calls this parameter outDiffuseMap (LightProbeProcessingPass.h:131), a
+    # copy-paste slip from RenderDiffuseMap. The binding names it outSpecularMap.
+    doc = pyd.LightProbeProcessingPass.RenderSpecularMap.__doc__
+    assert doc is not None
+    assert "outSpecularMap" in doc
+    assert "outDiffuseMap" not in doc
+
+
+def test_generate_cubemap_mips_signature() -> None:
+    # feature_demo.py calls this with (colorTexture, 0, 0, mipLevels - 1).
+    doc = pyd.LightProbeProcessingPass.GenerateCubemapMips.__doc__
+    assert doc is not None
+    for name in ("cubeMap", "baseArraySlice", "sourceMipLevel", "levelsToGenerate"):
+        assert name in doc, name

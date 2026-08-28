@@ -173,6 +173,7 @@ from pydonut._pydonut import SsaoParameters
 from pydonut._pydonut import SsaoPass
 from pydonut._pydonut import MipMapGenPassMode
 from pydonut._pydonut import MipMapGenPass
+from pydonut._pydonut import LightProbeProcessingPass
 from pydonut._pydonut import ToneMappingParameters
 from pydonut._pydonut import ToneMappingPassCreateParameters
 from pydonut._pydonut import ToneMappingPass
@@ -372,6 +373,7 @@ __all__ = (
     'SsaoPass',
     'MipMapGenPassMode',
     'MipMapGenPass',
+    'LightProbeProcessingPass',
     'ToneMappingParameters',
     'ToneMappingPassCreateParameters',
     'ToneMappingPass',
