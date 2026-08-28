@@ -169,6 +169,8 @@ from pydonut._pydonut import SkyParameters
 from pydonut._pydonut import SkyPass
 from pydonut._pydonut import SsaoParameters
 from pydonut._pydonut import SsaoPass
+from pydonut._pydonut import MipMapGenPassMode
+from pydonut._pydonut import MipMapGenPass
 from pydonut._pydonut import ToneMappingParameters
 from pydonut._pydonut import ToneMappingPassCreateParameters
 from pydonut._pydonut import ToneMappingPass
@@ -177,6 +179,8 @@ from pydonut._pydonut import CascadedShadowMap
 from pydonut._pydonut import FramebufferFactory
 from pydonut._pydonut import RenderView
 from pydonut._pydonut import RenderCompositeView
+from pydonut._pydonut import SaveTextureToFile
+from pydonut._pydonut import FileDialog
 from pydonut._pydonut import AdapterInfo
 from pydonut._pydonut import IRenderPass
 from pydonut._pydonut import ApplicationBase
@@ -362,6 +366,8 @@ __all__ = (
     'SkyPass',
     'SsaoParameters',
     'SsaoPass',
+    'MipMapGenPassMode',
+    'MipMapGenPass',
     'ToneMappingParameters',
     'ToneMappingPassCreateParameters',
     'ToneMappingPass',
@@ -370,6 +376,8 @@ __all__ = (
     'FramebufferFactory',
     'RenderView',
     'RenderCompositeView',
+    'SaveTextureToFile',
+    'FileDialog',
     'AdapterInfo',
     'IRenderPass',
     'ApplicationBase',

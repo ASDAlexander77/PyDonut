@@ -25,6 +25,7 @@
 #include <vector>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <filesystem>
 
 #include <pybind11/pybind11.h>
@@ -63,6 +64,7 @@
 #include <donut/render/TemporalAntiAliasingPass.h>
 #include <donut/render/SkyPass.h>
 #include <donut/render/SsaoPass.h>
+#include <donut/render/MipMapGenPass.h>
 #include <donut/render/ToneMappingPasses.h>
 #include <donut/render/BloomPass.h>
 #include <donut/render/CascadedShadowMap.h>
@@ -2878,6 +2880,33 @@ PYBIND11_MODULE(_pydonut, m) {
             self.Render(commandList, params, compositeView);
         }, py::arg("commandList"), py::arg("params"), py::arg("compositeView"));
 
+    // MipMapGenPass::Mode (MipMapGenPass.h:47-52), flattened to module scope the same way
+    // GBufferFillPass::CreateParameters binds as GBufferFillPassCreateParameters. All four
+    // values bind: native_enum casts C++ -> Python by constructing the enum from an int and
+    // raises ValueError for an unbound one, so a partial binding is a latent crash.
+    pybind11::native_enum<donut::render::MipMapGenPass::Mode>(m, "MipMapGenPassMode", "enum.Enum")
+        .value("MODE_COLOR", donut::render::MipMapGenPass::Mode::MODE_COLOR)
+        .value("MODE_MIN", donut::render::MipMapGenPass::Mode::MODE_MIN)
+        .value("MODE_MAX", donut::render::MipMapGenPass::Mode::MODE_MAX)
+        .value("MODE_MINMAX", donut::render::MipMapGenPass::Mode::MODE_MINMAX)
+        .finalize();
+
+    // Compute-shader mip-chain reduction. `texture` MUST already have been allocated with mip
+    // levels -- the pass binds one UAV per level at construction, so a single-level texture
+    // gives it nothing to write. feature_demo.py gives ResolvedColor a full chain purely to
+    // exercise this (FeatureDemo.cpp:135).
+    py::class_<donut::render::MipMapGenPass, std::shared_ptr<donut::render::MipMapGenPass>>(m, "MipMapGenPass")
+        .def(py::init<nvrhi::IDevice*, std::shared_ptr<donut::engine::ShaderFactory>,
+                nvrhi::TextureHandle, donut::render::MipMapGenPass::Mode>(),
+            py::arg("device"), py::arg("shaderFactory"), py::arg("texture"),
+            py::arg("mode") = donut::render::MipMapGenPass::Mode::MODE_MAX)
+        // Reads LOD 0 and populates LOD 1 and up. maxLOD = -1 means every level.
+        .def("Dispatch", &donut::render::MipMapGenPass::Dispatch,
+            py::arg("commandList"), py::arg("maxLOD") = -1)
+        // Debug only: blits the levels in a spiral over `target`, which must be large enough.
+        .def("Display", &donut::render::MipMapGenPass::Display,
+            py::arg("commonPasses"), py::arg("commandList"), py::arg("target"));
+
     py::class_<donut::render::ToneMappingParameters>(m, "ToneMappingParameters")
         .def(py::init<>())
         .def_readwrite("histogramLowPercentile", &donut::render::ToneMappingParameters::histogramLowPercentile)
@@ -3110,6 +3139,54 @@ PYBIND11_MODULE(_pydonut, m) {
        // data and issues draws into the caller's own CommandList, touching no Python objects.
        // Argument conversion (including passEvent's string) completes before the guard applies.
        py::call_guard<py::gil_scoped_release>());
+
+    // Writes slice 0, mip 0 of a texture to an image file; the format comes from the extension
+    // (BMP, PNG, JPG, TGA). Takes a raw CommonRenderPasses* in C++ (TextureCache.h:243-249),
+    // so unwrap the shared_ptr the module holds it as.
+    //
+    // The header requires that no immediate command list be open when this is called, and it
+    // creates and destroys temporary resources internally -- so call it after
+    // executeCommandList and not once per frame.
+    m.def("SaveTextureToFile", [](nvrhi::IDevice* device,
+            const std::shared_ptr<donut::engine::CommonRenderPasses> &commonPasses,
+            nvrhi::ITexture* texture, nvrhi::ResourceStates textureState,
+            const std::string &fileName, bool saveAlphaChannel) {
+        return donut::engine::SaveTextureToFile(device, commonPasses.get(), texture, textureState,
+            fileName.c_str(), saveAlphaChannel);
+    }, py::arg("device"), py::arg("commonPasses"), py::arg("texture"), py::arg("textureState"),
+       py::arg("fileName"), py::arg("saveAlphaChannel") = true);
+
+    // Native modal save/open dialog. The C++ signature is hostile from Python on both ends
+    // (UserInterfaceUtils.h:39): it wants a double-NUL-terminated filter buffer, which cannot
+    // survive a str conversion, and returns its result through a std::string& out-param. So
+    // this takes (description, pattern) pairs, packs the buffer here, and returns Optional[str]
+    // -- None when the user cancels.
+    //
+    // On Windows this is GetSaveFileNameA/GetOpenFileNameA; on Linux it shells out to `zenity`
+    // (UserInterfaceUtils.cpp:74-88), which may not be installed. A None return therefore does
+    // not distinguish "cancelled" from "no dialog available" -- callers that need a file
+    // regardless must supply their own fallback path, as feature_demo.py does.
+    //
+    // Blocking and modal: never call it from a test.
+    m.def("FileDialog", [](bool bOpen, const std::vector<std::pair<std::string, std::string>> &filters)
+            -> std::optional<std::string> {
+        std::string packed;
+        for (const auto &filter : filters)
+        {
+            packed.append(filter.first);
+            packed.push_back('\0');
+            packed.append(filter.second);
+            packed.push_back('\0');
+        }
+        // The buffer is terminated by a second NUL after the last pattern. An empty filter list
+        // still needs one, so the terminator is appended unconditionally.
+        packed.push_back('\0');
+
+        std::string fileName;
+        if (!donut::app::FileDialog(bOpen, packed.c_str(), fileName))
+            return std::nullopt;
+        return fileName;
+    }, py::arg("bOpen"), py::arg("filters"));
 
     // BaseCamera is registered (opaque, no constructor -- Python never creates one directly)
     // purely so FirstPersonCamera/ThirdPersonCamera can share it as a pybind11 base, letting
@@ -3540,9 +3617,9 @@ PYBIND11_MODULE(_pydonut, m) {
     // It draws into whatever ImGui window is current, so it is called from inside buildUI
     // between Begin and End. Returns whether the user changed anything.
     //
-    // FileDialog and FolderDialog from the same header stay unbound: they belong to later
-    // stages. AzimuthElevationSliders stays unbound too, as an implementation detail of the
-    // editors above it.
+    // FolderDialog from the same header stays unbound -- nothing in this repo needs it.
+    // AzimuthElevationSliders stays unbound too, as an implementation detail of the editors
+    // above it. FileDialog itself is bound separately, near the other module-level functions.
     m.def("LightEditor", [](donut::engine::Light &light) {
         return donut::app::LightEditor(light);
     }, py::arg("light"));

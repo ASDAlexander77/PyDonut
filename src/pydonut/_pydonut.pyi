@@ -1590,6 +1590,23 @@ class SsaoPass():
     def __init__(self: SsaoPass, device: Device, shaderFactory: ShaderFactory, commonPasses: CommonRenderPasses, gbufferDepth: Texture, gbufferNormals: Texture, destinationTexture: Texture) -> None: ...
     def Render(self: SsaoPass, commandList: CommandList, params: SsaoParameters, compositeView: IView) -> None: ...
 
+# MipMapGenPass::Mode, flattened to module scope. All four values bind -- a partial enum
+# binding raises ValueError when C++ hands back an unbound one.
+class MipMapGenPassMode(Enum):
+    MODE_COLOR = 0
+    MODE_MIN = 1
+    MODE_MAX = 2
+    MODE_MINMAX = 3
+
+# Compute-shader mip-chain reduction. `texture` must already have been allocated with mip
+# levels -- the pass binds one UAV per level at construction.
+class MipMapGenPass():
+    def __init__(self: MipMapGenPass, device: Device, shaderFactory: ShaderFactory, texture: Texture, mode: MipMapGenPassMode = ...) -> None: ...
+    # Reads LOD 0 and populates LOD 1 and up. maxLOD = -1 means every level.
+    def Dispatch(self: MipMapGenPass, commandList: CommandList, maxLOD: int = -1) -> None: ...
+    # Debug only: blits the levels in a spiral over `target`, which must be large enough.
+    def Display(self: MipMapGenPass, commonPasses: CommonRenderPasses, commandList: CommandList, target: Framebuffer) -> None: ...
+
 class ToneMappingParameters():
     histogramLowPercentile: float
     histogramHighPercentile: float
@@ -1671,6 +1688,18 @@ def RenderView(commandList: CommandList, view: IView, viewPrev: Optional[IView],
 # passEvent names the pass in a graphics capture. It sits after materialEvents rather than in the
 # C++ parameter order because existing callers pass materialEvents positionally.
 def RenderCompositeView(commandList: CommandList, view: ICompositeView, viewPrev: Optional[ICompositeView], framebufferFactory: FramebufferFactory, rootNode: SceneGraphNode, drawStrategy: IDrawStrategy, pass_: IGeometryPass, passContext: GeometryPassContext, materialEvents: bool = False, passEvent: Optional[str] = None) -> None: ...
+
+# Writes slice 0, mip 0 of a texture to an image file; the format comes from the extension
+# (BMP, PNG, JPG, TGA). Requires that no immediate command list be open, and creates and
+# destroys temporary resources internally -- call it after executeCommandList, not per frame.
+def SaveTextureToFile(device: Device, commonPasses: CommonRenderPasses, texture: Texture, textureState: ResourceStates, fileName: str, saveAlphaChannel: bool = True) -> bool: ...
+
+# Native modal save/open dialog. Takes (description, pattern) pairs -- the C++ wants a
+# double-NUL-terminated buffer, which cannot survive a str conversion -- and returns None when
+# the user cancels. On Linux this shells out to `zenity`, so None also means "no dialog
+# available"; callers needing a file regardless must supply their own fallback path.
+# Blocking and modal: never call it from a test.
+def FileDialog(bOpen: bool, filters: list[tuple[str, str]]) -> Optional[str]: ...
 
 class AdapterInfo():
     name: str
