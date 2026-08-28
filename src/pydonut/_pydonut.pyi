@@ -1378,6 +1378,31 @@ class PlanarView(IView):
     # Raw bytes of the engine's PlanarViewConstants struct, ready for CommandList.writeBuffer.
     def FillPlanarViewConstants(self: PlanarView) -> bytes: ...
 
+# Two PlanarViews side by side, with the composite-view interface fanning out over both. Used
+# for the split-viewport stereo mode; no stereo hardware involved.
+#
+# Most IView matrix accessors are assert(false) + identity on this type and are deliberately
+# not bound -- asserts compile out in this project's Release build, so they would fail silently.
+# GetViewFrustum and GetProjectionFrustum ARE meaningfully overridden and reach C++ through the
+# pass signatures.
+class StereoPlanarView(IView):
+    @overload
+    def __init__(self: StereoPlanarView) -> None: ...
+    # Copy constructor, mirroring PlanarView's: how Python snapshots this frame's view as next
+    # frame's previous view.
+    @overload
+    def __init__(self: StereoPlanarView, other: StereoPlanarView) -> None: ...
+    # Live references into the stereo view, not copies -- writes through them persist.
+    @property
+    def LeftView(self: StereoPlanarView) -> PlanarView: ...
+    @property
+    def RightView(self: StereoPlanarView) -> PlanarView: ...
+    # One shared projection; the right eye's view matrix is the left's translated along X.
+    # `aspectRatio` is the PER-EYE ratio -- pass width / height * 0.5, since each eye owns half
+    # the framebuffer width. Call UpdateCache() on each eye afterwards: StereoPlanarView has
+    # none of its own.
+    def SetMatricesFromSwitchableCamera(self: StereoPlanarView, camera: SwitchableCamera, aspectRatio: float, eyeSeparation: float = 0.2, verticalFovRadians: float = ..., zNear: float = 0.1) -> None: ...
+
 # Splits one transform into 6 face view/proj matrices for cube-map/environment rendering. Its
 # faces are plain PlanarView instances internally, so GetFaceView returns the existing
 # PlanarView type rather than a new view hierarchy.

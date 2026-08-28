@@ -140,6 +140,7 @@ from pydonut._pydonut import SwitchableCamera
 from pydonut._pydonut import ICompositeView
 from pydonut._pydonut import IView
 from pydonut._pydonut import PlanarView
+from pydonut._pydonut import StereoPlanarView
 from pydonut._pydonut import CubemapView
 from pydonut._pydonut import IDrawStrategy
 from pydonut._pydonut import IGeometryPass
@@ -337,6 +338,7 @@ __all__ = (
     'ICompositeView',
     'IView',
     'PlanarView',
+    'StereoPlanarView',
     'CubemapView',
     'IDrawStrategy',
     'IGeometryPass',

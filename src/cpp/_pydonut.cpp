@@ -3432,6 +3432,61 @@ PYBIND11_MODULE(_pydonut, m) {
         return py::bytes(reinterpret_cast<const char*>(&constants), sizeof(constants));
     });
 
+    // StereoView<PlanarView> (View.h:337): two PlanarView members with the composite-view
+    // interface fanning out over both. feature_demo.py renders both eyes side by side into one
+    // framebuffer, so this needs no stereo hardware.
+    //
+    // Registered as an IView (not just ICompositeView) because StereoView derives from IView
+    // directly, and several of the passes widened alongside this take IView.
+    //
+    // NOTE most of the IView accessors are dangerous on this type: GetViewMatrix,
+    // GetInverseViewMatrix, GetProjectionMatrix, GetViewProjectionMatrix and their inverses are
+    // all assert(false) + identity (View.h:256-292), and asserts compile out in this project's
+    // Release build. None of them is bound here. GetViewFrustum and GetProjectionFrustum ARE
+    // meaningfully overridden (View.h:235-255) and reach C++ through the widened pass
+    // signatures, which is why CascadedShadowMap.SetupForPlanarViewStable takes its inverse
+    // view matrix from a planar child view rather than from the composite.
+    py::class_<donut::engine::StereoPlanarView, donut::engine::IView> stereoPlanarView(m, "StereoPlanarView");
+    stereoPlanarView.def(py::init<>());
+    // Copy constructor, mirroring PlanarView's: how Python snapshots this frame's view as next
+    // frame's previous view (FeatureDemo.cpp:753).
+    stereoPlanarView.def(py::init<const donut::engine::StereoPlanarView&>(), py::arg("other"));
+    // Live references into the stereo view, NOT copies. A copy would silently discard every
+    // viewport and pixel-offset write the caller makes -- the same trap
+    // SwitchableCamera.GetFirstPersonCamera documents. reference_internal also keeps the owning
+    // StereoPlanarView alive for as long as Python holds an eye.
+    stereoPlanarView.def_property_readonly("LeftView",
+        [](donut::engine::StereoPlanarView &self) -> donut::engine::PlanarView* { return &self.LeftView; },
+        py::return_value_policy::reference_internal);
+    stereoPlanarView.def_property_readonly("RightView",
+        [](donut::engine::StereoPlanarView &self) -> donut::engine::PlanarView* { return &self.RightView; },
+        py::return_value_policy::reference_internal);
+    // The stereo counterpart of PlanarView.SetMatricesFromSwitchableCamera, with the eye offset
+    // applied C++-side so dm::affine3 never crosses into Python. Reproduces
+    // FeatureDemo.cpp:735-744: one shared projection, and the right eye's view matrix is the
+    // left's translated along X.
+    //
+    // `aspectRatio` is the PER-EYE aspect ratio -- the caller passes width / height * 0.5,
+    // since each eye owns half the framebuffer width (FeatureDemo.cpp:736). This does not halve
+    // it internally, so the argument means the same thing it does on the planar shim.
+    //
+    // Neither eye's UpdateCache is called here: StereoView has no cache of its own, and the two
+    // children have to be updated individually, as the sample does (FeatureDemo.cpp:748-749).
+    stereoPlanarView.def("SetMatricesFromSwitchableCamera", [](donut::engine::StereoPlanarView &self,
+            const donut::app::SwitchableCamera &camera, float aspectRatio, float eyeSeparation,
+            float verticalFovRadians, float zNear) {
+        // Both are by-value parameters, so this overwrites the local copies, not the caller's.
+        camera.GetSceneCameraProjectionParams(verticalFovRadians, zNear);
+        const donut::math::float4x4 projection =
+            donut::math::perspProjD3DStyleReverse(verticalFovRadians, aspectRatio, zNear);
+        const donut::math::affine3 leftView = camera.GetWorldToViewMatrix();
+        self.LeftView.SetMatrices(leftView, projection);
+        donut::math::affine3 rightView = leftView;
+        rightView.m_translation -= donut::math::float3(eyeSeparation, 0.f, 0.f);
+        self.RightView.SetMatrices(rightView, projection);
+    }, py::arg("camera"), py::arg("aspectRatio"), py::arg("eyeSeparation") = 0.2f,
+       py::arg("verticalFovRadians") = donut::math::PI_f * 0.25f, py::arg("zNear") = 0.1f);
+
     // CubemapView splits one transform into 6 face view/proj matrices for cube-map/environment
     // rendering (see threaded_rendering.py). Its faces are a plain PlanarView[6] internally, so
     // GetFaceView returns the existing PlanarView type -- no new view hierarchy is exposed.
