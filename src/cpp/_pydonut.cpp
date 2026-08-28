@@ -2393,8 +2393,19 @@ PYBIND11_MODULE(_pydonut, m) {
     //
     // GetViewToWorldMatrix and GetWorldToViewMatrix stay unbound: both return dm::affine3,
     // which SwitchableCamera consumes internally (see SetMatricesFromSwitchableCamera).
+    // GetPosition below is the one thing Python needs off them.
     py::class_<donut::engine::SceneCamera, donut::engine::SceneGraphLeaf,
-               std::shared_ptr<donut::engine::SceneCamera>>(m, "SceneCamera");
+               std::shared_ptr<donut::engine::SceneCamera>>(m, "SceneCamera")
+        // The camera's WORLD position, from the view-to-world translation.
+        //
+        // NOTE this deliberately differs from FeatureDemo.cpp:1351, which reads
+        // GetWorldToViewMatrix().m_translation for the same purpose. That is -R*p, not p: for
+        // any camera with a non-identity rotation it is not the camera's position, and Sponza's
+        // Gallery camera is rotated. Reading the view-to-world translation gives the real one.
+        .def("GetPosition", [](const donut::engine::SceneCamera &self) {
+            const donut::math::float3 p = self.GetViewToWorldMatrix().m_translation;
+            return py::make_tuple(p.x, p.y, p.z);
+        });
 
     // PerspectiveCamera (SceneGraph.h:154-165). NOTE verticalFov is in RADIANS, unlike
     // SpotLight's innerAngle/outerAngle, which are degrees.
@@ -2782,7 +2793,13 @@ PYBIND11_MODULE(_pydonut, m) {
     // recorded per-face command lists consumes its own volatile constant buffer version).
     py::class_<donut::render::ForwardShadingPass::CreateParameters>(m, "ForwardShadingPassCreateParameters")
         .def(py::init<>())
-        .def_readwrite("numConstantBufferVersions", &donut::render::ForwardShadingPass::CreateParameters::numConstantBufferVersions);
+        .def_readwrite("numConstantBufferVersions", &donut::render::ForwardShadingPass::CreateParameters::numConstantBufferVersions)
+        // Renders all six cube faces in one pass using a fast geometry shader instead of six
+        // draws. Only meaningful when the device reports Feature::FastGeometryShader; the sample
+        // gates it exactly that way (FeatureDemo.cpp:1379). Default false -- the app's own
+        // forward pass targets the back buffer and must stay six-pass; only the throwaway pass
+        // built per probe capture opts in.
+        .def_readwrite("singlePassCubemap", &donut::render::ForwardShadingPass::CreateParameters::singlePassCubemap);
 
     py::class_<donut::render::ForwardShadingPass::Context, donut::render::GeometryPassContext>(m, "ForwardShadingPassContext")
         .def(py::init<>());
@@ -3129,9 +3146,9 @@ PYBIND11_MODULE(_pydonut, m) {
     // numberOfCascades is left at its -1 default (meaning "all allocated cascades") because the
     // cascade count is a *construction* parameter -- see the skip note below.
     //
-    // Skipped: SetupForCubemapView and SetupPerObjectShadow (they need the light types and
-    // per-object shadow slices a later stage binds), SetupProxyViews, GetPerObjectView, and
-    // SetNumberOfCascadesUnsafe -- that setter only moves m_NumberOfCascades, which is what the
+    // Skipped: SetupPerObjectShadow (it needs the per-object shadow slices a later stage would
+    // bind), SetupProxyViews, GetPerObjectView, and SetNumberOfCascadesUnsafe -- that setter
+    // only moves m_NumberOfCascades, which is what the
     // shaders read, while m_CompositeView is built once in the constructor (CascadedShadowMap.
     // cpp:67) and never rebuilt. Lowering the count through it would leave GetView() rendering
     // every allocated slice, burning a scene depth pass per unused cascade and writing into
@@ -3183,6 +3200,21 @@ PYBIND11_MODULE(_pydonut, m) {
             return self.SetupForPlanarViewStable(light, view.GetProjectionFrustum(),
                 planarView->GetInverseViewMatrix(), maxShadowDistance, lightSpaceZUp,
                 lightSpaceZDown, exponent);
+        }, py::arg("light"), py::arg("view"), py::arg("maxShadowDistance"),
+            py::arg("lightSpaceZUp"), py::arg("lightSpaceZDown"), py::arg("exponent") = 4.0f)
+        // Cascades all centred on one point, for an omnidirectional view. Takes the VIEW rather
+        // than the dm::float3 centre the C++ wants (CascadedShadowMap.h:79-85) and reads
+        // GetViewOrigin() off it -- the same shape as the two planar variants above, which
+        // likewise take an IView and extract the frustum data internally. GetViewOrigin is pure
+        // virtual on IView (View.h:69), so this is not CubemapView-specific.
+        //
+        // numberOfCascades stays unbound, as it does on both planar variants.
+        .def("SetupForCubemapView", [](donut::render::CascadedShadowMap &self,
+                const donut::engine::DirectionalLight &light, const donut::engine::IView &view,
+                float maxShadowDistance, float lightSpaceZUp, float lightSpaceZDown, float exponent) {
+            RequireCascadeExponent("SetupForCubemapView", exponent);
+            return self.SetupForCubemapView(light, view.GetViewOrigin(), maxShadowDistance,
+                lightSpaceZUp, lightSpaceZDown, exponent);
         }, py::arg("light"), py::arg("view"), py::arg("maxShadowDistance"),
             py::arg("lightSpaceZUp"), py::arg("lightSpaceZDown"), py::arg("exponent") = 4.0f)
         .def("Clear", &donut::render::CascadedShadowMap::Clear, py::arg("commandList"))
@@ -3339,6 +3371,12 @@ PYBIND11_MODULE(_pydonut, m) {
         .def("GetUp", [](const donut::app::BaseCamera &self) {
             const donut::math::float3 &u = self.GetUp();
             return py::make_tuple(u.x, u.y, u.z);
+        })
+        // (x, y, z) -- math types aren't exposed to Python, same as GetDir/GetUp above. A light
+        // probe captures at the active camera's position, which is the only caller.
+        .def("GetPosition", [](const donut::app::BaseCamera &self) {
+            const donut::math::float3 &p = self.GetPosition();
+            return py::make_tuple(p.x, p.y, p.z);
         });
 
     py::class_<donut::app::FirstPersonCamera, donut::app::BaseCamera> firstPersonCamera(m, "FirstPersonCamera");
@@ -3428,11 +3466,19 @@ PYBIND11_MODULE(_pydonut, m) {
             py::arg("button"), py::arg("action"), py::arg("mods"))
         .def("MouseScrollUpdate", &donut::app::SwitchableCamera::MouseScrollUpdate,
             py::arg("xoffset"), py::arg("yoffset"))
-        .def("Animate", &donut::app::SwitchableCamera::Animate, py::arg("deltaT"));
-    // GetActiveUserCamera and GetWorldToViewMatrix stay unbound: the first is an internal
-    // detail of the input routing that is already bound above, and the second returns a
-    // matrix, which SetMatricesFromSwitchableCamera consumes in C++. JoystickUpdate and
-    // JoystickButtonUpdate stay unbound -- no example handles joystick input.
+        .def("Animate", &donut::app::SwitchableCamera::Animate, py::arg("deltaT"))
+        // Returns the first- or third-person camera the SwitchableCamera owns, whichever is
+        // active -- a live reference, not a copy, same guarantee as GetFirstPersonCamera.
+        // reference_internal keeps the owner alive for as long as Python holds the camera.
+        //
+        // Returns the last-active USER camera even when a scene camera is active; callers that
+        // care check IsSceneCameraActive() first, as feature_demo.py's probe capture does.
+        .def("GetActiveUserCamera", [](donut::app::SwitchableCamera &self) -> donut::app::BaseCamera* {
+            return self.GetActiveUserCamera();
+        }, py::return_value_policy::reference_internal);
+    // GetWorldToViewMatrix stays unbound: it returns a matrix, which
+    // SetMatricesFromSwitchableCamera consumes in C++. JoystickUpdate and JoystickButtonUpdate
+    // stay unbound -- no example handles joystick input.
 
     // ICompositeView/IView are registered as real polymorphic bases rather than having every
     // pass signature hardcode PlanarView&: SkyPass/SsaoPass/ToneMappingPass/BloomPass all take
@@ -3634,6 +3680,17 @@ PYBIND11_MODULE(_pydonut, m) {
             float zNear, float cullDistance, bool useReverseInfiniteProjections) {
         self.SetTransform(camera.GetWorldToViewMatrix(), zNear, cullDistance, useReverseInfiniteProjections);
     }, py::arg("camera"), py::arg("zNear"), py::arg("cullDistance"), py::arg("useReverseInfiniteProjections") = true);
+    // The probe-capture form. CubemapView::SetTransform takes a dm::affine3 (View.h:361), and
+    // the only affine3 the sample ever builds for it is a pure negated translation
+    // (FeatureDemo.cpp:1353) -- so take the position and build the matrix here, exactly as
+    // SetTransformFromCamera takes the camera and fetches its matrix here.
+    cubemapView.def("SetTransformFromPosition", [](donut::engine::CubemapView &self,
+            float x, float y, float z, float zNear, float cullDistance,
+            bool useReverseInfiniteProjections) {
+        self.SetTransform(donut::math::translation(-donut::math::float3(x, y, z)),
+            zNear, cullDistance, useReverseInfiniteProjections);
+    }, py::arg("x"), py::arg("y"), py::arg("z"), py::arg("zNear"), py::arg("cullDistance"),
+       py::arg("useReverseInfiniteProjections") = true);
     cubemapView.def("SetArrayViewports", &donut::engine::CubemapView::SetArrayViewports,
         py::arg("resolution"), py::arg("firstArraySlice"));
     cubemapView.def("UpdateCache", &donut::engine::CubemapView::UpdateCache);

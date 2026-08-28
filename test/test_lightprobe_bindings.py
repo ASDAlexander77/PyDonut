@@ -213,3 +213,144 @@ def test_generate_cubemap_mips_signature() -> None:
     assert doc is not None
     for name in ("cubeMap", "baseArraySlice", "sourceMipLevel", "levelsToGenerate"):
         assert name in doc, name
+
+
+def test_cubemap_view_set_transform_from_position_defaults_the_projection_flag() -> None:
+    # C++ SetTransform takes a dm::affine3 (View.h:361), which cannot cross into Python, and the
+    # only affine3 the sample ever builds for it is dm::translation(-probePosition)
+    # (FeatureDemo.cpp:1353). So the binding takes the position and builds the matrix itself,
+    # named to sit beside the existing SetTransformFromCamera.
+    doc = pyd.CubemapView.SetTransformFromPosition.__doc__
+    assert doc is not None
+    assert "useReverseInfiniteProjections: bool = True" in doc
+    assert "affine3" not in doc
+
+
+def test_cubemap_view_set_transform_from_position_moves_the_faces() -> None:
+    # Behavioural, not a doc check: CubemapView is constructible without a device, and its faces
+    # are PlanarViews, which expose FillPlanarViewConstants(). Two different probe positions must
+    # therefore produce different face constants -- that is what proves the position reaches the
+    # matrix rather than being dropped.
+    near = pyd.CubemapView()
+    near.SetArrayViewports(256, 0)
+    near.SetTransformFromPosition(0.0, 0.0, 0.0, 0.1, 100.0)
+    near.UpdateCache()
+
+    far = pyd.CubemapView()
+    far.SetArrayViewports(256, 0)
+    far.SetTransformFromPosition(10.0, 5.0, -3.0, 0.1, 100.0)
+    far.UpdateCache()
+
+    assert near.GetFaceView(0).FillPlanarViewConstants() != far.GetFaceView(0).FillPlanarViewConstants()
+
+
+def test_cubemap_view_still_takes_a_camera() -> None:
+    # Regression: SetTransformFromPosition is an addition, not a replacement.
+    # threaded_rendering.py drives the camera form.
+    assert hasattr(pyd.CubemapView, "SetTransformFromCamera")
+
+
+def test_setup_for_cubemap_view_takes_a_view_not_a_centre() -> None:
+    # C++ takes a dm::float3 centre (CascadedShadowMap.h:79-85) and the sample passes
+    # view.GetViewOrigin(). Rather than bind GetViewOrigin and round-trip three floats, the
+    # binding takes the view and reads the origin off it -- deliberately the same shape as the
+    # already-bound SetupForPlanarView(light, view, ...), which likewise extracts what it needs
+    # internally. GetViewOrigin is pure virtual on IView (View.h:69), so any view type works.
+    doc = pyd.CascadedShadowMap.SetupForCubemapView.__doc__
+    assert doc is not None
+    assert "view: donut::engine::IView" in doc
+    assert "exponent: typing.SupportsFloat | typing.SupportsIndex = 4.0" in doc
+    assert "center" not in doc
+    assert "float3" not in doc
+
+
+def test_single_pass_cubemap_defaults_off_and_round_trips() -> None:
+    # The sample sets this from queryFeatureSupport(FastGeometryShader)
+    # (FeatureDemo.cpp:1379). Default False matters: the app's own forward pass must stay
+    # six-pass, and only the throwaway pass built per probe capture opts in.
+    params = pyd.ForwardShadingPassCreateParameters()
+    assert params.singlePassCubemap is False
+    params.singlePassCubemap = True
+    assert params.singlePassCubemap is True
+
+
+def test_base_camera_reports_its_position() -> None:
+    # Flat 3-tuple, matching the GetDir/GetUp already on this class -- math types never cross
+    # into Python. Needed because a probe captures at the active camera's position.
+    camera = pyd.FirstPersonCamera()
+    camera.LookAt(1.0, 2.0, 3.0, 1.0, 2.0, 4.0)
+    assert camera.GetPosition() == (1.0, 2.0, 3.0)
+
+
+def test_get_active_user_camera_returns_the_owned_camera() -> None:
+    # A reference to the camera the SwitchableCamera owns, not a copy: writes through it must
+    # stick, the same guarantee GetFirstPersonCamera already documents.
+    switchable = pyd.SwitchableCamera()
+    switchable.SwitchToFirstPerson(copyView=False)
+    active = switchable.GetActiveUserCamera()
+    active.SetMoveSpeed(7.5)
+    assert switchable.GetActiveUserCamera().GetPosition() == active.GetPosition()
+
+
+def test_get_active_user_camera_follows_the_switch() -> None:
+    # Two cameras at distinguishable positions, so the switch is observable through GetPosition.
+    switchable = pyd.SwitchableCamera()
+    switchable.SwitchToFirstPerson(copyView=False)
+    switchable.GetFirstPersonCamera().LookAt(1.0, 0.0, 0.0, 2.0, 0.0, 0.0)
+    switchable.GetThirdPersonCamera().SetTargetPosition(50.0, 50.0, 50.0)
+    switchable.GetThirdPersonCamera().SetDistance(1.0)
+    switchable.GetThirdPersonCamera().Animate(0.0)
+
+    assert switchable.GetActiveUserCamera().GetPosition() == (1.0, 0.0, 0.0)
+    switchable.SwitchToThirdPerson(copyView=False)
+    assert switchable.GetActiveUserCamera().GetPosition() != (1.0, 0.0, 0.0)
+
+
+def _graph_with_root() -> tuple[pyd.SceneGraph, pyd.SceneGraphNode]:
+    """Returns a fresh graph and its real root node.
+
+    Copied from test_camera_bindings.py's helper of the same name. SetRootNode returns the
+    *previous* root (SceneGraph.cpp:670-679) -- None on a fresh graph -- so the root has to be
+    read back with GetRootNode(); passing SetRootNode's result as AttachLeafNode's parent
+    silently re-roots the graph on every attach instead of adding siblings.
+    """
+    graph = pyd.SceneGraph()
+    graph.SetRootNode(pyd.SceneGraphNode())
+    return graph, graph.GetRootNode()
+
+
+def test_scene_camera_reports_its_world_position() -> None:
+    # A scene camera's position comes from its node's transform, so it needs an attached node.
+    # AttachLeafNode takes the leaf and creates the wrapping node itself.
+    #
+    # SetPositionAndDirection only marks the node dirty (as test_camera_bindings.py's
+    # test_set_position_and_direction_writes_the_nodes_world_transform documents), so
+    # graph.Refresh(0) is required before the node's world transform -- and therefore
+    # GetViewToWorldMatrix() -- reflects it.
+    graph, root = _graph_with_root()
+    camera = pyd.PerspectiveCamera()
+    node = graph.AttachLeafNode(root, camera)
+    node.SetPositionAndDirection(-8.0, 2.0, 5.0, 1.0, 0.0, 0.0)
+    graph.Refresh(0)
+
+    x, y, z = camera.GetPosition()
+    assert (round(x, 4), round(y, 4), round(z, 4)) == (-8.0, 2.0, 5.0)
+
+
+def test_scene_camera_position_is_not_the_world_to_view_translation() -> None:
+    # THE test for this task's one deliberate correction. The sample reads
+    # GetWorldToViewMatrix().m_translation (FeatureDemo.cpp:1351), which is -R*p, not p. For an
+    # axis-aligned camera the two happen to differ only in sign; for a ROTATED one they are
+    # unrelated. These are Sponza's own Gallery camera placement, which is rotated, so a binding
+    # built on the world-to-view translation cannot produce the node's own position.
+    #
+    # graph.Refresh(0) is required for the same reason as the test above -- SetPositionAndDirection
+    # only dirties the node.
+    graph, root = _graph_with_root()
+    camera = pyd.PerspectiveCamera()
+    node = graph.AttachLeafNode(root, camera)
+    node.SetPositionAndDirection(0.0, 8.0, -4.0, 0.0, -0.4, 1.0)
+    graph.Refresh(0)
+
+    x, y, z = camera.GetPosition()
+    assert (round(x, 4), round(y, 4), round(z, 4)) == (0.0, 8.0, -4.0)
