@@ -1700,7 +1700,7 @@ PYBIND11_MODULE(_pydonut, m) {
     // slice of a shared cube texture) instead of every subresource. Needed when several views
     // share one texture and each must be cleared independently of the others.
     commandList.def("clearTextureFloat", [](nvrhi::ICommandList &self, nvrhi::ITexture* texture,
-            const nvrhi::Color &clearColor, const donut::engine::PlanarView &view) {
+            const nvrhi::Color &clearColor, const donut::engine::IView &view) {
         self.clearTextureFloat(texture, view.GetSubresources(), clearColor);
     }, py::arg("texture"), py::arg("clearColor"), py::arg("view"), py::call_guard<py::gil_scoped_release>());
     commandList.def("clearDepthStencilTexture", [](nvrhi::ICommandList &self, nvrhi::ITexture* texture,
@@ -1708,7 +1708,7 @@ PYBIND11_MODULE(_pydonut, m) {
         self.clearDepthStencilTexture(texture, nvrhi::AllSubresources, clearDepth, depth, clearStencil, stencil);
     }, py::arg("texture"), py::arg("clearDepth"), py::arg("depth"), py::arg("clearStencil"), py::arg("stencil"));
     commandList.def("clearDepthStencilTexture", [](nvrhi::ICommandList &self, nvrhi::ITexture* texture,
-            bool clearDepth, float depth, bool clearStencil, uint8_t stencil, const donut::engine::PlanarView &view) {
+            bool clearDepth, float depth, bool clearStencil, uint8_t stencil, const donut::engine::IView &view) {
         self.clearDepthStencilTexture(texture, view.GetSubresources(), clearDepth, depth, clearStencil, stencil);
     }, py::arg("texture"), py::arg("clearDepth"), py::arg("depth"), py::arg("clearStencil"), py::arg("stencil"), py::arg("view"),
        py::call_guard<py::gil_scoped_release>());
@@ -2517,7 +2517,7 @@ PYBIND11_MODULE(_pydonut, m) {
         // needed here since this is its only use from Python for this specific render target
         // bundle (contrast RenderTargets in variable_shading.py, which builds its own
         // FramebufferFactory instances directly, since it needs more control over them).
-        .def("GetFramebuffer", [](donut::render::GBufferRenderTargets &self, donut::engine::PlanarView &view) -> nvrhi::IFramebuffer* {
+        .def("GetFramebuffer", [](donut::render::GBufferRenderTargets &self, const donut::engine::IView &view) -> nvrhi::IFramebuffer* {
             return self.GBufferFramebuffer->GetFramebuffer(view);
         }, py::arg("view"), py::return_value_policy::reference_internal)
         // The public texture handles from GBuffer.h. The example reads them by name to wire up
@@ -2616,7 +2616,7 @@ PYBIND11_MODULE(_pydonut, m) {
         .def(py::init<nvrhi::IDevice*, std::shared_ptr<donut::engine::CommonRenderPasses>>(), py::arg("device"), py::arg("commonPasses"))
         .def("Init", &donut::render::DeferredLightingPass::Init, py::arg("shaderFactory"))
         .def("Render", [](donut::render::DeferredLightingPass &self, nvrhi::ICommandList* commandList,
-                donut::engine::PlanarView &view, const PyDeferredLightingInputs &inputs) {
+                const donut::engine::ICompositeView &view, const PyDeferredLightingInputs &inputs) {
             self.Render(commandList, view, inputs);
         }, py::arg("commandList"), py::arg("view"), py::arg("inputs"))
         .def("ResetBindingCache", &donut::render::DeferredLightingPass::ResetBindingCache);
@@ -2703,17 +2703,17 @@ PYBIND11_MODULE(_pydonut, m) {
 
     py::class_<donut::render::TemporalAntiAliasingPass, std::shared_ptr<donut::render::TemporalAntiAliasingPass>>(m, "TemporalAntiAliasingPass")
         .def(py::init([](nvrhi::IDevice* device, std::shared_ptr<donut::engine::ShaderFactory> shaderFactory,
-                std::shared_ptr<donut::engine::CommonRenderPasses> commonPasses, donut::engine::PlanarView &compositeView,
+                std::shared_ptr<donut::engine::CommonRenderPasses> commonPasses, const donut::engine::ICompositeView &compositeView,
                 const donut::render::TemporalAntiAliasingPass::CreateParameters &params) {
             return new donut::render::TemporalAntiAliasingPass(device, shaderFactory, commonPasses, compositeView, params);
         }), py::arg("device"), py::arg("shaderFactory"), py::arg("commonPasses"), py::arg("compositeView"), py::arg("params"))
         .def("RenderMotionVectors", [](donut::render::TemporalAntiAliasingPass &self, nvrhi::ICommandList* commandList,
-                donut::engine::PlanarView &compositeView, donut::engine::PlanarView &compositeViewPrevious) {
+                const donut::engine::ICompositeView &compositeView, const donut::engine::ICompositeView &compositeViewPrevious) {
             self.RenderMotionVectors(commandList, compositeView, compositeViewPrevious);
         }, py::arg("commandList"), py::arg("compositeView"), py::arg("compositeViewPrevious"))
         .def("TemporalResolve", [](donut::render::TemporalAntiAliasingPass &self, nvrhi::ICommandList* commandList,
                 const donut::render::TemporalAntiAliasingParameters &params, bool feedbackIsValid,
-                donut::engine::PlanarView &compositeViewInput, donut::engine::PlanarView &compositeViewOutput) {
+                const donut::engine::ICompositeView &compositeViewInput, const donut::engine::ICompositeView &compositeViewOutput) {
             self.TemporalResolve(commandList, params, feedbackIsValid, compositeViewInput, compositeViewOutput);
         }, py::arg("commandList"), py::arg("params"), py::arg("feedbackIsValid"), py::arg("compositeViewInput"), py::arg("compositeViewOutput"))
         .def("SetJitter", &donut::render::TemporalAntiAliasingPass::SetJitter, py::arg("jitter"))
@@ -2878,7 +2878,7 @@ PYBIND11_MODULE(_pydonut, m) {
         }, py::arg("commandList"), py::arg("framebufferFactory"), py::arg("compositeView"),
             py::arg("sourceDestTexture"), py::arg("sigmaInPixels"), py::arg("blendFactor"));
 
-    // Both setup calls take the PlanarView where C++ takes a dm::frustum (and, for the stable
+    // Both setup calls take an IView where C++ takes a dm::frustum (and, for the stable
     // variant, a dm::affine3): donut math types never cross into Python, and the view already
     // holds everything both fits need. They want *different* frustums -- the tight fit takes
     // the view frustum, the stable fit the projection frustum plus the inverse view matrix,
@@ -2921,7 +2921,7 @@ PYBIND11_MODULE(_pydonut, m) {
         }), py::arg("device"), py::arg("resolution"), py::arg("numCascades"),
             py::arg("numPerObjectShadows"), py::arg("format"), py::arg("isUAV") = false)
         .def("SetupForPlanarView", [](donut::render::CascadedShadowMap &self,
-                const donut::engine::DirectionalLight &light, const donut::engine::PlanarView &view,
+                const donut::engine::DirectionalLight &light, const donut::engine::IView &view,
                 float maxShadowDistance, float lightSpaceZUp, float lightSpaceZDown, float exponent) {
             RequireCascadeExponent("SetupForPlanarView", exponent);
             return self.SetupForPlanarView(light, view.GetViewFrustum(), maxShadowDistance,
@@ -2929,12 +2929,21 @@ PYBIND11_MODULE(_pydonut, m) {
         }, py::arg("light"), py::arg("view"), py::arg("maxShadowDistance"),
             py::arg("lightSpaceZUp"), py::arg("lightSpaceZDown"), py::arg("exponent") = 4.0f)
         .def("SetupForPlanarViewStable", [](donut::render::CascadedShadowMap &self,
-                const donut::engine::DirectionalLight &light, const donut::engine::PlanarView &view,
+                const donut::engine::DirectionalLight &light, const donut::engine::IView &view,
                 float maxShadowDistance, float lightSpaceZUp, float lightSpaceZDown, float exponent) {
             RequireCascadeExponent("SetupForPlanarViewStable", exponent);
+            // GetProjectionFrustum is safe on the composite view -- StereoView overrides it to
+            // merge both eyes' frusta (View.h:246-255). GetInverseViewMatrix is NOT: StereoView
+            // overrides it to assert(false) + identity (View.h:263-267), and asserts compile out
+            // in this project's Release build, so a stereo view would silently fit every cascade
+            // around the world origin. Take it from a planar child view instead, as
+            // FeatureDemo.cpp:944 does. IView::GetChildView returns `this` for a PlanarView, so
+            // this is unchanged behaviour for the non-stereo callers.
+            const donut::engine::IView* planarView =
+                view.GetChildView(donut::engine::ViewType::PLANAR, 0);
             return self.SetupForPlanarViewStable(light, view.GetProjectionFrustum(),
-                view.GetInverseViewMatrix(), maxShadowDistance, lightSpaceZUp, lightSpaceZDown,
-                exponent);
+                planarView->GetInverseViewMatrix(), maxShadowDistance, lightSpaceZUp,
+                lightSpaceZDown, exponent);
         }, py::arg("light"), py::arg("view"), py::arg("maxShadowDistance"),
             py::arg("lightSpaceZUp"), py::arg("lightSpaceZDown"), py::arg("exponent") = 4.0f)
         .def("Clear", &donut::render::CascadedShadowMap::Clear, py::arg("commandList"))
@@ -2977,7 +2986,7 @@ PYBIND11_MODULE(_pydonut, m) {
             [](const donut::engine::FramebufferFactory &self) -> nvrhi::ITexture* { return self.ShadingRateSurface.Get(); },
             [](donut::engine::FramebufferFactory &self, nvrhi::ITexture* t) { self.ShadingRateSurface = t; },
             py::return_value_policy::reference)
-        .def("GetFramebuffer", [](donut::engine::FramebufferFactory &self, donut::engine::PlanarView &view) -> nvrhi::IFramebuffer* {
+        .def("GetFramebuffer", [](donut::engine::FramebufferFactory &self, const donut::engine::IView &view) -> nvrhi::IFramebuffer* {
             return self.GetFramebuffer(view);
         }, py::arg("view"), py::return_value_policy::reference_internal);
 

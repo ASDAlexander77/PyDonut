@@ -109,15 +109,23 @@ def test_cascaded_shadow_map_setup_takes_a_view_not_a_frustum() -> None:
     # The frustum is pulled off the view C++-side: donut math types never cross into Python.
     # Nothing here constructs a shadow map (that needs a device), so this checks the bound
     # signature names a view type for `view` and that no frustum type appears anywhere in it.
-    doc = pyd.CascadedShadowMap.SetupForPlanarView.__doc__
-    assert doc is not None
-    # pybind11 renders the C++ type name here, not "PlanarView", because CascadedShadowMap is
-    # registered ahead of PlanarView in the module -- the same ordering hazard called out in
-    # test_render_composite_view_takes_a_composite_view. If PlanarView ever moves earlier, this
-    # assertion is what will fail, and the fix is to update the expected spelling, not to widen
-    # the check into one that would also pass for a frustum parameter.
-    assert "view: donut::engine::PlanarView" in doc
-    assert "Frustum" not in doc
+    #
+    # IView, not PlanarView: a stereo view has to reach both setup calls, and both of the
+    # accessors they use (GetViewFrustum, GetProjectionFrustum) are declared on IView
+    # (View.h:71-72) and meaningfully overridden by StereoView (View.h:235-255).
+    #
+    # Assert the *qualified parameter* spelling, not a bare "PlanarView" substring: the method
+    # name itself contains "PlanarView", so a bare check can never fail here. pybind11 renders
+    # the C++ type name because CascadedShadowMap is registered ahead of IView in the module.
+    for setup in (
+        pyd.CascadedShadowMap.SetupForPlanarView,
+        pyd.CascadedShadowMap.SetupForPlanarViewStable,
+    ):
+        doc = setup.__doc__
+        assert doc is not None
+        assert "view: donut::engine::IView" in doc
+        assert "view: donut::engine::PlanarView" not in doc
+        assert "Frustum" not in doc
 
 
 def test_depth_pass_trio_is_exported() -> None:
@@ -185,3 +193,53 @@ def test_render_view_takes_an_iview() -> None:
     doc = pyd.RenderView.__doc__
     assert "IView" in doc
     assert "PlanarView" not in doc
+
+
+def test_deferred_lighting_render_takes_a_composite_view() -> None:
+    # DeferredLightingPass::Render takes const ICompositeView& (DeferredLightingPass.h:97-101);
+    # the binding narrowed it to PlanarView, which a stereo view cannot satisfy.
+    doc = pyd.DeferredLightingPass.Render.__doc__
+    assert doc is not None
+    assert "ICompositeView" in doc
+    assert "PlanarView" not in doc
+
+
+def test_temporal_aa_signatures_take_composite_views() -> None:
+    # All three take const ICompositeView& in C++ (TemporalAntiAliasingPass.h:106-124). The
+    # constructor matters as much as the two render calls: the pass caches state derived from
+    # the view it was built with.
+    for member in (
+        pyd.TemporalAntiAliasingPass.__init__,
+        pyd.TemporalAntiAliasingPass.RenderMotionVectors,
+        pyd.TemporalAntiAliasingPass.TemporalResolve,
+    ):
+        doc = member.__doc__
+        assert doc is not None
+        assert "ICompositeView" in doc
+        assert "PlanarView" not in doc
+
+
+def test_get_framebuffer_signatures_take_an_iview() -> None:
+    # FramebufferFactory::GetFramebuffer takes const IView& (FramebufferFactory.h:48) -- one
+    # step narrower than ICompositeView, because it needs GetSubresources.
+    for member in (
+        pyd.FramebufferFactory.GetFramebuffer,
+        pyd.GBufferRenderTargets.GetFramebuffer,
+    ):
+        doc = member.__doc__
+        assert doc is not None
+        assert "view: donut::engine::IView" in doc
+        assert "view: donut::engine::PlanarView" not in doc
+
+
+def test_view_scoped_clear_overloads_take_an_iview() -> None:
+    # Both overloads call view.GetSubresources(), declared on IView. __doc__ here carries every
+    # overload of the name, so the AllSubresources variants appear alongside the view-taking ones.
+    for member in (
+        pyd.CommandList.clearTextureFloat,
+        pyd.CommandList.clearDepthStencilTexture,
+    ):
+        doc = member.__doc__
+        assert doc is not None
+        assert "view: donut::engine::IView" in doc
+        assert "PlanarView" not in doc
