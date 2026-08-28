@@ -344,10 +344,21 @@ struct PyPassthroughDrawStrategy : donut::render::PassthroughDrawStrategy {
 // consistent with this module's convention of not exposing math vector types to Python.
 struct PyDeferredLightingInputs : donut::render::DeferredLightingPass::Inputs {
     std::vector<std::shared_ptr<donut::engine::Light>> ownedLights;
+    std::vector<std::shared_ptr<donut::engine::LightProbe>> ownedLightProbes;
 
     void SetLights(std::vector<std::shared_ptr<donut::engine::Light>> newLights) {
         ownedLights = std::move(newLights);
         lights = &ownedLights;
+    }
+
+    // Inputs::lightProbes is a non-owning pointer, exactly like Inputs::lights -- same fix.
+    // An empty list is the off switch and needs no null path: DeferredLightingPass::Render
+    // guards with `if (inputs.lightProbes)` and then iterates (DeferredLightingPass.cpp:221-224),
+    // so a non-null pointer to an empty vector leaves numLightProbes at 0, exactly as nullptr
+    // does.
+    void SetLightProbes(std::vector<std::shared_ptr<donut::engine::LightProbe>> newProbes) {
+        ownedLightProbes = std::move(newProbes);
+        lightProbes = &ownedLightProbes;
     }
 
     void SetAmbientColors(float topR, float topG, float topB, float bottomR, float bottomG, float bottomB) {
@@ -2679,12 +2690,73 @@ PYBIND11_MODULE(_pydonut, m) {
         m, "TransparentDrawStrategy")
         .def(py::init<>());
 
+    // engine::LightProbe (SceneTypes.h:356-371). shared_ptr holder is mandatory, not stylistic:
+    // both consumers take const std::vector<std::shared_ptr<LightProbe>>&.
+    //
+    // `bounds` (a dm::frustum) is NOT a property -- donut math types never cross into Python.
+    // The sample only ever CONSTRUCTS a probe's bounds: frustum::empty() at creation
+    // (FeatureDemo.cpp:1294) and frustum::fromBox(box3(p, p).grow(10)) after a capture
+    // (:1430-1431). It never reads them back, so three construction methods cover every use
+    // and no Frustum type is needed.
+    //
+    // Load-bearing rather than cosmetic: IsActive() rejects empty bounds
+    // (SceneTypes.cpp:383-384), so a probe whose bounds were never set past empty contributes
+    // nothing to either shading path -- which is exactly how feature_demo.py keeps an
+    // uncaptured probe dark.
+    py::class_<donut::engine::LightProbe, std::shared_ptr<donut::engine::LightProbe>>(m, "LightProbe")
+        .def(py::init<>())
+        .def_readwrite("name", &donut::engine::LightProbe::name)
+        // The three maps are nvrhi::TextureHandle, so they need def_property with a raw
+        // ITexture* on the Python side, matching DeferredLightingPassInputs.output below.
+        .def_property("diffuseMap",
+            [](const donut::engine::LightProbe &self) -> nvrhi::ITexture* { return self.diffuseMap; },
+            [](donut::engine::LightProbe &self, nvrhi::ITexture* tex) { self.diffuseMap = tex; },
+            py::return_value_policy::reference)
+        .def_property("specularMap",
+            [](const donut::engine::LightProbe &self) -> nvrhi::ITexture* { return self.specularMap; },
+            [](donut::engine::LightProbe &self, nvrhi::ITexture* tex) { self.specularMap = tex; },
+            py::return_value_policy::reference)
+        .def_property("environmentBrdf",
+            [](const donut::engine::LightProbe &self) -> nvrhi::ITexture* { return self.environmentBrdf; },
+            [](donut::engine::LightProbe &self, nvrhi::ITexture* tex) { self.environmentBrdf = tex; },
+            py::return_value_policy::reference)
+        .def_readwrite("diffuseArrayIndex", &donut::engine::LightProbe::diffuseArrayIndex)
+        .def_readwrite("specularArrayIndex", &donut::engine::LightProbe::specularArrayIndex)
+        .def_readwrite("diffuseScale", &donut::engine::LightProbe::diffuseScale)
+        .def_readwrite("specularScale", &donut::engine::LightProbe::specularScale)
+        .def_readwrite("enabled", &donut::engine::LightProbe::enabled)
+        // enabled AND non-empty bounds AND at least one map with a non-zero scale
+        // (SceneTypes.cpp:379-389). Both lighting passes skip probes failing this.
+        .def("IsActive", &donut::engine::LightProbe::IsActive)
+        .def("SetBoundsEmpty", [](donut::engine::LightProbe &self) {
+            self.bounds = donut::math::frustum::empty();
+        })
+        .def("SetBoundsInfinite", [](donut::engine::LightProbe &self) {
+            self.bounds = donut::math::frustum::infinite();
+        })
+        // Six flat floats rather than a box3, matching SceneGraphNode.GetGlobalBoundingBox's
+        // six-float return on the other side of the same rule.
+        .def("SetBoundsFromBox", [](donut::engine::LightProbe &self,
+                float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
+            self.bounds = donut::math::frustum::fromBox(donut::math::box3(
+                donut::math::float3(minX, minY, minZ),
+                donut::math::float3(maxX, maxY, maxZ)));
+        }, py::arg("minX"), py::arg("minY"), py::arg("minZ"),
+           py::arg("maxX"), py::arg("maxY"), py::arg("maxZ"));
+
     py::class_<PyDeferredLightingInputs>(m, "DeferredLightingPassInputs")
         .def(py::init<>())
         .def("SetGBuffer", &PyDeferredLightingInputs::SetGBuffer, py::arg("targets"))
         .def("SetAmbientColors", &PyDeferredLightingInputs::SetAmbientColors,
             py::arg("topR"), py::arg("topG"), py::arg("topB"), py::arg("bottomR"), py::arg("bottomG"), py::arg("bottomB"))
         .def("SetLights", &PyDeferredLightingInputs::SetLights, py::arg("lights"))
+        // Every probe submitted in one call must carry the SAME diffuseMap, specularMap and
+        // environmentBrdf: DeferredLightingPass::Render logs an error and returns WITHOUT
+        // RENDERING THE FRAME otherwise (DeferredLightingPass.cpp:246-253). That is why
+        // feature_demo.py allocates two shared cube-map arrays indexed by slice rather than a
+        // private texture pair per probe. Same failure mode as two lights with different
+        // shadow maps (:172-175).
+        .def("SetLightProbes", &PyDeferredLightingInputs::SetLightProbes, py::arg("lightProbes"))
         .def_property("output",
             [](const PyDeferredLightingInputs &self) -> nvrhi::ITexture* { return self.output; },
             [](PyDeferredLightingInputs &self, nvrhi::ITexture* tex) { self.output = tex; },
@@ -2718,15 +2790,19 @@ PYBIND11_MODULE(_pydonut, m) {
         .def(py::init<nvrhi::IDevice*, std::shared_ptr<donut::engine::CommonRenderPasses>>(), py::arg("device"), py::arg("commonPasses"))
         .def("Init", &donut::render::ForwardShadingPass::Init, py::arg("shaderFactory"), py::arg("params"))
         .def("ResetBindingCache", &donut::render::ForwardShadingPass::ResetBindingCache)
-        // lightProbes is always empty here -- not otherwise exposed to Python (nothing in
-        // this codebase builds one), matching every current sample's usage of this call.
+        // lightProbes is trailing and defaulted so the nine-argument form every other example
+        // uses (deferred_shading.py, threaded_rendering.py, rt_bindless.py) keeps compiling
+        // untouched. Stage 3b replaced the previously hardcoded empty vector with this.
         .def("PrepareLights", [](donut::render::ForwardShadingPass &self, donut::render::ForwardShadingPass::Context &context,
                 nvrhi::ICommandList* commandList, const std::vector<std::shared_ptr<donut::engine::Light>> &lights,
-                float topR, float topG, float topB, float bottomR, float bottomG, float bottomB) {
+                float topR, float topG, float topB, float bottomR, float bottomG, float bottomB,
+                const std::vector<std::shared_ptr<donut::engine::LightProbe>> &lightProbes) {
             self.PrepareLights(context, commandList, lights,
-                donut::math::float3(topR, topG, topB), donut::math::float3(bottomR, bottomG, bottomB), {});
+                donut::math::float3(topR, topG, topB), donut::math::float3(bottomR, bottomG, bottomB),
+                lightProbes);
         }, py::arg("context"), py::arg("commandList"), py::arg("lights"),
            py::arg("topR"), py::arg("topG"), py::arg("topB"), py::arg("bottomR"), py::arg("bottomG"), py::arg("bottomB"),
+           py::arg("lightProbes") = std::vector<std::shared_ptr<donut::engine::LightProbe>>{},
            // See the comment on CommandList.open above -- released for threaded_rendering.py's
            // concurrent per-face recording.
            py::call_guard<py::gil_scoped_release>());

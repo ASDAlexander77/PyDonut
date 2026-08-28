@@ -124,6 +124,7 @@ from pydonut._pydonut import Light
 from pydonut._pydonut import DirectionalLight
 from pydonut._pydonut import SpotLight
 from pydonut._pydonut import PointLight
+from pydonut._pydonut import LightProbe
 from pydonut._pydonut import SceneCamera
 from pydonut._pydonut import PerspectiveCamera
 from pydonut._pydonut import LightEditor
@@ -322,6 +323,7 @@ __all__ = (
     'DirectionalLight',
     'SpotLight',
     'PointLight',
+    'LightProbe',
     'SceneCamera',
     'PerspectiveCamera',
     'LightEditor',
