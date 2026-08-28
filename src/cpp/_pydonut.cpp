@@ -56,6 +56,7 @@
 #include <donut/engine/ShadowMap.h>
 #include <donut/render/GBuffer.h>
 #include <donut/render/GBufferFillPass.h>
+#include <donut/render/PixelReadbackPass.h>
 #include <donut/render/DepthPass.h>
 #include <donut/render/DeferredLightingPass.h>
 #include <donut/render/ForwardShadingPass.h>
@@ -1703,6 +1704,17 @@ PYBIND11_MODULE(_pydonut, m) {
             const nvrhi::Color &clearColor, const donut::engine::IView &view) {
         self.clearTextureFloat(texture, view.GetSubresources(), clearColor);
     }, py::arg("texture"), py::arg("clearColor"), py::arg("view"), py::call_guard<py::gil_scoped_release>());
+    // Integer-texture counterpart of clearTextureFloat above. Picking clears the RG16_UINT
+    // MaterialIDs target to 0xffff before each pick pass, so "nothing was hit" is
+    // distinguishable from material 0 (FeatureDemo.cpp:1041).
+    commandList.def("clearTextureUInt", [](nvrhi::ICommandList &self, nvrhi::ITexture* texture,
+            uint32_t clearValue) {
+        self.clearTextureUInt(texture, nvrhi::AllSubresources, clearValue);
+    }, py::arg("texture"), py::arg("clearValue"));
+    commandList.def("clearTextureUInt", [](nvrhi::ICommandList &self, nvrhi::ITexture* texture,
+            uint32_t clearValue, const donut::engine::IView &view) {
+        self.clearTextureUInt(texture, view.GetSubresources(), clearValue);
+    }, py::arg("texture"), py::arg("clearValue"), py::arg("view"), py::call_guard<py::gil_scoped_release>());
     commandList.def("clearDepthStencilTexture", [](nvrhi::ICommandList &self, nvrhi::ITexture* texture,
             bool clearDepth, float depth, bool clearStencil, uint8_t stencil) {
         self.clearDepthStencilTexture(texture, nvrhi::AllSubresources, clearDepth, depth, clearStencil, stencil);
@@ -2249,7 +2261,13 @@ PYBIND11_MODULE(_pydonut, m) {
         .def("SetName", [](const donut::engine::SceneGraphLeaf &self, const std::string &name) { self.SetName(name); }, py::arg("name"))
         // Read back by feature_demo.py's light dropdown, which labels each entry with it
         // (FeatureDemo.cpp:1637-1643). SetName alone was enough while nothing read a name back.
-        .def("GetName", &donut::engine::SceneGraphLeaf::GetName);
+        .def("GetName", &donut::engine::SceneGraphLeaf::GetName)
+        // The node this leaf is attached to, as an owning handle. MeshInstance.GetNode() already
+        // returned a raw non-owning pointer, which is fine for a same-frame transform read but
+        // not for picking, which stores the hit node across frames. This is a weak_ptr::lock()
+        // (SceneGraph.h:65), so it legitimately returns None for a leaf that is not attached.
+        // Bound on the leaf base so every leaf type gets it, not just MeshInstance.
+        .def("GetNodeSharedPtr", &donut::engine::SceneGraphLeaf::GetNodeSharedPtr);
 
     py::class_<donut::engine::MeshInstance, donut::engine::SceneGraphLeaf, std::shared_ptr<donut::engine::MeshInstance>>(m, "MeshInstance")
         .def(py::init<std::shared_ptr<donut::engine::MeshInfo>>(), py::arg("mesh"))
@@ -2436,6 +2454,24 @@ PYBIND11_MODULE(_pydonut, m) {
         .def("GetWorldPosition", [](const donut::engine::SceneGraphNode &self) {
             const donut::math::float3 &t = self.GetLocalToWorldTransformFloat().m_translation;
             return py::make_tuple(t.x, t.y, t.z);
+        })
+        // The node's world-space bounding box as (minX, minY, minZ, maxX, maxY, maxZ) --
+        // dm::box3 does not cross into Python. Picking uses it to frame the third-person camera
+        // on the hit node (FeatureDemo.cpp:659-667).
+        //
+        // A node with no content carries box3::empty(), which is mins = FLT_MAX and
+        // maxs = -FLT_MAX (box.h:139-143), NOT a zero-sized box. Callers deriving a radius from
+        // it must check for that sentinel or they get an infinite one.
+        .def("GetGlobalBoundingBox", [](const donut::engine::SceneGraphNode &self) {
+            const donut::math::box3 &bounds = self.GetGlobalBoundingBox();
+            return py::make_tuple(bounds.m_mins.x, bounds.m_mins.y, bounds.m_mins.z,
+                                  bounds.m_maxs.x, bounds.m_maxs.y, bounds.m_maxs.z);
+        })
+        // Slash-separated path from the scene-graph root, for the "Picked node:" log line
+        // (FeatureDemo.cpp:1224). std::filesystem::path does not cross into Python, so this
+        // returns generic_string() -- forward slashes on every platform.
+        .def("GetPath", [](const donut::engine::SceneGraphNode &self) {
+            return self.GetPath().generic_string();
         });
 
     py::class_<donut::engine::SceneGraph, std::shared_ptr<donut::engine::SceneGraph>>(m, "SceneGraph")
@@ -2557,6 +2593,50 @@ PYBIND11_MODULE(_pydonut, m) {
         .def(py::init<nvrhi::IDevice*, std::shared_ptr<donut::engine::CommonRenderPasses>>(), py::arg("device"), py::arg("commonPasses"))
         .def("Init", &donut::render::GBufferFillPass::Init, py::arg("shaderFactory"), py::arg("params"))
         .def("ResetBindingCache", &donut::render::GBufferFillPass::ResetBindingCache);
+
+    // MaterialIDPass (GBufferFillPass.h:148-159) derives from GBufferFillPass and overrides only
+    // Init and the protected CreatePixelShader -- it writes material and instance IDs into a
+    // RG16_UINT target instead of a full gbuffer, which is what right-click picking reads back.
+    // Registered with GBufferFillPass as its pybind11 base, so it reuses
+    // GBufferFillPassCreateParameters and GBufferFillPassContext; the C++ declares no context
+    // type of its own.
+    py::class_<donut::render::MaterialIDPass, donut::render::GBufferFillPass,
+               std::shared_ptr<donut::render::MaterialIDPass>>(m, "MaterialIDPass")
+        .def(py::init<nvrhi::IDevice*, std::shared_ptr<donut::engine::CommonRenderPasses>>(),
+            py::arg("device"), py::arg("commonPasses"))
+        .def("Init", &donut::render::MaterialIDPass::Init, py::arg("shaderFactory"), py::arg("params"));
+
+    // Copies one pixel of a texture into a readback buffer so the CPU can inspect it
+    // (PixelReadbackPass.h:41-66). Capture records the copy into a command list; the Read*
+    // methods are only valid once that command list has executed on the GPU.
+    //
+    // `format` selects the readback buffer's layout and the compute shader variant that fills
+    // it -- NOT the source texture's format. FeatureDemo.cpp:803 deliberately pairs an
+    // RG16_UINT MaterialIDs texture with an RGBA32_UINT readback; that is correct, not a bug.
+    py::class_<donut::render::PixelReadbackPass, std::shared_ptr<donut::render::PixelReadbackPass>>(m, "PixelReadbackPass")
+        .def(py::init<nvrhi::IDevice*, std::shared_ptr<donut::engine::ShaderFactory>,
+                nvrhi::ITexture*, nvrhi::Format, uint32_t, uint32_t>(),
+            py::arg("device"), py::arg("shaderFactory"), py::arg("inputTexture"), py::arg("format"),
+            py::arg("arraySlice") = 0, py::arg("mipLevel") = 0)
+        // dm::uint2 flattened to two ints, matching PlanarView.SetPixelOffset.
+        .def("Capture", [](donut::render::PixelReadbackPass &self, nvrhi::ICommandList* commandList,
+                uint32_t x, uint32_t y) {
+            self.Capture(commandList, donut::math::uint2(x, y));
+        }, py::arg("commandList"), py::arg("x"), py::arg("y"))
+        // All three readers bind: the class is meaningless without whichever matches the
+        // caller's format, and each is one line. feature_demo.py uses ReadUInts.
+        .def("ReadUInts", [](donut::render::PixelReadbackPass &self) {
+            const donut::math::uint4 value = self.ReadUInts();
+            return py::make_tuple(value.x, value.y, value.z, value.w);
+        })
+        .def("ReadFloats", [](donut::render::PixelReadbackPass &self) {
+            const donut::math::float4 value = self.ReadFloats();
+            return py::make_tuple(value.x, value.y, value.z, value.w);
+        })
+        .def("ReadInts", [](donut::render::PixelReadbackPass &self) {
+            const donut::math::int4 value = self.ReadInts();
+            return py::make_tuple(value.x, value.y, value.z, value.w);
+        });
 
     // Same trio shape as GBufferFillPass above. depthBias/depthBiasClamp/slopeScaledDepthBias
     // are exposed because a shadow map is exactly the consumer that needs them; they take effect

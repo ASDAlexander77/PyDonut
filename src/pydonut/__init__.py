@@ -148,6 +148,8 @@ from pydonut._pydonut import GBufferRenderTargets
 from pydonut._pydonut import GBufferFillPassCreateParameters
 from pydonut._pydonut import GBufferFillPassContext
 from pydonut._pydonut import GBufferFillPass
+from pydonut._pydonut import MaterialIDPass
+from pydonut._pydonut import PixelReadbackPass
 from pydonut._pydonut import DepthPassCreateParameters
 from pydonut._pydonut import DepthPassContext
 from pydonut._pydonut import DepthPass
@@ -339,6 +341,8 @@ __all__ = (
     'GBufferFillPassCreateParameters',
     'GBufferFillPassContext',
     'GBufferFillPass',
+    'MaterialIDPass',
+    'PixelReadbackPass',
     'DepthPassCreateParameters',
     'DepthPassContext',
     'DepthPass',
