@@ -103,6 +103,17 @@ if __name__ == "__main__":
     LIGHT_PROBE_SPECULAR_SIZE = 512
     LIGHT_PROBE_SPECULAR_MIPS = 8
 
+    # The throwaway environment cube map each capture renders into, before it is filtered down
+    # into the probe's array slices (FeatureDemo.cpp:1304-1305). Bigger than either output: the
+    # filtering reduces it.
+    LIGHT_PROBE_ENVIRONMENT_SIZE = 1024
+    LIGHT_PROBE_ENVIRONMENT_MIPS = 8
+    # Near plane and far cull distance for the capture's six face views, and the half-extent of
+    # the box the probe's bounds are built from (FeatureDemo.cpp:1347-1348, :1430).
+    LIGHT_PROBE_Z_NEAR = 0.1
+    LIGHT_PROBE_CULL_DISTANCE = 100.0
+    LIGHT_PROBE_BOUNDS_EXTENT = 10.0
+
     # The two demonstration lights this example adds to Sponza. Intensity is luminous intensity
     # in lm/sr, multiplied by the light's colour; radius is the light sphere's radius in world
     # units. Starting points tuned by eye against Sponza's metre scale -- the Lights UI section
@@ -769,6 +780,231 @@ if __name__ == "__main__":
                 probe.SetBoundsEmpty()
                 probe.enabled = False
                 self.lightProbes.append(probe)
+
+        def RenderLightProbe(self: FeatureDemo, probe: pyd.LightProbe) -> None:
+            """Captures the scene into `probe` from the active camera's position.
+
+            Ports FeatureDemo.cpp:1301-1433. Stands up a throwaway render graph -- its own
+            cube-map colour and depth targets, framebuffer, view, sky pass, forward pass and
+            command list -- renders one omnidirectional frame, filters it into the probe's array
+            slices, and tears the whole thing down again.
+
+            Called DIRECTLY from the UI button handler, not through a flag like the screenshot.
+            Two things make that safe, and they are worth stating because the screenshot's
+            deferred path invites the opposite assumption:
+
+              * ImGui_Renderer::Render calls buildUI() BEFORE it opens its own command list
+                (imgui_renderer.cpp:360-367), and this app's Render has already closed and
+                executed its own by then -- no command list is open on the immediate context.
+              * This method creates, executes and drains its own command list, so it needs
+                nothing from the caller's frame.
+
+            The screenshot needs a flag only because it must run at one specific point inside
+            Render, after executeCommandList, with the back buffer in hand. A capture has no
+            such constraint, so a flag would buy nothing and cost a frame of latency.
+            """
+            assert self.scene is not None and self.sunLight is not None
+            assert self.lightProbePass is not None
+            device = self.GetDevice()
+
+            # The environment map this capture renders into. Discarded at the end of the method;
+            # only its filtered reduction survives, in the probe's array slices.
+            colorDesc = pyd.TextureDesc()
+            colorDesc.width = LIGHT_PROBE_ENVIRONMENT_SIZE
+            colorDesc.height = LIGHT_PROBE_ENVIRONMENT_SIZE
+            colorDesc.mipLevels = LIGHT_PROBE_ENVIRONMENT_MIPS
+            colorDesc.arraySize = 6
+            colorDesc.dimension = pyd.TextureDimension.TextureCube
+            colorDesc.isRenderTarget = True
+            colorDesc.format = pyd.Format.RGBA16_FLOAT
+            colorDesc.initialState = pyd.ResourceStates.RenderTarget
+            colorDesc.keepInitialState = True
+            colorDesc.useClearValue = True
+            colorDesc.clearValue = pyd.Color(0.0)
+            colorDesc.debugName = "LightProbeEnvironment"
+            colorTexture = device.createTexture(colorDesc)
+
+            # D32 rather than the sample's nvrhi::utils::ChooseFormat over
+            # {D24S8, D32, D16, D32S8} (FeatureDemo.cpp:1384-1395). D32 is in that candidate
+            # list, is universally supported, and is already what CreateShadowMap uses -- binding
+            # ChooseFormat plus the FormatSupport flag enum to reach a format we can name
+            # directly is not worth it. Consequence: there is never a stencil aspect, so the
+            # clear below passes clearStencil=False rather than computing it.
+            depthDesc = pyd.TextureDesc()
+            depthDesc.width = LIGHT_PROBE_ENVIRONMENT_SIZE
+            depthDesc.height = LIGHT_PROBE_ENVIRONMENT_SIZE
+            depthDesc.mipLevels = 1
+            depthDesc.arraySize = 6
+            depthDesc.dimension = pyd.TextureDimension.TextureCube
+            depthDesc.isRenderTarget = True
+            depthDesc.format = pyd.Format.D32
+            depthDesc.initialState = pyd.ResourceStates.DepthWrite
+            depthDesc.keepInitialState = True
+            depthDesc.debugName = "LightProbeDepth"
+            depthTexture = device.createTexture(depthDesc)
+
+            framebuffer = pyd.FramebufferFactory(device)
+            framebuffer.SetRenderTargets([colorTexture])
+            framebuffer.depthTarget = depthTexture
+
+            # The probe sits wherever the camera is. A scene camera's position comes off its
+            # node; a user camera's off the camera itself.
+            if self.camera.IsSceneCameraActive():
+                probeX, probeY, probeZ = self.camera.GetSceneCamera().GetPosition()
+            else:
+                probeX, probeY, probeZ = self.camera.GetActiveUserCamera().GetPosition()
+
+            view = pyd.CubemapView()
+            view.SetArrayViewports(LIGHT_PROBE_ENVIRONMENT_SIZE, 0)
+            view.SetTransformFromPosition(
+                probeX, probeY, probeZ, LIGHT_PROBE_Z_NEAR, LIGHT_PROBE_CULL_DISTANCE
+            )
+            view.UpdateCache()
+
+            skyPass = pyd.SkyPass(
+                device, self.shaderFactory, self.m_CommonPasses, framebuffer, view
+            )
+
+            # A fresh forward pass rather than self.forwardPass, and this is not an oversight:
+            # the app's pass has singlePassCubemap False and caches its pipelines against the
+            # back buffer's FramebufferInfo, neither of which suits a cube-map target. This runs
+            # on a button press, so two pass constructions cost nothing.
+            forwardParams = pyd.ForwardShadingPassCreateParameters()
+            forwardParams.singlePassCubemap = device.queryFeatureSupport(
+                pyd.Feature.FastGeometryShader
+            )
+            forwardPass = pyd.ForwardShadingPass(device, self.m_CommonPasses)
+            forwardPass.Init(self.shaderFactory, forwardParams)
+
+            commandList = device.createCommandList()
+            commandList.open()
+            commandList.clearTextureFloat(colorTexture, pyd.Color(0.0))
+            # clearDepth=True, depth=0.0: reverse-Z, as everywhere else in this file.
+            # clearStencil=False -- D32 has no stencil aspect, see the format comment above.
+            commandList.clearDepthStencilTexture(depthTexture, True, 0.0, False, 0)
+
+            # Refit the cascades around the probe rather than around the camera frustum. This
+            # CLOBBERS the fit the current frame's RenderShadowMap made -- harmless, because
+            # RenderShadowMap refits from scratch at the top of every Render, so the damage
+            # lasts until the next frame begins. The sample behaves identically.
+            minX, minY, minZ, maxX, maxY, maxZ = (
+                self.scene.GetSceneGraph().GetRootNode().GetGlobalBoundingBox()
+            )
+            dx, dy, dz = maxX - minX, maxY - minY, maxZ - minZ
+            zRange = math.sqrt(dx * dx + dy * dy + dz * dz) * 0.5
+            self.shadowMap.SetupForCubemapView(
+                self.sunLight,
+                view,
+                LIGHT_PROBE_CULL_DISTANCE,
+                zRange,
+                zRange,
+                self.ui.ShadowExponent,
+            )
+            self.shadowMap.Clear(commandList)
+
+            shadowContext = pyd.DepthPassContext()
+            pyd.RenderCompositeView(
+                commandList,
+                self.shadowMap.GetView(),
+                None,
+                self.shadowFramebuffer,
+                self.scene.GetSceneGraph().GetRootNode(),
+                self.opaqueDrawStrategy,
+                self.depthPass,
+                shadowContext,
+                self.ui.EnableMaterialEvents,
+                "ShadowMap",
+            )
+
+            forwardContext = pyd.ForwardShadingPassContext()
+            # An EMPTY probe list, deliberately: a probe capture must not be lit by other
+            # probes, or probes would feed back into each other (FeatureDemo.cpp:1388-1389).
+            ambient = self.ui.AmbientIntensity
+            forwardPass.PrepareLights(
+                forwardContext,
+                commandList,
+                self.scene.GetSceneGraph().GetLights(),
+                ambient * 0.2, ambient * 0.2, ambient * 0.2,
+                ambient * 0.1, ambient * 0.1, ambient * 0.1,
+                [],
+            )
+
+            # viewPrev is None throughout: a one-off capture has no history, and nothing here
+            # reads motion vectors.
+            pyd.RenderCompositeView(
+                commandList,
+                view,
+                None,
+                framebuffer,
+                self.scene.GetSceneGraph().GetRootNode(),
+                self.opaqueDrawStrategy,
+                forwardPass,
+                forwardContext,
+                self.ui.EnableMaterialEvents,
+                "ForwardOpaque",
+            )
+
+            skyPass.Render(commandList, view, self.sunLight, self.ui.SkyParams)
+
+            pyd.RenderCompositeView(
+                commandList,
+                view,
+                None,
+                framebuffer,
+                self.scene.GetSceneGraph().GetRootNode(),
+                self.transparentDrawStrategy,
+                forwardPass,
+                forwardContext,
+                self.ui.EnableMaterialEvents,
+                "ForwardTransparent",
+            )
+
+            # levelsToGenerate is mips - 1: level 0 is the rendered image, the rest are reduced
+            # from it.
+            self.lightProbePass.GenerateCubemapMips(
+                commandList, colorTexture, 0, 0, LIGHT_PROBE_ENVIRONMENT_MIPS - 1
+            )
+
+            # * 6 on both array indices: a cube "slice" is six faces.
+            self.lightProbePass.RenderDiffuseMap(
+                commandList, colorTexture, probe.diffuseMap, probe.diffuseArrayIndex * 6, 0
+            )
+
+            # One specular mip per roughness step, squared so the low-roughness levels get the
+            # resolution (FeatureDemo.cpp:1416-1420).
+            for mipLevel in range(LIGHT_PROBE_SPECULAR_MIPS):
+                roughness = (mipLevel / (LIGHT_PROBE_SPECULAR_MIPS - 1)) ** 2.0
+                self.lightProbePass.RenderSpecularMap(
+                    commandList,
+                    roughness,
+                    colorTexture,
+                    probe.specularMap,
+                    probe.specularArrayIndex * 6,
+                    mipLevel,
+                )
+
+            self.lightProbePass.RenderEnvironmentBrdfTexture(commandList)
+
+            commandList.close()
+            device.executeCommandList(commandList)
+            # Both are the sample's (FeatureDemo.cpp:1426-1427). The wait is what makes the
+            # capture synchronous with the button press; the collection retires the throwaway
+            # colour, depth and framebuffer objects now rather than at some later frame.
+            device.waitForIdle()
+            device.runGarbageCollection()
+
+            probe.environmentBrdf = self.lightProbePass.GetEnvironmentBrdfTexture()
+            # Bounds must become non-empty or IsActive() stays false and the probe lights
+            # nothing, whatever `enabled` says.
+            probe.SetBoundsFromBox(
+                probeX - LIGHT_PROBE_BOUNDS_EXTENT,
+                probeY - LIGHT_PROBE_BOUNDS_EXTENT,
+                probeZ - LIGHT_PROBE_BOUNDS_EXTENT,
+                probeX + LIGHT_PROBE_BOUNDS_EXTENT,
+                probeY + LIGHT_PROBE_BOUNDS_EXTENT,
+                probeZ + LIGHT_PROBE_BOUNDS_EXTENT,
+            )
+            probe.enabled = True
 
         def RenderShadowMap(self: FeatureDemo, commandList: pyd.CommandList) -> None:
             """Fits the cascades to the current view, clears the map and fills every cascade.
