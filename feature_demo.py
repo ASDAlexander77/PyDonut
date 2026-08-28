@@ -89,6 +89,20 @@ if __name__ == "__main__":
     SHADOW_LIGHT_SPACE_Z_UP = 20.0
     SHADOW_LIGHT_SPACE_Z_DOWN = 20.0
 
+    # The light probes this example adds. All four share one diffuse and one specular cube-map
+    # ARRAY, indexed by slice -- not a private texture pair each. That is load-bearing:
+    # DeferredLightingPass logs an error and returns *without rendering the frame* if two
+    # submitted probes present different maps (DeferredLightingPass.cpp:246-253), the same
+    # failure mode CreateSceneLights documents for two lights with different shadow maps.
+    #
+    # Sizes and mip counts from FeatureDemo.cpp:1252-1256. The specular chain's 8 levels are
+    # the roughness axis: RenderLightProbe filters one level per roughness step.
+    LIGHT_PROBE_COUNT = 4
+    LIGHT_PROBE_DIFFUSE_SIZE = 256
+    LIGHT_PROBE_DIFFUSE_MIPS = 1
+    LIGHT_PROBE_SPECULAR_SIZE = 512
+    LIGHT_PROBE_SPECULAR_MIPS = 8
+
     # The two demonstration lights this example adds to Sponza. Intensity is luminous intensity
     # in lm/sr, multiplied by the light's colour; radius is the light sphere's radius in world
     # units. Starting points tuned by eye against Sponza's metre scale -- the Lights UI section
@@ -185,6 +199,12 @@ if __name__ == "__main__":
             # Side-by-side split viewport, not stereo hardware -- both eyes render into the one
             # back buffer (FeatureDemo.cpp:726-744).
             self.Stereo = False
+            # Light probes. The two scales are pushed onto every enabled probe each frame in
+            # Render -- LightProbe::FillLightProbeConstants reads them off the struct, so the UI
+            # has no other route to them.
+            self.EnableLightProbe = True
+            self.LightProbeDiffuseScale = 1.0
+            self.LightProbeSpecularScale = 1.0
 
     class RenderTargets:
         """Composes a pyd.GBufferRenderTargets with the extra HDR/LDR targets the sample needs.
@@ -352,6 +372,13 @@ if __name__ == "__main__":
             self.materialIDPass: pyd.MaterialIDPass | None = None
             self.pixelReadbackPass: pyd.PixelReadbackPass | None = None
             self.mipMapGenPass: pyd.MipMapGenPass | None = None
+            self.lightProbePass: pyd.LightProbeProcessingPass | None = None
+            self.lightProbes: list[pyd.LightProbe] = []
+            # Held so the shared arrays outlive the probes that index into them: LightProbe's
+            # diffuseMap/specularMap are nvrhi handles, but nothing else on the Python side
+            # keeps a reference.
+            self.lightProbeDiffuseTexture: pyd.Texture | None = None
+            self.lightProbeSpecularTexture: pyd.Texture | None = None
             # Armed by a right mouse press, consumed by the next Render. pickPosition is updated
             # on every mouse move, so it is already correct when the press arrives.
             self.pick = False
@@ -452,6 +479,15 @@ if __name__ == "__main__":
             self.CreateDepthPass(device)
 
             self.CreateShadowMap()
+
+            # Size-independent, like the geometry passes above: it holds shaders and an
+            # intermediate texture of its own, not anything sized to the back buffer, so it
+            # belongs here rather than in CreateRenderPasses. (The C++ sample builds it in
+            # CreateRenderPasses, FeatureDemo.cpp:830.)
+            self.lightProbePass = pyd.LightProbeProcessingPass(
+                device, self.shaderFactory, self.m_CommonPasses
+            )
+            self.CreateLightProbes(LIGHT_PROBE_COUNT)
 
             return True
 
@@ -683,6 +719,56 @@ if __name__ == "__main__":
             # (FramebufferFactory.cpp:30) and each cascade view carries its own array slice.
             self.shadowFramebuffer = pyd.FramebufferFactory(device)
             self.shadowFramebuffer.depthTarget = self.shadowMap.GetTexture()
+
+        def CreateLightProbes(self: FeatureDemo, numProbes: int) -> None:
+            """Allocates the two shared cube-map arrays and the probes that index into them.
+
+            Ports FeatureDemo.cpp:1249-1299. One diffuse array and one specular array serve every
+            probe, sliced by index -- see LIGHT_PROBE_COUNT's comment for why that sharing is
+            required rather than merely economical.
+
+            Every probe starts disabled AND with empty bounds. Either alone would be enough to
+            keep it out of the lighting passes (LightProbe::IsActive checks both,
+            SceneTypes.cpp:379-389); both are set because a probe with no captured content in its
+            slices must not light anything, and RenderLightProbe is what flips both back.
+            """
+            device = self.GetDevice()
+
+            def makeCubemapArray(size: int, mipLevels: int, name: str) -> pyd.Texture:
+                desc = pyd.TextureDesc()
+                desc.width = size
+                desc.height = size
+                desc.mipLevels = mipLevels
+                desc.arraySize = 6 * numProbes
+                desc.dimension = pyd.TextureDimension.TextureCubeArray
+                desc.isRenderTarget = True
+                desc.format = pyd.Format.RGBA16_FLOAT
+                # ShaderResource, not RenderTarget: these are only ever written by
+                # LightProbeProcessingPass and read by the lighting passes.
+                desc.initialState = pyd.ResourceStates.ShaderResource
+                desc.keepInitialState = True
+                desc.debugName = name
+                return device.createTexture(desc)
+
+            self.lightProbeDiffuseTexture = makeCubemapArray(
+                LIGHT_PROBE_DIFFUSE_SIZE, LIGHT_PROBE_DIFFUSE_MIPS, "LightProbeDiffuse"
+            )
+            self.lightProbeSpecularTexture = makeCubemapArray(
+                LIGHT_PROBE_SPECULAR_SIZE, LIGHT_PROBE_SPECULAR_MIPS, "LightProbeSpecular"
+            )
+
+            self.lightProbes = []
+            for index in range(numProbes):
+                probe = pyd.LightProbe()
+                # The UI labels each button with this, so it is "1".."4", not a zero-based index.
+                probe.name = str(index + 1)
+                probe.diffuseMap = self.lightProbeDiffuseTexture
+                probe.specularMap = self.lightProbeSpecularTexture
+                probe.diffuseArrayIndex = index
+                probe.specularArrayIndex = index
+                probe.SetBoundsEmpty()
+                probe.enabled = False
+                self.lightProbes.append(probe)
 
         def RenderShadowMap(self: FeatureDemo, commandList: pyd.CommandList) -> None:
             """Fits the cascades to the current view, clears the map and fills every cascade.
