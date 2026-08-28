@@ -77,20 +77,29 @@ def test_pixel_readback_pass_exposes_all_three_readers() -> None:
 def test_pixel_readback_capture_takes_flat_pixel_coordinates() -> None:
     # C++ takes a dm::uint2 (PixelReadbackPass.h:62); donut math types never cross into Python,
     # so it is flattened to two ints -- the same rule as PlanarView.SetPixelOffset.
+    #
+    # pybind11 3.x on this build renders every integral input parameter as
+    # "typing.SupportsInt | typing.SupportsIndex", never a bare "int" -- confirmed against the
+    # pre-existing, untouched CascadedShadowMap constructor binding, which shows the identical
+    # pattern for its own uint32_t parameters. So this checks for the parameter names and the
+    # ABSENCE of the math type, not a literal "x: int" spelling.
     doc = pyd.PixelReadbackPass.Capture.__doc__
     assert doc is not None
-    assert "x: int" in doc
-    assert "y: int" in doc
+    assert "x: typing.SupportsInt" in doc
+    assert "y: typing.SupportsInt" in doc
     assert "uint2" not in doc
 
 
 def test_pixel_readback_constructor_defaults_the_subresource() -> None:
     # arraySlice and mipLevel default to 0 in C++ (PixelReadbackPass.h:59-60); the binding keeps
     # them optional rather than forcing every caller to pass them.
+    #
+    # Same pybind11 3.x rendering as above -- integral parameters show as
+    # "typing.SupportsInt | typing.SupportsIndex", not "int".
     doc = pyd.PixelReadbackPass.__init__.__doc__
     assert doc is not None
-    assert "arraySlice: int = 0" in doc
-    assert "mipLevel: int = 0" in doc
+    assert "arraySlice: typing.SupportsInt | typing.SupportsIndex = 0" in doc
+    assert "mipLevel: typing.SupportsInt | typing.SupportsIndex = 0" in doc
 
 
 def test_command_list_can_clear_a_uint_texture() -> None:
@@ -98,7 +107,7 @@ def test_command_list_can_clear_a_uint_texture() -> None:
     # AllSubresources overload and a view-scoped one.
     doc = pyd.CommandList.clearTextureUInt.__doc__
     assert doc is not None
-    assert "clearValue: int" in doc
+    assert "clearValue: typing.SupportsInt" in doc
     assert "view: donut::engine::IView" in doc
 
 
