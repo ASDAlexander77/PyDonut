@@ -453,6 +453,26 @@ if __name__ == "__main__":
                 pyd.log.fatal(f"Failed to load {scenePath}")
                 return False
 
+            # GltfImporter never loads textures fully synchronously -- every path it has goes
+            # through LoadTextureFrom*Deferred/Async (GltfImporter.cpp:820-831), which only
+            # decodes the pixels and queues the GPU upload. Draining that queue is what actually
+            # creates the textures, and nothing here does it otherwise: ApplicationBase::Render
+            # drains it every frame (ApplicationBase.cpp:56), but this class overrides Render, and
+            # the inherited SceneLoaded() that would drain it (:102) only fires from
+            # BeginLoadingScene(), which this class does not use -- it calls Scene.Load directly.
+            #
+            # Without this, every texture stays null and MaterialBindingCache silently swaps in
+            # its flat fallback texture (MaterialBindingCache.cpp:110) -- no error, no warning,
+            # just untextured geometry that still lights and shades correctly. Sponza rendered
+            # entirely grey; the BrainStem robots looked fine only because they have no textures
+            # at all (0 images, 59 constant-colour materials), which is what made the bug read as
+            # "Sponza's assets are broken".
+            #
+            # Placement is load-bearing: after Load(), before FinishedLoading(). This assigns each
+            # texture its bindless descriptor index, and FinishedLoading() is what bakes those
+            # indices into the material buffer.
+            pyd.SceneLoaded(self.m_TextureCache, self.m_CommonPasses)
+
             self.CreateSunLight()
             self.CreateSceneLights()
             self.CreateSceneCameras()
