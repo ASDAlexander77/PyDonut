@@ -26,8 +26,8 @@
 Renders media/sponza-plus.scene.json through the full HDR pipeline: deferred or forward
 shading, a procedural sky, SSAO, TAA or MSAA, bloom, and tone mapping with eye adaptation,
 with cascaded sun shadows, a spot and a point light, a switchable first-person/third-person/
-scene camera, live light and material editors, right-click material picking, screenshots, and
-a MipMapGen test pass.
+scene camera, live light and material editors, right-click material picking, screenshots, a
+MipMapGen test pass and a side-by-side stereo mode.
 
 Still to come in stage 3b: light probes. DLSS, taskflow and the ImGui console are out of
 scope permanently: see docs/superpowers/specs/2026-08-25-feature-demo-stage1-design.md.
@@ -176,6 +176,9 @@ if __name__ == "__main__":
             self.TestMipMapGen = False
             # Set by the Screenshot button, consumed and cleared by the next Render.
             self.ScreenshotFileName = ""
+            # Side-by-side split viewport, not stereo hardware -- both eyes render into the one
+            # back buffer (FeatureDemo.cpp:726-744).
+            self.Stereo = False
 
     class RenderTargets:
         """Composes a pyd.GBufferRenderTargets with the extra HDR/LDR targets the sample needs.
@@ -321,8 +324,8 @@ if __name__ == "__main__":
             self.scene: pyd.Scene | None = None
             self.sunLight: pyd.DirectionalLight | None = None
             self.renderTargets: RenderTargets | None = None
-            self.view: pyd.PlanarView | None = None
-            self.viewPrevious: pyd.PlanarView | None = None
+            self.view: pyd.PlanarView | pyd.StereoPlanarView | None = None
+            self.viewPrevious: pyd.PlanarView | pyd.StereoPlanarView | None = None
             # SwitchableCamera owns a first-person camera, a third-person camera and the
             # optional active scene camera, and routes input to whichever is active. Init
             # picks the starting one -- a fresh SwitchableCamera is in *third* person.
@@ -957,10 +960,6 @@ if __name__ == "__main__":
                 self.toneMappingPass.AdvanceFrame(elapsedTimeSeconds)
 
         def SetupView(self: FeatureDemo, width: int, height: int) -> None:
-            if self.view is None:
-                self.view = pyd.PlanarView()
-                self.viewPrevious = pyd.PlanarView()
-
             # TAA needs a different sub-pixel offset every frame, otherwise TemporalResolve
             # accumulates identical samples and a static camera gets no anti-aliasing at all.
             # Jitter only in TEMPORAL mode, and clear it to (0, 0) in every other mode, so
@@ -972,16 +971,63 @@ if __name__ == "__main__":
             else:
                 pixelOffsetX, pixelOffsetY = 0.0, 0.0
 
-            viewport = pyd.Viewport(float(width), float(height))
-            self.view.SetViewport(viewport)
-            self.view.SetPixelOffset(pixelOffsetX, pixelOffsetY)
-            self.view.SetMatricesFromSwitchableCamera(self.camera, width / height)
-            self.view.UpdateCache()
+            # Swapping the view type mid-run leaves viewPrevious holding the *other* kind, which
+            # TAA would then resolve against. Rebuild both together and copy across, as
+            # FeatureDemo.cpp:722-726 and :753 do.
+            topologyChanged = False
+            if self.ui.Stereo:
+                if not isinstance(self.view, pyd.StereoPlanarView):
+                    self.view = pyd.StereoPlanarView()
+                    topologyChanged = True
+            else:
+                if not isinstance(self.view, pyd.PlanarView):
+                    self.view = pyd.PlanarView()
+                    topologyChanged = True
 
-            # The third-person camera converts mouse drags into orbit and pan amounts using
-            # the view's own projection and viewport, so it needs the view fed back in after
-            # UpdateCache -- as in FeatureDemo.cpp:773.
-            self.camera.GetThirdPersonCamera().SetView(self.view)
+            if self.ui.Stereo:
+                # Left eye owns the left half, right eye the right half of one back buffer.
+                self.view.LeftView.SetViewport(pyd.Viewport(width * 0.5, float(height)))
+                self.view.RightView.SetViewport(
+                    pyd.Viewport(width * 0.5, float(width), 0.0, float(height), 0.0, 1.0)
+                )
+                self.view.LeftView.SetPixelOffset(pixelOffsetX, pixelOffsetY)
+                self.view.RightView.SetPixelOffset(pixelOffsetX, pixelOffsetY)
+                # PER-EYE aspect ratio: each eye is half the framebuffer wide
+                # (FeatureDemo.cpp:736). The shim does not halve it internally.
+                self.view.SetMatricesFromSwitchableCamera(
+                    self.camera, width / height * 0.5
+                )
+                # StereoPlanarView has no cache of its own -- each eye is updated individually.
+                self.view.LeftView.UpdateCache()
+                self.view.RightView.UpdateCache()
+                # The third-person camera converts mouse drags into orbit and pan amounts using
+                # the view's own projection and viewport, so it needs one concrete eye, not the
+                # composite (FeatureDemo.cpp:751).
+                self.camera.GetThirdPersonCamera().SetView(self.view.LeftView)
+            else:
+                self.view.SetViewport(pyd.Viewport(float(width), float(height)))
+                self.view.SetPixelOffset(pixelOffsetX, pixelOffsetY)
+                self.view.SetMatricesFromSwitchableCamera(self.camera, width / height)
+                self.view.UpdateCache()
+                # As in FeatureDemo.cpp:773.
+                self.camera.GetThirdPersonCamera().SetView(self.view)
+
+            if topologyChanged:
+                # Seed viewPrevious from the view just built, so the first frame after a switch
+                # does not resolve this frame against the other topology's leftovers.
+                self.viewPrevious = self._snapshotView()
+                # TAA history built against the old topology is meaningless now.
+                self.previousViewsValid = False
+
+        def _snapshotView(self: FeatureDemo) -> pyd.PlanarView | pyd.StereoPlanarView:
+            """Copies the current view, preserving its topology.
+
+            The copy constructor is the only way to snapshot a view -- neither type exposes its
+            matrices to Python -- and each type has its own, so this has to switch.
+            """
+            if isinstance(self.view, pyd.StereoPlanarView):
+                return pyd.StereoPlanarView(self.view)
+            return pyd.PlanarView(self.view)
 
         def Render(self: FeatureDemo, framebuffer: pyd.Framebuffer) -> None:
             device = self.GetDevice()
@@ -1435,7 +1481,7 @@ if __name__ == "__main__":
                 else:
                     self.PointThirdPersonCameraAt(sceneGraph.GetRootNode())
 
-            self.viewPrevious = pyd.PlanarView(self.view)
+            self.viewPrevious = self._snapshotView()
 
     class UIRenderer(pyd.ImGui_Renderer):
         def __init__(
@@ -1490,6 +1536,8 @@ if __name__ == "__main__":
             )
 
             _, self.ui.EnableVsync = pyd.ImGui.Checkbox("VSync", self.ui.EnableVsync)
+
+            _, self.ui.Stereo = pyd.ImGui.Checkbox("Stereo", self.ui.Stereo)
 
             _, self.ui.EnableAnimations = pyd.ImGui.Checkbox(
                 "Animations", self.ui.EnableAnimations
