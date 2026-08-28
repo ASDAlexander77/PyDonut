@@ -3171,6 +3171,11 @@ PYBIND11_MODULE(_pydonut, m) {
     // Blocking and modal: never call it from a test.
     m.def("FileDialog", [](bool bOpen, const std::vector<std::pair<std::string, std::string>> &filters)
             -> std::optional<std::string> {
+        // NOTE: a filter description/pattern containing an embedded NUL byte silently truncates
+        // at that point once packed.c_str() is read below -- std::string itself tolerates NULs,
+        // but the C API this feeds does not. Not a safety issue (no overflow), and no caller in
+        // this repo constructs a filter string that way, so this is documented rather than
+        // guarded against.
         std::string packed;
         for (const auto &filter : filters)
         {
@@ -3440,7 +3445,7 @@ PYBIND11_MODULE(_pydonut, m) {
     // Registered as an IView (not just ICompositeView) because StereoView derives from IView
     // directly, and several of the passes widened alongside this take IView.
     //
-    // NOTE most of the IView accessors are dangerous on this type: GetViewMatrix,
+    // NOTE six of IView's matrix accessors are dangerous on this type: GetViewMatrix,
     // GetInverseViewMatrix, GetProjectionMatrix, GetViewProjectionMatrix and their inverses are
     // all assert(false) + identity (View.h:256-292), and asserts compile out in this project's
     // Release build. None of them is bound here. GetViewFrustum and GetProjectionFrustum ARE

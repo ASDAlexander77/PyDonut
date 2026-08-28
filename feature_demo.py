@@ -41,7 +41,6 @@ from __future__ import annotations
 
 if __name__ == "__main__":
     import math
-    import pathlib
     import sys
     from enum import IntEnum
     from pathlib import Path
@@ -110,6 +109,13 @@ if __name__ == "__main__":
     # defaults verticalFovRadians to PI/4, and SetupView does not override it. The C++ sample
     # uses 60 degrees (FeatureDemo.cpp:323); matching the shim instead keeps the pick framing
     # consistent with what is actually on screen.
+    #
+    # Caveat: this only holds while a user (first/third-person) camera is active.
+    # SetMatricesFromSwitchableCamera defers to GetSceneCameraProjectionParams when a scene
+    # camera (Nave/Gallery) is active, which overrides verticalFovRadians with that camera's own
+    # FOV -- so a pick made through a scene camera can frame at a slightly different distance
+    # than this constant implies. Harmless: PointThirdPersonCameraAt always switches to
+    # third-person on a hit, so the discrepancy is invisible past that first reframe.
     CAMERA_VERTICAL_FOV = math.pi / 4.0
 
     def _nextScreenshotPath() -> str:
@@ -121,7 +127,7 @@ if __name__ == "__main__":
         deliberate: the alternative is a button that silently does nothing under WSL, and the
         file is trivially deleted.
         """
-        directory = pathlib.Path(__file__).parent
+        directory = Path(__file__).parent
         index = 1
         while True:
             candidate = directory / f"screenshot_{index:04d}.bmp"
@@ -959,7 +965,17 @@ if __name__ == "__main__":
             if self.toneMappingPass is not None:
                 self.toneMappingPass.AdvanceFrame(elapsedTimeSeconds)
 
-        def SetupView(self: FeatureDemo, width: int, height: int) -> None:
+        def SetupView(self: FeatureDemo, width: int, height: int) -> bool:
+            """Updates self.view/self.viewPrevious for this frame's viewport.
+
+            Returns whether the view's TOPOLOGY changed (planar <-> stereo) this frame --
+            Render uses this to decide whether the size-independent passes need rebuilding,
+            matching FeatureDemo.cpp:895-921's needNewPasses pattern. BloomPass in particular
+            sizes an internal per-view-child vector at construction from
+            compositeView.GetNumChildViews(ViewType::PLANAR) and indexes it per child every
+            Render call -- a topology change without a pass rebuild leaves it indexing past
+            the end of that vector.
+            """
             # TAA needs a different sub-pixel offset every frame, otherwise TemporalResolve
             # accumulates identical samples and a static camera gets no anti-aliasing at all.
             # Jitter only in TEMPORAL mode, and clear it to (0, 0) in every other mode, so
@@ -1019,6 +1035,8 @@ if __name__ == "__main__":
                 # TAA history built against the old topology is meaningless now.
                 self.previousViewsValid = False
 
+            return topologyChanged
+
         def _snapshotView(self: FeatureDemo) -> pyd.PlanarView | pyd.StereoPlanarView:
             """Copies the current view, preserving its topology.
 
@@ -1069,7 +1087,9 @@ if __name__ == "__main__":
             # CreateRenderPasses reads self.view (SkyPass's constructor takes the composite
             # view), so SetupView must run before it -- and before the rebuild block below,
             # since that block calls CreateRenderPasses once the new targets exist.
-            self.SetupView(width, height)
+            topologyChanged = self.SetupView(width, height)
+
+            needNewPasses = False
 
             if self.renderTargets is None or self.renderTargets.IsUpdateRequired(
                 width, height, sampleCount
@@ -1184,6 +1204,28 @@ if __name__ == "__main__":
                 # Its own bindingCache.Clear()/ResetBindingCache() calls are therefore a cheap,
                 # idempotent no-op here (the caches are already empty); this only runs on
                 # resize/AA-mode change, not per frame.
+                needNewPasses = True
+
+            # A topology-only change (Stereo toggled with no resize/AA change) does NOT need a
+            # RenderTargets reallocation, but DOES need the size-independent passes rebuilt --
+            # matching FeatureDemo.cpp:906-909. BloomPass in particular caches state sized to the
+            # OLD view's child-view count at construction (see SetupView's docstring above); the
+            # crash this fixes is BloomPass indexing past that cached vector's end after Stereo
+            # is ticked with no other setting changed.
+            #
+            # A topology-only change here also re-triggers CreateRenderPasses's exposure-reset
+            # path (pendingExposureBuffer is already None from the last CreateRenderPasses call,
+            # so exposureResetRequired becomes True) -- a one-frame flash back to 0.5 exposure
+            # when Stereo is toggled. Matches the reference sample's behavior in the same case;
+            # not something this fix changes.
+            if topologyChanged:
+                needNewPasses = True
+
+            # CreateRenderPasses asserts self.renderTargets is not None and reads its
+            # allocated textures, so it can only run after the block above (which allocates
+            # self.renderTargets on first run and keeps it unchanged on later runs, per its own
+            # size-driven condition).
+            if needNewPasses:
                 self.CreateRenderPasses()
 
             self.commandList.open()
@@ -1420,17 +1462,20 @@ if __name__ == "__main__":
                         toneMappingParams.eyeAdaptationSpeedDown,
                     ) = savedSpeeds
 
-            # Matches FeatureDemo.cpp:1162-1166: reduce ResolvedColor's mip chain, then blit the
-            # levels in a spiral over the back buffer so the result is visible.
+            self.m_CommonPasses.BlitTexture(
+                self.commandList, framebuffer, self.renderTargets.LdrColor, self.bindingCache
+            )
+
+            # Matches FeatureDemo.cpp:1159-1166: the blit runs FIRST, then this reduces
+            # ResolvedColor's mip chain and draws the levels in a spiral OVER the just-blitted
+            # back buffer, so the result is actually visible. (An earlier version of this file
+            # had the order reversed, citing the same line range incorrectly -- the spiral was
+            # being drawn and then immediately erased by the blit.)
             if self.ui.TestMipMapGen and self.mipMapGenPass is not None:
                 self.mipMapGenPass.Dispatch(self.commandList)
                 self.mipMapGenPass.Display(
                     self.m_CommonPasses, self.commandList, framebuffer
                 )
-
-            self.m_CommonPasses.BlitTexture(
-                self.commandList, framebuffer, self.renderTargets.LdrColor, self.bindingCache
-            )
 
             self.commandList.close()
             device.executeCommandList(self.commandList)
@@ -1455,7 +1500,7 @@ if __name__ == "__main__":
 
             # After executeCommandList: the readback buffer is not populated until the GPU has
             # run the Capture recorded above (FeatureDemo.cpp:1197-1228).
-            if self.pick:
+            if self.pick and self.pixelReadbackPass is not None:
                 self.pick = False
                 materialID, instanceIndex, _, _ = self.pixelReadbackPass.ReadUInts()
 
