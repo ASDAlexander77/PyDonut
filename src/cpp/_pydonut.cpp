@@ -1502,6 +1502,7 @@ PYBIND11_MODULE(_pydonut, m) {
         return info;
     });
     device.def("waitForIdle", &nvrhi::IDevice::waitForIdle);
+    device.def("runGarbageCollection", &nvrhi::IDevice::runGarbageCollection);
     // Wrapped through DetachToShared like every other create*() factory below -- the raw
     // method returns nvrhi::TimerQueryHandle (RefCountPtr<ITimerQuery>), which pybind11 can't
     // convert directly to the std::shared_ptr<ITimerQuery> holder TimerQuery is registered with.
