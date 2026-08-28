@@ -121,8 +121,8 @@ def test_set_bounds_from_box_takes_six_flat_floats() -> None:
 
 
 def test_prepare_lights_still_accepts_the_nine_argument_form() -> None:
-    # THE regression guard for this task. deferred_shading.py, threaded_rendering.py and every
-    # other existing caller passes nine arguments; lightProbes is trailing and defaulted so they
+    # THE regression guard for this task. variable_shading.py, threaded_rendering.py,
+    # rt_reflections.py and every other existing caller passes nine arguments; lightProbes is trailing and defaulted so they
     # keep working untouched. If a future edit reorders the parameters, this fails first.
     doc = pyd.ForwardShadingPass.PrepareLights.__doc__
     assert doc is not None

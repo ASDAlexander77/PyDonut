@@ -2810,7 +2810,7 @@ PYBIND11_MODULE(_pydonut, m) {
         .def("Init", &donut::render::ForwardShadingPass::Init, py::arg("shaderFactory"), py::arg("params"))
         .def("ResetBindingCache", &donut::render::ForwardShadingPass::ResetBindingCache)
         // lightProbes is trailing and defaulted so the nine-argument form every other example
-        // uses (deferred_shading.py, threaded_rendering.py, rt_bindless.py) keeps compiling
+        // uses (variable_shading.py, threaded_rendering.py, rt_reflections.py) keeps compiling
         // untouched. Stage 3b replaced the previously hardcoded empty vector with this.
         .def("PrepareLights", [](donut::render::ForwardShadingPass &self, donut::render::ForwardShadingPass::Context &context,
                 nvrhi::ICommandList* commandList, const std::vector<std::shared_ptr<donut::engine::Light>> &lights,
