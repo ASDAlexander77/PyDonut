@@ -644,6 +644,25 @@ if __name__ == "__main__":
             # is left alone.
             self.CreateDepthPass(device)
 
+            # Recreated, not merely ResetCaches()'d: the constructor is what compiles this pass's
+            # five shaders, so a reload that only cleared its caches would keep running the old
+            # ones. Recreating it invalidates every probe -- probe.environmentBrdf points at the
+            # OUTGOING pass's internally-owned BRDF texture, which dies with it -- so every probe
+            # is disabled too. That mirrors what the sample does in SceneUnloading
+            # (FeatureDemo.cpp:563-573); this port has no SceneUnloading, and a shader reload is
+            # the analogous "everything built from shaders is stale now" point.
+            #
+            # The two cube-map arrays are NOT reallocated: they hold rendered pixels, not
+            # anything derived from shader bytecode, and CreateLightProbes' probe objects still
+            # index them correctly. Only the captured content is stale, which is what disabling
+            # expresses.
+            self.lightProbePass = pyd.LightProbeProcessingPass(
+                device, self.shaderFactory, self.m_CommonPasses
+            )
+            for probe in self.lightProbes:
+                probe.enabled = False
+                probe.environmentBrdf = None
+
             # BlitTexture's cached binding sets were built against the *old* CommonRenderPasses'
             # binding layout, so they cannot be reused with the instance created above.
             self.bindingCache.Clear()
@@ -1571,6 +1590,18 @@ if __name__ == "__main__":
             if self.exposureResetRequired:
                 self.toneMappingPass.ResetExposure(self.commandList, 0.5)
 
+            # Built once, before the shading branch, and handed to whichever path runs
+            # (FeatureDemo.cpp:968-978). The two scales are written onto the probe objects here
+            # because LightProbe::FillLightProbeConstants reads them off the struct -- the UI has
+            # no other route to them.
+            lightProbes = []
+            if self.ui.EnableLightProbe:
+                for probe in self.lightProbes:
+                    if probe.enabled:
+                        probe.diffuseScale = self.ui.LightProbeDiffuseScale
+                        probe.specularScale = self.ui.LightProbeSpecularScale
+                        lightProbes.append(probe)
+
             self.renderTargets.Clear(self.commandList)
 
             # Assigning the map to the light is the entire wiring -- both lighting passes read
@@ -1615,6 +1646,12 @@ if __name__ == "__main__":
                 deferredInputs = pyd.DeferredLightingPassInputs()
                 deferredInputs.SetGBuffer(self.renderTargets.gbuffer)
                 deferredInputs.SetLights(self.scene.GetSceneGraph().GetLights())
+                # The sample passes its WHOLE probe list here while giving the forward path the
+                # filtered one (FeatureDemo.cpp:1021) -- an asymmetry that only works because
+                # DeferredLightingPass skips probes failing IsActive(). One filtered list feeds
+                # both paths here: identical rendered result, one thing to keep in sync instead
+                # of two.
+                deferredInputs.SetLightProbes(lightProbes)
                 deferredInputs.SetAmbientColors(
                     ambient * 0.2, ambient * 0.2, ambient * 0.2,
                     ambient * 0.1, ambient * 0.1, ambient * 0.1,
@@ -1636,6 +1673,7 @@ if __name__ == "__main__":
                     self.scene.GetSceneGraph().GetLights(),
                     ambient * 0.2, ambient * 0.2, ambient * 0.2,
                     ambient * 0.1, ambient * 0.1, ambient * 0.1,
+                    lightProbes,
                 )
                 pyd.RenderCompositeView(
                     self.commandList,
