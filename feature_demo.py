@@ -21,17 +21,15 @@
 # * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # ******************************************************************************/
 
-"""Port of Donut's FeatureDemo sample -- stages 1, 2a, 2b and 2c.
+"""Port of Donut's FeatureDemo sample -- stages 1, 2a, 2b, 2c and 3a.
 
 Renders media/sponza-plus.scene.json through the full HDR pipeline: deferred or forward
 shading, a procedural sky, SSAO, TAA or MSAA, bloom, and tone mapping with eye adaptation,
 with cascaded sun shadows, a spot and a point light, a switchable first-person/third-person/
-scene camera, and live light and material editors.
+scene camera, live light and material editors, and right-click material picking.
 
-Still to come in stage 3: light probes, MaterialID readback (which replaces the material
-editor's dropdown with right-click picking), MipMapGen, stereo and screenshots. DLSS,
-taskflow and the ImGui console are out of scope permanently: see
-docs/superpowers/specs/2026-08-25-feature-demo-stage1-design.md.
+Still to come in stage 3b: light probes. DLSS, taskflow and the ImGui console are out of
+scope permanently: see docs/superpowers/specs/2026-08-25-feature-demo-stage1-design.md.
 
 NOTE: sponza-plus.scene.json declares no lights and no cameras at all, so the "Sun",
 "Point" and "Spot" lights and the "Nave" and "Gallery" cameras this example offers are all
@@ -106,6 +104,12 @@ if __name__ == "__main__":
     GALLERY_CAMERA_FOV = math.radians(40.0)
     SCENE_CAMERA_Z_NEAR = 0.1
 
+    # The vertical FOV the view shim actually uses -- PlanarView.SetMatricesFromSwitchableCamera
+    # defaults verticalFovRadians to PI/4, and SetupView does not override it. The C++ sample
+    # uses 60 degrees (FeatureDemo.cpp:323); matching the shim instead keeps the pick framing
+    # consistent with what is actually on screen.
+    CAMERA_VERTICAL_FOV = math.pi / 4.0
+
     class UIData:
         """Shared by reference between FeatureDemo and UIRenderer.
 
@@ -145,6 +149,11 @@ if __name__ == "__main__":
             self.ShadowFalloffDistance = 1.0
             self.ShadowLitOutOfBounds = True
             self.ShaderReloadRequested = False
+            # Written by the MaterialID readback each time a pick resolves. SelectedMaterial
+            # drives the Material Editor window; SelectedNode drives the picked-node readout and
+            # the third-person camera reframe.
+            self.SelectedMaterial: pyd.Material | None = None
+            self.SelectedNode: pyd.SceneGraphNode | None = None
 
     class RenderTargets:
         """Composes a pyd.GBufferRenderTargets with the extra HDR/LDR targets the sample needs.
@@ -166,6 +175,8 @@ if __name__ == "__main__":
             self.HdrFramebuffer: pyd.FramebufferFactory | None = None
             self.LdrFramebuffer: pyd.FramebufferFactory | None = None
             self.ResolvedFramebuffer: pyd.FramebufferFactory | None = None
+            self.MaterialIDs: pyd.Texture | None = None
+            self.MaterialIDFramebuffer: pyd.FramebufferFactory | None = None
             self.width = 0
             self.height = 0
             self.sampleCount = 0
@@ -200,6 +211,11 @@ if __name__ == "__main__":
                 return device.createTexture(desc)
 
             self.HdrColor = makeColor(pyd.Format.RGBA16_FLOAT, "HdrColor", True)
+
+            # MSAA-matched alongside HdrColor, and non-UAV: the pick pass only ever renders into
+            # it (FeatureDemo.cpp:124-127). RG16_UINT holds a material ID in .x and an instance
+            # index in .y.
+            self.MaterialIDs = makeColor(pyd.Format.RG16_UINT, "MaterialIDs", False)
 
             # ResolvedColor and the TAA feedback pair are always single-sampled: they are the
             # *output* of resolving, so they must not themselves be multisampled.
@@ -240,6 +256,12 @@ if __name__ == "__main__":
 
             self.ResolvedFramebuffer = pyd.FramebufferFactory(device)
             self.ResolvedFramebuffer.SetRenderTargets([self.ResolvedColor])
+
+            self.MaterialIDFramebuffer = pyd.FramebufferFactory(device)
+            self.MaterialIDFramebuffer.SetRenderTargets([self.MaterialIDs])
+            # Shares the gbuffer's depth so the pick pass depth-tests against the same geometry
+            # the visible frame did (FeatureDemo.cpp:208-210).
+            self.MaterialIDFramebuffer.depthTarget = depth
 
         def IsUpdateRequired(
             self: RenderTargets, width: int, height: int, sampleCount: int
@@ -285,6 +307,12 @@ if __name__ == "__main__":
             self.shadowMap: pyd.CascadedShadowMap | None = None
             self.shadowFramebuffer: pyd.FramebufferFactory | None = None
             self.depthPass: pyd.DepthPass | None = None
+            self.materialIDPass: pyd.MaterialIDPass | None = None
+            self.pixelReadbackPass: pyd.PixelReadbackPass | None = None
+            # Armed by a right mouse press, consumed by the next Render. pickPosition is updated
+            # on every mouse move, so it is already correct when the press arrives.
+            self.pick = False
+            self.pickPosition = (0, 0)
             # Hoisted, unlike gbufferContext/forwardContext which are built per frame: the
             # shadow depth pass is this context's only user, and RenderCompositeView is done
             # with it by the time it returns, so one instance serves every frame. The
@@ -361,6 +389,13 @@ if __name__ == "__main__":
             self.gbufferPass = pyd.GBufferFillPass(device, self.m_CommonPasses)
             self.gbufferPass.Init(self.shaderFactory, pyd.GBufferFillPassCreateParameters())
 
+            # Size-independent, like gbufferPass: it holds pipelines, not render targets, so it
+            # belongs here and in ReloadShaders rather than in CreateRenderPasses. (The C++
+            # sample builds it in CreateRenderPasses, FeatureDemo.cpp:800-801, but this port
+            # already keeps its geometry passes out of that method.)
+            self.materialIDPass = pyd.MaterialIDPass(device, self.m_CommonPasses)
+            self.materialIDPass.Init(self.shaderFactory, pyd.GBufferFillPassCreateParameters())
+
             self.deferredLightingPass = pyd.DeferredLightingPass(device, self.m_CommonPasses)
             self.deferredLightingPass.Init(self.shaderFactory)
 
@@ -381,6 +416,16 @@ if __name__ == "__main__":
             """Recreates every size-dependent pass. Called whenever RenderTargets is rebuilt."""
             device = self.GetDevice()
             assert self.renderTargets is not None
+
+            # RGBA32_UINT is the readback *buffer's* layout and the compute shader variant that
+            # fills it -- not the source texture's format, which is RG16_UINT. The mismatch is
+            # deliberate and matches FeatureDemo.cpp:803.
+            self.pixelReadbackPass = pyd.PixelReadbackPass(
+                device,
+                self.shaderFactory,
+                self.renderTargets.MaterialIDs,
+                pyd.Format.RGBA32_UINT,
+            )
 
             self.bindingCache.Clear()
             self.gbufferPass.ResetBindingCache()
@@ -483,6 +528,9 @@ if __name__ == "__main__":
 
             self.gbufferPass = pyd.GBufferFillPass(device, self.m_CommonPasses)
             self.gbufferPass.Init(self.shaderFactory, pyd.GBufferFillPassCreateParameters())
+
+            self.materialIDPass = pyd.MaterialIDPass(device, self.m_CommonPasses)
+            self.materialIDPass.Init(self.shaderFactory, pyd.GBufferFillPassCreateParameters())
 
             self.deferredLightingPass = pyd.DeferredLightingPass(device, self.m_CommonPasses)
             self.deferredLightingPass.Init(self.shaderFactory)
@@ -754,6 +802,37 @@ if __name__ == "__main__":
 
             graph.Refresh(0)
 
+        def PointThirdPersonCameraAt(
+            self: FeatureDemo, node: pyd.SceneGraphNode | None
+        ) -> None:
+            """Orbits the third-person camera around `node`, framed to its bounding box.
+
+            Mirrors FeatureDemo.cpp:659-667. Does nothing for a node with no geometry: an empty
+            box3 is mins = FLT_MAX / maxs = -FLT_MAX, which would give an infinite radius and
+            throw the camera to infinity. The C++ never hits that case because it only ever
+            calls this with loaded geometry, so the guard is an addition, not a port.
+            """
+            if node is None:
+                return
+
+            minX, minY, minZ, maxX, maxY, maxZ = node.GetGlobalBoundingBox()
+            if minX > maxX or minY > maxY or minZ > maxZ:
+                return
+
+            dx, dy, dz = maxX - minX, maxY - minY, maxZ - minZ
+            radius = math.sqrt(dx * dx + dy * dy + dz * dz) * 0.5
+            if radius <= 0.0:
+                return
+
+            thirdPerson = self.camera.GetThirdPersonCamera()
+            thirdPerson.SetTargetPosition(
+                (minX + maxX) * 0.5, (minY + maxY) * 0.5, (minZ + maxZ) * 0.5
+            )
+            thirdPerson.SetDistance(radius / math.sin(CAMERA_VERTICAL_FOV * 0.5))
+            # Load-bearing: SetTargetPosition and SetDistance only stage the values. Without
+            # this the camera stays exactly where it was, with no error.
+            thirdPerson.Animate(0.0)
+
         def KeyboardUpdate(self: FeatureDemo, key: int, scancode: int, action: int, mods: int) -> bool:
             # UIData.ShowUI is read by UIRenderer.buildUI but had nothing to set it -- without
             # a binding the settings panel can never be dismissed to see the frame behind it.
@@ -778,10 +857,19 @@ if __name__ == "__main__":
 
         def MousePosUpdate(self: FeatureDemo, xpos: float, ypos: float) -> bool:
             self.camera.MousePosUpdate(xpos, ypos)
+            # Recorded unconditionally, so the position is already right when a press arrives
+            # (FeatureDemo.cpp:511). The sample guards its camera call with
+            # `if (!m_ui.ActiveSceneCamera)`; SwitchableCamera already routes input away from
+            # the user cameras when a scene camera is active, so there is no guard here.
+            self.pickPosition = (int(xpos), int(ypos))
             return True
 
         def MouseButtonUpdate(self: FeatureDemo, button: int, action: int, mods: int) -> bool:
             self.camera.MouseButtonUpdate(button, action, mods)
+            # No GLFW keycode enum is bound -- raw codes with a comment, the convention the other
+            # examples use. Matches FeatureDemo.cpp:521-522.
+            if button == 1 and action == 1:  # GLFW_MOUSE_BUTTON_2, GLFW_PRESS
+                self.pick = True
             return True
 
         def MouseScrollUpdate(self: FeatureDemo, xoffset: float, yoffset: float) -> bool:
@@ -1121,6 +1209,43 @@ if __name__ == "__main__":
                         self.ui.EnableMaterialEvents,
                     )
 
+            # Matches FeatureDemo.cpp:1039-1067: after the shading passes so it sees the same
+            # depth buffer, before the sky so the sky cannot overwrite an ID.
+            if self.pick and self.pixelReadbackPass is not None:
+                # 0xffff is the "nothing here" sentinel -- material IDs and instance indices are
+                # both non-negative, so no real value collides with it.
+                self.commandList.clearTextureUInt(self.renderTargets.MaterialIDs, 0xFFFF)
+
+                materialIDContext = pyd.GBufferFillPassContext()
+                pyd.RenderCompositeView(
+                    self.commandList,
+                    self.view,
+                    self.viewPrevious,
+                    self.renderTargets.MaterialIDFramebuffer,
+                    self.scene.GetSceneGraph().GetRootNode(),
+                    self.opaqueDrawStrategy,
+                    self.materialIDPass,
+                    materialIDContext,
+                    self.ui.EnableMaterialEvents,
+                )
+
+                if self.ui.EnableTranslucency:
+                    pyd.RenderCompositeView(
+                        self.commandList,
+                        self.view,
+                        self.viewPrevious,
+                        self.renderTargets.MaterialIDFramebuffer,
+                        self.scene.GetSceneGraph().GetRootNode(),
+                        self.transparentDrawStrategy,
+                        self.materialIDPass,
+                        materialIDContext,
+                        self.ui.EnableMaterialEvents,
+                    )
+
+                self.pixelReadbackPass.Capture(
+                    self.commandList, self.pickPosition[0], self.pickPosition[1]
+                )
+
             if self.ui.EnableProceduralSky and self.sunLight is not None:
                 self.skyPass.Render(
                     self.commandList, self.view, self.sunLight, self.ui.SkyParams
@@ -1213,6 +1338,34 @@ if __name__ == "__main__":
             self.commandList.close()
             device.executeCommandList(self.commandList)
 
+            # After executeCommandList: the readback buffer is not populated until the GPU has
+            # run the Capture recorded above (FeatureDemo.cpp:1197-1228).
+            if self.pick:
+                self.pick = False
+                materialID, instanceIndex, _, _ = self.pixelReadbackPass.ReadUInts()
+
+                self.ui.SelectedMaterial = None
+                self.ui.SelectedNode = None
+
+                sceneGraph = self.scene.GetSceneGraph()
+                for material in sceneGraph.GetMaterials():
+                    if material.materialID == materialID:
+                        self.ui.SelectedMaterial = material
+                        break
+
+                for instance in sceneGraph.GetMeshInstances():
+                    if instance.GetInstanceIndex() == instanceIndex:
+                        # The owning handle, not GetNode()'s raw pointer: this is stored across
+                        # frames and outlives the loop.
+                        self.ui.SelectedNode = instance.GetNodeSharedPtr()
+                        break
+
+                if self.ui.SelectedNode is not None:
+                    pyd.log.info(f"Picked node: {self.ui.SelectedNode.GetPath()}")
+                    self.PointThirdPersonCameraAt(self.ui.SelectedNode)
+                else:
+                    self.PointThirdPersonCameraAt(sceneGraph.GetRootNode())
+
             self.viewPrevious = pyd.PlanarView(self.view)
 
     class UIRenderer(pyd.ImGui_Renderer):
@@ -1226,10 +1379,6 @@ if __name__ == "__main__":
             # UI reads it -- the same place the original keeps m_SelectedLight
             # (FeatureDemo.cpp:1445).
             self.selectedLight: pyd.Light | None = None
-            # Same reasoning as selectedLight: nothing outside the UI reads it. The original
-            # keeps the equivalent in m_ui.SelectedMaterial because its MaterialID readback
-            # writes it from outside the UI -- that readback is stage 3.
-            self.selectedMaterial: pyd.Material | None = None
             pyd.ImGui.DisableIniFile()
 
         def buildUI(self: UIRenderer) -> None:
@@ -1512,19 +1661,21 @@ if __name__ == "__main__":
             pyd.ImGui.End()
 
             # A second, separate window, as in FeatureDemo.cpp:1684-1698. Outside the Settings
-            # window's Begin/End: ImGui windows do not nest.
-            if self.app.scene is not None:
-                materials = self.app.scene.GetSceneGraph().GetMaterials()
-                if materials:
-                    self._buildMaterialEditorWindow(materials)
+            # window's Begin/End: ImGui windows do not nest. Shown only when a pick has resolved
+            # to a material -- right-click in the viewport to select one.
+            if self.ui.SelectedMaterial is not None:
+                self._buildMaterialEditorWindow(self.ui.SelectedMaterial)
 
         def _buildMaterialEditorWindow(
-            self: UIRenderer, materials: list[pyd.Material]
+            self: UIRenderer, material: pyd.Material
         ) -> None:
-            """Draws the Material Editor window over the currently selected material.
+            """Draws the Material Editor window over the picked material.
 
             Split out of buildUI purely for size -- buildUI is already long, and this is a
             self-contained second window rather than another section of the settings panel.
+
+            Stage 2c drove this from a dropdown as an explicit stand-in for picking. The
+            dropdown is gone; `material` is whatever the last right-click resolved to.
             """
             # Right-aligned, matching FeatureDemo.cpp:1687: the pivot puts the window's
             # top-right corner at the given point, which is the only way to right-align
@@ -1540,29 +1691,12 @@ if __name__ == "__main__":
             # push an ID scope -- the same collision the Lights section is wrapped against.
             pyd.ImGui.PushID("MaterialEditor")
 
-            if self.selectedMaterial is None:
-                self.selectedMaterial = materials[0]
-
-            # A dropdown stands in for the right-click viewport picking the original uses
-            # (FeatureDemo.cpp:1684 reads m_ui.SelectedMaterial, written by a MaterialID
-            # readback). That readback is stage 3; this combo is transitional and goes away
-            # with it, rather than being a deliberate departure from the original.
             # Sponza's glTF assigns no name to any of its materials (GltfImporter.cpp:914-915
-            # only sets one when the source file supplies it), so plain material.name labels
-            # would collide on the empty string "" -- every unnamed material's Selectable would
-            # share one ImGui ID. The already-unique materialID as an ID suffix fixes that.
-            previewName = self.selectedMaterial.name or "(unnamed)"
-            if pyd.ImGui.BeginCombo("Material", previewName):
-                for material in materials:
-                    label = f"{material.name or '(unnamed)'}##{material.materialID}"
-                    if pyd.ImGui.Selectable(
-                        label, material is self.selectedMaterial
-                    ):
-                        self.selectedMaterial = material
-                pyd.ImGui.EndCombo()
-
-            material = self.selectedMaterial
+            # only sets one when the source file supplies it), so the ID carries the identity.
             pyd.ImGui.Text(f"Material {material.materialID}: {material.name or '(unnamed)'}")
+
+            if self.ui.SelectedNode is not None:
+                pyd.ImGui.Text(f"Node: {self.ui.SelectedNode.GetPath()}")
 
             previousDomain = material.domain
             material.dirty = pyd.MaterialEditor(material, True)
