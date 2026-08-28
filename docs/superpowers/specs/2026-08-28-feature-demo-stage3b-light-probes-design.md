@@ -422,12 +422,17 @@ test files:
   `name`, `diffuseMap`, `specularMap`, `environmentBrdf`, `diffuseArrayIndex`,
   `specularArrayIndex`, `diffuseScale`, `specularScale`, `enabled`.
 - Defaults match `SceneTypes.h:362-367`: indices 0, scales 1.0, `enabled = True`.
-- `IsActive()` is False on a fresh probe. Note *which* of its three conditions
-  (`SceneTypes.cpp:379-389`) fails: not the bounds check — a default-constructed probe's
-  bounds are `frustum::infinite()`, not empty — but the map check, since neither
-  `diffuseMap` nor `specularMap` is assigned. Assigning a `diffuseMap` therefore flips it
-  to True, and `SetBoundsEmpty()` flips it back; the test pins both transitions, which is
-  what proves the bounds helpers reach the real field rather than no-oping.
+- `IsActive()` is False on a fresh probe, and on a disabled one. Note *which* of its three
+  conditions (`SceneTypes.cpp:379-389`) rejects the fresh probe: not the bounds check — a
+  default-constructed probe's bounds are `frustum::infinite()`, not empty — but the map
+  check, since neither `diffuseMap` nor `specularMap` is assigned.
+- The three `SetBounds*` methods are pinned for callability and arity only, **not** for
+  their effect on `IsActive()`. Flipping `IsActive()` to True requires an assigned map, and
+  a `Texture` cannot be created without a device — so proving the helpers write the real
+  `dm::frustum` field is not reachable from this suite. That proof is the manual run
+  instead: `CreateLightProbes` sets every probe's bounds empty, so if `SetBoundsFromBox`
+  silently no-oped, `IsActive()` would stay False and a captured probe would light nothing
+  visible. The suite must stay device-free; do not reach for a device to close this gap.
 - `LightProbeProcessingPass` exposes all seven methods with the documented arity, and its
   constructor's two trailing parameters default to `1024` and `Format.RGBA16_FLOAT`.
   Construction itself needs a device and shader factory, so it is exercised only where the
