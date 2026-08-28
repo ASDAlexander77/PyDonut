@@ -21,16 +21,16 @@
 # * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # ******************************************************************************/
 
-"""Port of Donut's FeatureDemo sample -- stages 1, 2a, 2b, 2c and 3a.
+"""Port of Donut's FeatureDemo sample -- stages 1, 2a, 2b, 2c, 3a and 3b.
 
 Renders media/sponza-plus.scene.json through the full HDR pipeline: deferred or forward
 shading, a procedural sky, SSAO, TAA or MSAA, bloom, and tone mapping with eye adaptation,
 with cascaded sun shadows, a spot and a point light, a switchable first-person/third-person/
 scene camera, live light and material editors, right-click material picking, screenshots, a
-MipMapGen test pass and a side-by-side stereo mode.
+MipMapGen test pass, a side-by-side stereo mode and four capturable light probes.
 
-Still to come in stage 3b: light probes. DLSS, taskflow and the ImGui console are out of
-scope permanently: see docs/superpowers/specs/2026-08-25-feature-demo-stage1-design.md.
+This completes the port. DLSS, taskflow and the ImGui console are out of scope permanently:
+see docs/superpowers/specs/2026-08-25-feature-demo-stage1-design.md.
 
 NOTE: sponza-plus.scene.json declares no lights and no cameras at all, so the "Sun",
 "Point" and "Spot" lights and the "Nave" and "Gallery" cameras this example offers are all
@@ -1940,6 +1940,20 @@ if __name__ == "__main__":
                 "Ambient Intensity", self.ui.AmbientIntensity, 0.0, 2.0
             )
 
+            _, self.ui.EnableLightProbe = pyd.ImGui.Checkbox(
+                "Enable Light Probe", self.ui.EnableLightProbe
+            )
+            if self.ui.EnableLightProbe and pyd.ImGui.CollapsingHeader("Light Probe"):
+                # DragFloat, not SliderFloat: the sample uses one, and the useful range sits at
+                # the bottom of 0-10 where a linear slider cannot resolve it. Same reasoning as
+                # the TAA section's "Max Radiance".
+                _, self.ui.LightProbeDiffuseScale = pyd.ImGui.DragFloat(
+                    "Diffuse Scale", self.ui.LightProbeDiffuseScale, 0.01, 0.0, 10.0
+                )
+                _, self.ui.LightProbeSpecularScale = pyd.ImGui.DragFloat(
+                    "Specular Scale", self.ui.LightProbeSpecularScale, 0.01, 0.0, 10.0
+                )
+
             _, self.ui.EnableVsync = pyd.ImGui.Checkbox("VSync", self.ui.EnableVsync)
 
             _, self.ui.Stereo = pyd.ImGui.Checkbox("Stereo", self.ui.Stereo)
@@ -2089,6 +2103,20 @@ if __name__ == "__main__":
                 if self.selectedLight is not None:
                     pyd.LightEditor(self.selectedLight)
                 pyd.ImGui.PopID()
+
+            # PushID for the same reason the Lights and Material Editor sections have one:
+            # CollapsingHeader pushes no ID scope, so buttons labelled "1".."4" here could
+            # otherwise collide with any other generically-labelled widget on the panel.
+            pyd.ImGui.PushID("LightProbes")
+            pyd.ImGui.Text("Render Light Probe: ")
+            for probe in self.app.lightProbes:
+                pyd.ImGui.SameLine()
+                if pyd.ImGui.Button(probe.name):
+                    # Direct call, not a flag -- see RenderLightProbe's docstring. It runs
+                    # synchronously here, so the frame this button is pressed on takes visibly
+                    # longer; that is the capture, not a hang.
+                    self.app.RenderLightProbe(probe)
+            pyd.ImGui.PopID()
 
             if pyd.ImGui.CollapsingHeader("Sky"):
                 _, self.ui.EnableProceduralSky = pyd.ImGui.Checkbox(
