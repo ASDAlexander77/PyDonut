@@ -2896,9 +2896,10 @@ PYBIND11_MODULE(_pydonut, m) {
     // gives it nothing to write. feature_demo.py gives ResolvedColor a full chain purely to
     // exercise this (FeatureDemo.cpp:135).
     py::class_<donut::render::MipMapGenPass, std::shared_ptr<donut::render::MipMapGenPass>>(m, "MipMapGenPass")
-        .def(py::init<nvrhi::IDevice*, std::shared_ptr<donut::engine::ShaderFactory>,
-                nvrhi::TextureHandle, donut::render::MipMapGenPass::Mode>(),
-            py::arg("device"), py::arg("shaderFactory"), py::arg("texture"),
+        .def(py::init([](nvrhi::IDevice* device, std::shared_ptr<donut::engine::ShaderFactory> shaderFactory,
+                nvrhi::ITexture* texture, donut::render::MipMapGenPass::Mode mode) {
+            return new donut::render::MipMapGenPass(device, shaderFactory, texture, mode);
+        }), py::arg("device"), py::arg("shaderFactory"), py::arg("texture"),
             py::arg("mode") = donut::render::MipMapGenPass::Mode::MODE_MAX)
         // Reads LOD 0 and populates LOD 1 and up. maxLOD = -1 means every level.
         .def("Dispatch", &donut::render::MipMapGenPass::Dispatch,
