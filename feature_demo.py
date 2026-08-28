@@ -26,7 +26,8 @@
 Renders media/sponza-plus.scene.json through the full HDR pipeline: deferred or forward
 shading, a procedural sky, SSAO, TAA or MSAA, bloom, and tone mapping with eye adaptation,
 with cascaded sun shadows, a spot and a point light, a switchable first-person/third-person/
-scene camera, live light and material editors, and right-click material picking.
+scene camera, live light and material editors, right-click material picking, screenshots, and
+a MipMapGen test pass.
 
 Still to come in stage 3b: light probes. DLSS, taskflow and the ImGui console are out of
 scope permanently: see docs/superpowers/specs/2026-08-25-feature-demo-stage1-design.md.
@@ -40,6 +41,7 @@ from __future__ import annotations
 
 if __name__ == "__main__":
     import math
+    import pathlib
     import sys
     from enum import IntEnum
     from pathlib import Path
@@ -110,6 +112,23 @@ if __name__ == "__main__":
     # consistent with what is actually on screen.
     CAMERA_VERTICAL_FOV = math.pi / 4.0
 
+    def _nextScreenshotPath() -> str:
+        """First unused screenshot_NNNN.bmp beside this script.
+
+        The fallback when FileDialog returns None. That return does not distinguish "user
+        cancelled" from "no dialog available" -- on Linux the dialog shells out to `zenity`,
+        which may not be installed -- so a cancelled dialog also writes a file. That is
+        deliberate: the alternative is a button that silently does nothing under WSL, and the
+        file is trivially deleted.
+        """
+        directory = pathlib.Path(__file__).parent
+        index = 1
+        while True:
+            candidate = directory / f"screenshot_{index:04d}.bmp"
+            if not candidate.exists():
+                return str(candidate)
+            index += 1
+
     class UIData:
         """Shared by reference between FeatureDemo and UIRenderer.
 
@@ -154,6 +173,9 @@ if __name__ == "__main__":
             # the third-person camera reframe.
             self.SelectedMaterial: pyd.Material | None = None
             self.SelectedNode: pyd.SceneGraphNode | None = None
+            self.TestMipMapGen = False
+            # Set by the Screenshot button, consumed and cleared by the next Render.
+            self.ScreenshotFileName = ""
 
     class RenderTargets:
         """Composes a pyd.GBufferRenderTargets with the extra HDR/LDR targets the sample needs.
@@ -219,7 +241,9 @@ if __name__ == "__main__":
 
             # ResolvedColor and the TAA feedback pair are always single-sampled: they are the
             # *output* of resolving, so they must not themselves be multisampled.
-            def makeSingleSampled(fmt: pyd.Format, name: str, isUav: bool) -> pyd.Texture:
+            def makeSingleSampled(
+                fmt: pyd.Format, name: str, isUav: bool, mipLevels: int = 1
+            ) -> pyd.Texture:
                 desc = pyd.TextureDesc()
                 desc.width = width
                 desc.height = height
@@ -234,9 +258,18 @@ if __name__ == "__main__":
                 desc.format = fmt
                 desc.initialState = pyd.ResourceStates.RenderTarget
                 desc.debugName = name
+                desc.mipLevels = mipLevels
                 return device.createTexture(desc)
 
-            self.ResolvedColor = makeSingleSampled(pyd.Format.RGBA16_FLOAT, "ResolvedColor", True)
+            # A full mip chain purely so the MipMapGen test pass has something to reduce
+            # (FeatureDemo.cpp:135). MipMapGenPass binds one UAV per level at construction, so a
+            # single-level texture would give it nothing to write.
+            self.ResolvedColor = makeSingleSampled(
+                pyd.Format.RGBA16_FLOAT,
+                "ResolvedColor",
+                True,
+                int(math.floor(math.log2(max(width, height)))) + 1,
+            )
             self.TemporalFeedback1 = makeSingleSampled(pyd.Format.RGBA16_SNORM, "TemporalFeedback1", True)
             self.TemporalFeedback2 = makeSingleSampled(pyd.Format.RGBA16_SNORM, "TemporalFeedback2", True)
             self.LdrColor = makeSingleSampled(pyd.Format.SRGBA8_UNORM, "LdrColor", False)
@@ -309,6 +342,7 @@ if __name__ == "__main__":
             self.depthPass: pyd.DepthPass | None = None
             self.materialIDPass: pyd.MaterialIDPass | None = None
             self.pixelReadbackPass: pyd.PixelReadbackPass | None = None
+            self.mipMapGenPass: pyd.MipMapGenPass | None = None
             # Armed by a right mouse press, consumed by the next Render. pickPosition is updated
             # on every mouse move, so it is already correct when the press arrives.
             self.pick = False
@@ -425,6 +459,15 @@ if __name__ == "__main__":
                 self.shaderFactory,
                 self.renderTargets.MaterialIDs,
                 pyd.Format.RGBA32_UINT,
+            )
+
+            # MODE_COLOR: ResolvedColor is an RGB target, so it wants the bilinear RGB reduction
+            # rather than the single-channel min/max ones (MipMapGenPass.h:47-52).
+            self.mipMapGenPass = pyd.MipMapGenPass(
+                device,
+                self.shaderFactory,
+                self.renderTargets.ResolvedColor,
+                pyd.MipMapGenPassMode.MODE_COLOR,
             )
 
             self.bindingCache.Clear()
@@ -1331,12 +1374,38 @@ if __name__ == "__main__":
                         toneMappingParams.eyeAdaptationSpeedDown,
                     ) = savedSpeeds
 
+            # Matches FeatureDemo.cpp:1162-1166: reduce ResolvedColor's mip chain, then blit the
+            # levels in a spiral over the back buffer so the result is visible.
+            if self.ui.TestMipMapGen and self.mipMapGenPass is not None:
+                self.mipMapGenPass.Dispatch(self.commandList)
+                self.mipMapGenPass.Display(
+                    self.m_CommonPasses, self.commandList, framebuffer
+                )
+
             self.m_CommonPasses.BlitTexture(
                 self.commandList, framebuffer, self.renderTargets.LdrColor, self.bindingCache
             )
 
             self.commandList.close()
             device.executeCommandList(self.commandList)
+
+            # After executeCommandList: SaveTextureToFile requires that no immediate command
+            # list be open (TextureCache.h:238) and creates temporary resources internally,
+            # which is why the sample calls it here too (FeatureDemo.cpp:1191-1195).
+            if self.ui.ScreenshotFileName:
+                fileName = self.ui.ScreenshotFileName
+                self.ui.ScreenshotFileName = ""
+                saved = pyd.SaveTextureToFile(
+                    device,
+                    self.m_CommonPasses,
+                    framebuffer.getDesc().getColorAttachment(0).texture,
+                    pyd.ResourceStates.RenderTarget,
+                    fileName,
+                )
+                if saved:
+                    pyd.log.info(f"Screenshot written to {fileName}")
+                else:
+                    pyd.log.error(f"Failed to write screenshot to {fileName}")
 
             # After executeCommandList: the readback buffer is not populated until the GPU has
             # run the Capture recorded above (FeatureDemo.cpp:1197-1228).
@@ -1657,6 +1726,21 @@ if __name__ == "__main__":
                 _, self.ui.ToneMappingParams.eyeAdaptationSpeedDown = pyd.ImGui.SliderFloat(
                     "Adaptation Down", self.ui.ToneMappingParams.eyeAdaptationSpeedDown, 0.0, 4.0
                 )
+
+            if pyd.ImGui.Button("Screenshot"):
+                # Blocking modal. BMP first, because SaveTextureToFile picks its encoder from
+                # the extension and BMP is what the sample offers (FeatureDemo.cpp:1671).
+                chosen = pyd.FileDialog(
+                    False, [("BMP files", "*.bmp"), ("All files", "*.*")]
+                )
+                self.ui.ScreenshotFileName = (
+                    chosen if chosen is not None else _nextScreenshotPath()
+                )
+
+            pyd.ImGui.Separator()
+            _, self.ui.TestMipMapGen = pyd.ImGui.Checkbox(
+                "Test MipMapGen Pass", self.ui.TestMipMapGen
+            )
 
             pyd.ImGui.End()
 
