@@ -165,6 +165,9 @@ Useful flags:
 
 ### Example: `main.py`
 
+<details>
+<summary>Click to expand the full <code>main.py</code></summary>
+
 ```python
 if __name__ == "__main__":
     import sys
@@ -277,6 +280,21 @@ if __name__ == "__main__":
 
     del deviceManager
 ```
+</details>
+
+## Feature Demo
+
+A demo application that shows most of the raster-based features and effects available
+
+`feature_demo.py` renders a full demo using `pydonut`:
+
+```sh
+uv run feature_demo.py
+```
+
+| Windows (D3D12) | Linux (Vulkan) |
+| --- | --- |
+| ![A demo application that shows most of the raster-based features and effects available on Windows](img/win_feature_demo.png) | ![A demo application that shows most of the raster-based features and effects available on Linux](img/linux_feature_demo.png) |
 
 ## Project layout
 
