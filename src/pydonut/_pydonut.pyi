@@ -454,16 +454,16 @@ class DrawArguments():
 class GraphicsPipelineDesc():
     primType: PrimitiveType
     renderState: RenderState
-    VS: Optional[Shader]
-    PS: Optional[Shader]
-    inputLayout: Optional[InputLayout]
+    VS: Shader | None
+    PS: Shader | None
+    inputLayout: InputLayout | None
     def __init__(self: GraphicsPipelineDesc) -> None: ...
     def addBindingLayout(self: GraphicsPipelineDesc, layout: BindingLayout) -> None: ...
 
 class GraphicsState():
     viewport: ViewportState
-    pipeline: Optional[GraphicsPipeline]
-    framebuffer: Optional[Framebuffer]
+    pipeline: GraphicsPipeline | None
+    framebuffer: Framebuffer | None
     def __init__(self: GraphicsState) -> None: ...
     def addBindingSet(self: GraphicsState, bindingSet: BindingSet) -> None: ...
     # vertexBuffers is a fixed-capacity static_vector in nvrhi -- appended to via this method
@@ -474,15 +474,15 @@ class GraphicsState():
 class MeshletPipelineDesc():
     primType: PrimitiveType
     renderState: RenderState
-    AS: Optional[Shader]
-    MS: Optional[Shader]
-    PS: Optional[Shader]
+    AS: Shader | None
+    MS: Shader | None
+    PS: Shader | None
     def __init__(self: MeshletPipelineDesc) -> None: ...
 
 class MeshletState():
     viewport: ViewportState
-    pipeline: Optional[MeshletPipeline]
-    framebuffer: Optional[Framebuffer]
+    pipeline: MeshletPipeline | None
+    framebuffer: Framebuffer | None
     def __init__(self: MeshletState) -> None: ...
 
 class VariableRateShadingState():
@@ -496,12 +496,12 @@ class VariableRateShadingFeatureInfo():
     shadingRateImageTileSize: int
 
 class ComputePipelineDesc():
-    CS: Optional[Shader]
+    CS: Shader | None
     def __init__(self: ComputePipelineDesc) -> None: ...
     def addBindingLayout(self: ComputePipelineDesc, layout: BindingLayout) -> None: ...
 
 class ComputeState():
-    pipeline: Optional[ComputePipeline]
+    pipeline: ComputePipeline | None
     def __init__(self: ComputeState) -> None: ...
     def addBindingSet(self: ComputeState, bindingSet: BindingSet) -> None: ...
 
@@ -549,7 +549,7 @@ class TextureDesc():
     def __init__(self: TextureDesc) -> None: ...
 
 class FramebufferAttachment():
-    texture: Optional[Texture]
+    texture: Texture | None
 
 class FramebufferDesc():
     def __init__(self: FramebufferDesc) -> None: ...
@@ -670,8 +670,8 @@ def CreateBindingSetAndLayout(device: Device, visibility: ShaderType, registerSp
 def ClearDepthStencilAttachment(commandList: CommandList, framebuffer: Framebuffer, depth: float, stencil: int) -> None: ...
 
 class GeometryTriangles():
-    indexBuffer: Optional[Buffer]
-    vertexBuffer: Optional[Buffer]
+    indexBuffer: Buffer | None
+    vertexBuffer: Buffer | None
     indexFormat: Format
     vertexFormat: Format
     # Byte offsets into indexBuffer/vertexBuffer -- 0 (default) for a geometry that owns its
@@ -754,7 +754,7 @@ class RayTracingPipelineDesc():
     def addBindingLayout(self: RayTracingPipelineDesc, layout: BindingLayout) -> None: ...
 
 class RayTracingState():
-    shaderTable: Optional[ShaderTable]
+    shaderTable: ShaderTable | None
     def __init__(self: RayTracingState) -> None: ...
     def addBindingSet(self: RayTracingState, bindingSet: BindingSet) -> None: ...
 
@@ -777,7 +777,7 @@ class Texture():
 class Shader(): ...
 class TimerQuery(): ...
 class ShaderLibrary():
-    def getShader(self: ShaderLibrary, entryName: str, shaderType: ShaderType) -> Optional[Shader]: ...
+    def getShader(self: ShaderLibrary, entryName: str, shaderType: ShaderType) -> Shader | None: ...
 class InputLayout(): ...
 class GraphicsPipeline(): ...
 class MeshletPipeline(): ...
@@ -785,9 +785,9 @@ class ComputePipeline(): ...
 class RayTracingPipeline():
     def createShaderTable(self: RayTracingPipeline) -> ShaderTable: ...
 class ShaderTable():
-    def setRayGenerationShader(self: ShaderTable, exportName: str, bindings: Optional[BindingSet] = None) -> None: ...
-    def addHitGroup(self: ShaderTable, exportName: str, bindings: Optional[BindingSet] = None) -> int: ...
-    def addMissShader(self: ShaderTable, exportName: str, bindings: Optional[BindingSet] = None) -> int: ...
+    def setRayGenerationShader(self: ShaderTable, exportName: str, bindings: BindingSet | None = None) -> None: ...
+    def addHitGroup(self: ShaderTable, exportName: str, bindings: BindingSet | None = None) -> int: ...
+    def addMissShader(self: ShaderTable, exportName: str, bindings: BindingSet | None = None) -> int: ...
 class CommandListParameters():
     def __init__(self: CommandListParameters) -> None: ...
     # False (deferred) means the command list is recorded but not auto-submitted -- required
@@ -879,10 +879,10 @@ class Device():
     # command lists plus a composite one), as opposed to executeCommandList's one-at-a-time
     # submission.
     def executeCommandLists(self: Device, commandLists: list[CommandList], executionQueue: CommandQueue = CommandQueue.Graphics) -> int: ...
-    def createShader(self: Device, bytecode: bytes, entryName: str, shaderType: ShaderType) -> Optional[Shader]: ...
+    def createShader(self: Device, bytecode: bytes, entryName: str, shaderType: ShaderType) -> Shader | None: ...
     # Vulkan-only (nvrhi::Feature.ShaderSpecializations): bakes spec-constant overrides into a
     # new shader derived from baseShader.
-    def createShaderSpecialization(self: Device, baseShader: Shader, constants: list[ShaderSpecialization]) -> Optional[Shader]: ...
+    def createShaderSpecialization(self: Device, baseShader: Shader, constants: list[ShaderSpecialization]) -> Shader | None: ...
     def queryFeatureSupport(self: Device, feature: Feature) -> bool: ...
     def createBuffer(self: Device, desc: BufferDesc) -> Buffer: ...
     # Combinator wrapping mapBuffer(Read)+memcpy+unmapBuffer into one safe call -- raw mapped
@@ -901,7 +901,7 @@ class Device():
     def queryVariableRateShadingInfo(self: Device) -> VariableRateShadingFeatureInfo: ...
     def createAccelStruct(self: Device, desc: AccelStructDesc) -> AccelStruct: ...
     def createRayTracingPipeline(self: Device, desc: RayTracingPipelineDesc) -> RayTracingPipeline: ...
-    def createShaderLibrary(self: Device, bytecode: bytes) -> Optional[ShaderLibrary]: ...
+    def createShaderLibrary(self: Device, bytecode: bytes) -> ShaderLibrary | None: ...
     def waitForIdle(self: Device) -> None: ...
     def runGarbageCollection(self: Device) -> None: ...
     def createTimerQuery(self: Device) -> TimerQuery: ...
@@ -929,8 +929,8 @@ class RootFileSystem(IFileSystem):
 
 class ShaderFactory():
     def __init__(self: ShaderFactory, device: Device, fs: IFileSystem, basePath: Path) -> None: ...
-    def CreateShader(self: ShaderFactory, fileName: str, entryName: str, shaderType: ShaderType) -> Optional[Shader]: ...
-    def CreateShaderLibrary(self: ShaderFactory, fileName: str) -> Optional[ShaderLibrary]: ...
+    def CreateShader(self: ShaderFactory, fileName: str, entryName: str, shaderType: ShaderType) -> Shader | None: ...
+    def CreateShaderLibrary(self: ShaderFactory, fileName: str) -> ShaderLibrary | None: ...
     # Drops the bytecode cache, so shaders created after it re-read their .bin blobs from
     # disk. Recreating the passes that hold the already-compiled pipelines is the caller's
     # job -- see feature_demo.py's ReloadShaders.
@@ -944,19 +944,19 @@ class BindingCache():
 # sourceFormat/sampler/blendState/blendConstantColor stay at their defaults).
 class BlitParameters():
     def __init__(self: BlitParameters) -> None: ...
-    targetFramebuffer: Optional[Framebuffer]
+    targetFramebuffer: Framebuffer | None
     targetViewport: Viewport
-    sourceTexture: Optional[Texture]
+    sourceTexture: Texture | None
     sourceArraySlice: int
 
 class CommonRenderPasses():
     def __init__(self: CommonRenderPasses, device: Device, shaderFactory: ShaderFactory) -> None: ...
     @overload
-    def BlitTexture(self: CommonRenderPasses, commandList: CommandList, targetFramebuffer: Framebuffer, sourceTexture: Texture, bindingCache: Optional[BindingCache] = None) -> None: ...
+    def BlitTexture(self: CommonRenderPasses, commandList: CommandList, targetFramebuffer: Framebuffer, sourceTexture: Texture, bindingCache: BindingCache | None = None) -> None: ...
     # BlitParameters overload: composites one source array slice into one specific viewport
     # region of the target framebuffer, rather than the whole thing.
     @overload
-    def BlitTexture(self: CommonRenderPasses, commandList: CommandList, params: BlitParameters, bindingCache: Optional[BindingCache] = None) -> None: ...
+    def BlitTexture(self: CommonRenderPasses, commandList: CommandList, params: BlitParameters, bindingCache: BindingCache | None = None) -> None: ...
     m_AnisotropicWrapSampler: Sampler
     m_LinearWrapSampler: Sampler
     # Fallback textures for materials missing a given texture slot.
@@ -981,7 +981,7 @@ class TextureCache():
     def Reset(self: TextureCache) -> None: ...
     def ProcessRenderingThreadCommands(self: TextureCache, commonPasses: CommonRenderPasses, timeLimitMilliseconds: float) -> bool: ...
     def LoadingFinished(self: TextureCache) -> None: ...
-    def LoadTextureFromFile(self: TextureCache, path: Path, sRGB: bool, passes: Optional[CommonRenderPasses], commandList: CommandList) -> LoadedTexture: ...
+    def LoadTextureFromFile(self: TextureCache, path: Path, sRGB: bool, passes: CommonRenderPasses | None, commandList: CommandList) -> LoadedTexture: ...
     # Synchronous read+decode, but the GPU upload/mip generation is deferred to the
     # TextureCache's own queue (drained by ProcessRenderingThreadCommands/SceneLoaded) --
     # for loading extra standalone textures outside the scene's own material set (see
@@ -989,7 +989,7 @@ class TextureCache():
     def LoadTextureFromFileDeferred(self: TextureCache, path: Path, sRGB: bool) -> LoadedTexture: ...
 
 class LoadedTexture():
-    texture: Optional[Texture]
+    texture: Texture | None
     # The bindless table index for this texture's SRV, to embed in shader-visible
     # per-instance/per-particle data (see rt_particles.py).
     bindlessDescriptorIndex: int
@@ -1002,17 +1002,17 @@ class VertexAttribute(Enum):
 
 class BufferGroup():
     def __init__(self: BufferGroup) -> None: ...
-    indexBuffer: Optional[Buffer]
-    vertexBuffer: Optional[Buffer]
-    instanceBuffer: Optional[Buffer]
+    indexBuffer: Buffer | None
+    vertexBuffer: Buffer | None
+    instanceBuffer: Buffer | None
     def setVertexBufferRange(self: BufferGroup, attr: VertexAttribute, byteOffset: int, byteSize: int) -> None: ...
     def getVertexBufferRange(self: BufferGroup, attr: VertexAttribute) -> BufferRange: ...
     # Bindless table entries for this buffer group's raw index/vertex buffers (see
     # DescriptorTableManager.CreateDescriptorHandle) -- needed for procedural geometry whose
     # shaders look up vertex data via a bindless buffer index rather than a directly-bound SRV
     # (see rt_particles.py).
-    indexBufferDescriptor: Optional[DescriptorHandle]
-    vertexBufferDescriptor: Optional[DescriptorHandle]
+    indexBufferDescriptor: DescriptorHandle | None
+    vertexBufferDescriptor: DescriptorHandle | None
 
 # All six of Donut's real domains (SceneTypes.h:171-181) -- Count is a sentinel, not a real
 # domain, and stays unbound.
@@ -1036,14 +1036,14 @@ class Material():
     dirty: bool
     useSpecularGlossModel: bool
     enableBaseOrDiffuseTexture: bool
-    baseOrDiffuseTexture: Optional[LoadedTexture]
-    metalRoughOrSpecularTexture: Optional[LoadedTexture]
-    normalTexture: Optional[LoadedTexture]
-    emissiveTexture: Optional[LoadedTexture]
-    occlusionTexture: Optional[LoadedTexture]
-    transmissionTexture: Optional[LoadedTexture]
-    opacityTexture: Optional[LoadedTexture]
-    materialConstants: Optional[Buffer]
+    baseOrDiffuseTexture: LoadedTexture | None
+    metalRoughOrSpecularTexture: LoadedTexture | None
+    normalTexture: LoadedTexture | None
+    emissiveTexture: LoadedTexture | None
+    occlusionTexture: LoadedTexture | None
+    transmissionTexture: LoadedTexture | None
+    opacityTexture: LoadedTexture | None
+    materialConstants: Buffer | None
 
 # Wraps Material.FillConstantBuffer() -- the generated MaterialConstants shader-cbuffer
 # struct isn't otherwise exposed to Python.
@@ -1051,7 +1051,7 @@ def CreateMaterialConstantBuffer(device: Device, commandList: CommandList, mater
 
 class MeshGeometry():
     def __init__(self: MeshGeometry) -> None: ...
-    material: Optional[Material]
+    material: Material | None
     numIndices: int
     numVertices: int
     # Assigned by the scene graph when the mesh is added to the scene; used to compute a
@@ -1065,7 +1065,7 @@ class MeshGeometry():
 class MeshInfo():
     def __init__(self: MeshInfo) -> None: ...
     name: str
-    buffers: Optional[BufferGroup]
+    buffers: BufferGroup | None
     totalIndices: int
     totalVertices: int
     indexOffset: int
@@ -1075,13 +1075,13 @@ class MeshInfo():
     # "For use by applications" per the engine itself -- lets an app cache each mesh's bottom-
     # level acceleration structure directly on the mesh (build BLASes once, look them up per
     # instance when building the TLAS).
-    accelStruct: Optional[AccelStruct]
+    accelStruct: AccelStruct | None
     # Set on the template mesh a skinned instance was cloned from -- see
     # SceneGraph.GetSkinnedMeshInstances()/SkinnedMeshInstance.GetPrototypeMesh(). isSkinPrototype
     # marks that template itself (never instantiated/ray-traced directly; skip it when building
     # BLASes -- see rt_bindless.py's CreateAccelStructs).
     isSkinPrototype: bool
-    skinPrototype: Optional[MeshInfo]
+    skinPrototype: MeshInfo | None
 
 class SceneGraphLeaf():
     # Only takes effect once this leaf is attached to a scene-graph node (SceneGraph.cpp:40-47)
@@ -1094,7 +1094,7 @@ class SceneGraphLeaf():
     # The node this leaf is attached to, as an owning handle -- None if it is not attached.
     # MeshInstance.GetNode() returns a raw non-owning pointer; use this one to store a node
     # across frames, as picking does.
-    def GetNodeSharedPtr(self: SceneGraphLeaf) -> Optional[SceneGraphNode]: ...
+    def GetNodeSharedPtr(self: SceneGraphLeaf) -> SceneGraphNode | None: ...
 
 class MeshInstance(SceneGraphLeaf):
     def __init__(self: MeshInstance, mesh: MeshInfo) -> None: ...
@@ -1135,7 +1135,7 @@ class Light(SceneGraphLeaf):
     def FillLightConstants(self: Light) -> bytes: ...
     # Assigning this is the entire shadow wiring -- both lighting passes read it themselves.
     # None means "this light casts no shadow", and is how a shadow toggle is implemented.
-    shadowMap: Optional[IShadowMap]
+    shadowMap: IShadowMap | None
 
 class DirectionalLight(Light):
     def __init__(self: DirectionalLight) -> None: ...
@@ -1215,7 +1215,7 @@ class SceneGraph():
     def __init__(self: SceneGraph) -> None: ...
     # Returns the *previous* root node (None on a fresh graph), not the node just passed in --
     # use GetRootNode() to retrieve the node you just set. (SceneGraph.cpp:670-679)
-    def SetRootNode(self: SceneGraph, root: SceneGraphNode) -> Optional[SceneGraphNode]: ...
+    def SetRootNode(self: SceneGraph, root: SceneGraphNode) -> SceneGraphNode | None: ...
     def GetRootNode(self: SceneGraph) -> SceneGraphNode: ...
     # If `leaf` is already attached to a node elsewhere, this clones it (SceneGraph.cpp:844-847)
     # instead of moving it, so the returned node does not always wrap the same Python `leaf`
@@ -1236,10 +1236,10 @@ class SceneGraph():
     # Skinned (animated) mesh instances -- see SkinnedMeshInstance.
     def GetSkinnedMeshInstances(self: SceneGraph) -> list[SkinnedMeshInstance]: ...
     # Searches from the graph root (context is always null in this codebase).
-    def FindNode(self: SceneGraph, path: Path) -> Optional[SceneGraphNode]: ...
+    def FindNode(self: SceneGraph, path: Path) -> SceneGraphNode | None: ...
 
 class Scene():
-    def __init__(self: Scene, device: Device, shaderFactory: ShaderFactory, fs: IFileSystem, textureCache: TextureCache, descriptorTable: Optional[DescriptorTableManager]) -> None: ...
+    def __init__(self: Scene, device: Device, shaderFactory: ShaderFactory, fs: IFileSystem, textureCache: TextureCache, descriptorTable: DescriptorTableManager | None) -> None: ...
     def Load(self: Scene, sceneFileName: Path) -> bool: ...
     def FinishedLoading(self: Scene, frameIndex: int) -> None: ...
     # Distinct from SceneGraph.Refresh(frameIndex): this also captures the scene graph's
@@ -1324,7 +1324,7 @@ class SwitchableCamera:
     def IsFirstPersonActive(self: SwitchableCamera) -> bool: ...
     def IsThirdPersonActive(self: SwitchableCamera) -> bool: ...
     def IsSceneCameraActive(self: SwitchableCamera) -> bool: ...
-    def GetSceneCamera(self: SwitchableCamera) -> Optional[SceneCamera]: ...
+    def GetSceneCamera(self: SwitchableCamera) -> SceneCamera | None: ...
     # Both return the camera owned by this SwitchableCamera, not a copy -- writes through the
     # returned object stick.
     def GetFirstPersonCamera(self: SwitchableCamera) -> FirstPersonCamera: ...
@@ -1449,13 +1449,13 @@ class GBufferRenderTargets():
     height: int
     def GetFramebuffer(self: GBufferRenderTargets, view: IView) -> Framebuffer: ...
     # Public texture handles from GBuffer.h. All None until Init() has been called.
-    Depth: Optional[Texture]
-    GBufferDiffuse: Optional[Texture]
-    GBufferSpecular: Optional[Texture]
-    GBufferNormals: Optional[Texture]
-    GBufferEmissive: Optional[Texture]
-    MotionVectors: Optional[Texture]
-    GBufferFramebuffer: Optional[FramebufferFactory]
+    Depth: Texture | None
+    GBufferDiffuse: Texture | None
+    GBufferSpecular: Texture | None
+    GBufferNormals: Texture | None
+    GBufferEmissive: Texture | None
+    MotionVectors: Texture | None
+    GBufferFramebuffer: FramebufferFactory | None
     def GetSampleCount(self: GBufferRenderTargets) -> int: ...
     def GetUseReverseProjection(self: GBufferRenderTargets) -> bool: ...
 
@@ -1529,9 +1529,9 @@ class TransparentDrawStrategy(IDrawStrategy):
 class LightProbe():
     def __init__(self: LightProbe) -> None: ...
     name: str
-    diffuseMap: Optional[Texture]
-    specularMap: Optional[Texture]
-    environmentBrdf: Optional[Texture]
+    diffuseMap: Texture | None
+    specularMap: Texture | None
+    environmentBrdf: Texture | None
     # Slice indices into the shared cube-map ARRAYS. The pass multiplies by 6 at the call site.
     diffuseArrayIndex: int
     specularArrayIndex: int
@@ -1553,10 +1553,10 @@ class DeferredLightingPassInputs():
     # DeferredLightingPass::Render logs an error and returns without rendering otherwise
     # (DeferredLightingPass.cpp:246-253). An empty list is the off switch.
     def SetLightProbes(self: DeferredLightingPassInputs, lightProbes: list[LightProbe]) -> None: ...
-    output: Optional[Texture]
+    output: Texture | None
     # None disables the SSAO term. Only ever set when sampleCount == 1 -- SsaoPass does not
     # exist under MSAA.
-    ambientOcclusion: Optional[Texture]
+    ambientOcclusion: Texture | None
 
 class DeferredLightingPass():
     def __init__(self: DeferredLightingPass, device: Device, commonPasses: CommonRenderPasses) -> None: ...
@@ -1603,12 +1603,12 @@ class TemporalAntiAliasingParameters():
 # historyClampRelax is intentionally left unbound: nothing in this codebase builds the mask
 # texture it expects, matching useHistoryClampRelax always false.
 class TemporalAntiAliasingCreateParameters():
-    sourceDepth: Optional[Texture]
-    motionVectors: Optional[Texture]
-    unresolvedColor: Optional[Texture]
-    resolvedColor: Optional[Texture]
-    feedback1: Optional[Texture]
-    feedback2: Optional[Texture]
+    sourceDepth: Texture | None
+    motionVectors: Texture | None
+    unresolvedColor: Texture | None
+    resolvedColor: Texture | None
+    feedback1: Texture | None
+    feedback2: Texture | None
     useCatmullRomFilter: bool
     motionVectorStencilMask: int
     numConstantBufferVersions: int
@@ -1720,7 +1720,7 @@ class ToneMappingPassCreateParameters():
     isTextureArray: bool
     histogramBins: int
     numConstantBufferVersions: int
-    exposureBufferOverride: Optional[Buffer]
+    exposureBufferOverride: Buffer | None
     def __init__(self: ToneMappingPassCreateParameters) -> None: ...
 
 # Render/ResetHistogram/AddFrameToHistogram/ComputeExposure are intentionally left unbound --
@@ -1775,16 +1775,16 @@ class CascadedShadowMap(IShadowMap):
 class FramebufferFactory():
     def __init__(self: FramebufferFactory, device: Device) -> None: ...
     def SetRenderTargets(self: FramebufferFactory, targets: list[Texture]) -> None: ...
-    depthTarget: Optional[Texture]
-    shadingRateSurface: Optional[Texture]
+    depthTarget: Texture | None
+    shadingRateSurface: Texture | None
     def GetFramebuffer(self: FramebufferFactory, view: IView) -> Framebuffer: ...
 
-def RenderView(commandList: CommandList, view: IView, viewPrev: Optional[IView], framebuffer: Framebuffer, drawStrategy: IDrawStrategy, pass_: IGeometryPass, context: GeometryPassContext, materialEvents: bool = False) -> None: ...
+def RenderView(commandList: CommandList, view: IView, viewPrev: IView | None, framebuffer: Framebuffer, drawStrategy: IDrawStrategy, pass_: IGeometryPass, context: GeometryPassContext, materialEvents: bool = False) -> None: ...
 # view is an ICompositeView, one step wider than RenderView's IView: CascadedShadowMap.GetView()
 # returns a CompositeView, which derives from ICompositeView directly and is not an IView.
 # passEvent names the pass in a graphics capture. It sits after materialEvents rather than in the
 # C++ parameter order because existing callers pass materialEvents positionally.
-def RenderCompositeView(commandList: CommandList, view: ICompositeView, viewPrev: Optional[ICompositeView], framebufferFactory: FramebufferFactory, rootNode: SceneGraphNode, drawStrategy: IDrawStrategy, pass_: IGeometryPass, passContext: GeometryPassContext, materialEvents: bool = False, passEvent: Optional[str] = None) -> None: ...
+def RenderCompositeView(commandList: CommandList, view: ICompositeView, viewPrev: ICompositeView], framebufferFactory: FramebufferFactory, rootNode: SceneGraphNode, drawStrategy: IDrawStrategy, pass_: IGeometryPass, passContext: GeometryPassContext, materialEvents: bool = False, passEvent: Optional[str | None = None) -> None: ...
 
 # Writes slice 0, mip 0 of a texture to an image file; the format comes from the extension
 # (BMP, PNG, JPG, TGA). Requires that no immediate command list be open, and creates and
@@ -1796,15 +1796,15 @@ def SaveTextureToFile(device: Device, commonPasses: CommonRenderPasses, texture:
 # the user cancels. On Linux this shells out to `zenity`, so None also means "no dialog
 # available"; callers needing a file regardless must supply their own fallback path.
 # Blocking and modal: never call it from a test.
-def FileDialog(bOpen: bool, filters: list[tuple[str, str]]) -> Optional[str]: ...
+def FileDialog(bOpen: bool, filters: list[tuple[str, str]]) -> str | None: ...
 
 class AdapterInfo():
     name: str
     vendorID: int
     deviceID: int
     dedicatedVideoMemory: int
-    uuid: Optional[list[int]]
-    luid: Optional[list[int]]
+    uuid: list[int] | None
+    luid: list[int] | None
 
 class IRenderPass():
     def __init__(self: IRenderPass, deviceManager: DeviceManager) -> None: ...
@@ -1932,13 +1932,13 @@ def LightEditor(light: Light) -> bool: ...
 def MaterialEditor(material: Material, allowMaterialDomainChanges: bool) -> bool: ...
 
 class PipelineCallbacks():
-    beforeFrame: Optional[Callable[[DeviceManager, int], None]]
-    beforeAnimate: Optional[Callable[[DeviceManager, int], None]]
-    afterAnimate: Optional[Callable[[DeviceManager, int], None]]
-    beforeRender: Optional[Callable[[DeviceManager, int], None]]
-    afterRender: Optional[Callable[[DeviceManager, int], None]]
-    beforePresent: Optional[Callable[[DeviceManager, int], None]]
-    afterPresent: Optional[Callable[[DeviceManager, int], None]]
+    beforeFrame: Callable[[DeviceManager, int], None] | None
+    beforeAnimate: Callable[[DeviceManager, int], None] | None
+    afterAnimate: Callable[[DeviceManager, int], None] | None
+    beforeRender: Callable[[DeviceManager, int], None] | None
+    afterRender: Callable[[DeviceManager, int], None] | None
+    beforePresent: Callable[[DeviceManager, int], None] | None
+    afterPresent: Callable[[DeviceManager, int], None] | None
 
 class DeviceCreationParameters():
     # InstanceParameters (base class)
@@ -2029,7 +2029,7 @@ class DeviceManager():
     def GetRendererString(self: DeviceManager) -> str: ...
     def GetGraphicsAPI(self: DeviceManager) -> GraphicsAPI: ...
     def SetWindowTitle(self: DeviceManager, title: str) -> None: ...
-    def SetInformativeWindowTitle(self: DeviceManager, applicationName: str, includeFramerate: bool = True, extraInfo: Optional[str] = None) -> None: ...
+    def SetInformativeWindowTitle(self: DeviceManager, applicationName: str, includeFramerate: bool = True, extraInfo: str | None = None) -> None: ...
     def GetWindowTitle(self: DeviceManager) -> str: ...
     def IsVulkanInstanceExtensionEnabled(self: DeviceManager, extensionName: str) -> bool: ...
     def IsVulkanDeviceExtensionEnabled(self: DeviceManager, extensionName: str) -> bool: ...
