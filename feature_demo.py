@@ -32,9 +32,22 @@ MipMapGen test pass, a side-by-side stereo mode and four capturable light probes
 This completes the port. DLSS, taskflow and the ImGui console are out of scope permanently:
 see docs/superpowers/specs/2026-08-25-feature-demo-stage1-design.md.
 
+Scenes load ASYNCHRONOUSLY, as in the C++ sample. Init() only starts the load; the class
+then follows ApplicationBase's lifecycle rather than driving it:
+
+    BeginLoadingScene  ->  SceneUnloading()      (render thread, if a scene is already up)
+                           LoadScene()           (LOADING THREAD)
+                           SceneLoaded()         (render thread, once textures are finalized)
+
+and ApplicationBase::Render calls RenderSplashScreen() instead of RenderScene() until that
+finishes -- which is why this class overrides RenderScene, not Render. The Settings panel's
+"Scene" combo re-enters the whole cycle, so any scene FindScenes turns up under media/ can
+be loaded at runtime.
+
 NOTE: sponza-plus.scene.json declares no lights and no cameras at all, so the "Sun",
 "Point" and "Spot" lights and the "Nave" and "Gallery" cameras this example offers are all
-created here and attached to the scene graph, not loaded.
+created here and attached to the scene graph, not loaded. SceneLoaded() re-creates them for
+every scene, including ones that do declare their own.
 """
 
 from __future__ import annotations
@@ -42,6 +55,7 @@ from __future__ import annotations
 if __name__ == "__main__":
     import math
     import sys
+    import time
     from enum import IntEnum
     from pathlib import Path
 
@@ -358,6 +372,15 @@ if __name__ == "__main__":
             self.rootFS = pyd.RootFileSystem()
             self.nativeFS = pyd.NativeFileSystem()
             self.shaderFactory: pyd.ShaderFactory | None = None
+            # Scene picker state, mirroring FeatureDemo.cpp:286-288. sceneFilesAvailable is
+            # every scene found under sceneDir; currentSceneName is the one SetCurrentSceneName
+            # last handed to BeginLoadingScene. `scene` is None until the loading thread has
+            # built one, and is replaced wholesale by each load -- so every reader outside
+            # SceneLoaded()/RenderScene() has to tolerate None, which is what IsSceneLoaded()
+            # and the UI's IsSceneLoading() early-return are for.
+            self.sceneDir = folder / "media"
+            self.sceneFilesAvailable: list[str] = []
+            self.currentSceneName = ""
             self.scene: pyd.Scene | None = None
             self.sunLight: pyd.DirectionalLight | None = None
             self.renderTargets: RenderTargets | None = None
@@ -438,54 +461,16 @@ if __name__ == "__main__":
             self.m_CommonPasses = pyd.CommonRenderPasses(device, self.shaderFactory)
             self.m_TextureCache = pyd.TextureCache(device, self.nativeFS, self.descriptorTable)
 
-            # Synchronous load: the async path is not exercised by any existing example.
-            self.SetAsynchronousLoadingEnabled(False)
-
-            scenePath = folder / "media" / "sponza-plus.scene.json"
-            self.scene = pyd.Scene(
-                device,
-                self.shaderFactory,
-                self.nativeFS,
-                self.m_TextureCache,
-                self.descriptorTable,
-            )
-            if not self.scene.Load(scenePath):
-                pyd.log.fatal(f"Failed to load {scenePath}")
+            # Scene discovery for the picker, mirroring FeatureDemo.cpp:354-361. FindScenes
+            # walks sceneDir recursively for .scene.json/.gltf/.glb, so media/ yields
+            # sponza-plus.scene.json alongside the two glTF-Sample-Assets models.
+            self.sceneFilesAvailable = pyd.FindScenes(self.nativeFS, self.sceneDir)
+            if not self.sceneFilesAvailable:
+                pyd.log.fatal(
+                    f"No scene file found in media folder '{self.sceneDir}'. "
+                    "Please make sure that folder contains valid scene files."
+                )
                 return False
-
-            # GltfImporter never loads textures fully synchronously -- every path it has goes
-            # through LoadTextureFrom*Deferred/Async (GltfImporter.cpp:820-831), which only
-            # decodes the pixels and queues the GPU upload. Draining that queue is what actually
-            # creates the textures, and nothing here does it otherwise: ApplicationBase::Render
-            # drains it every frame (ApplicationBase.cpp:56), but this class overrides Render, and
-            # the inherited SceneLoaded() that would drain it (:102) only fires from
-            # BeginLoadingScene(), which this class does not use -- it calls Scene.Load directly.
-            #
-            # Without this, every texture stays null and MaterialBindingCache silently swaps in
-            # its flat fallback texture (MaterialBindingCache.cpp:110) -- no error, no warning,
-            # just untextured geometry that still lights and shades correctly. Sponza rendered
-            # entirely grey; the BrainStem robots looked fine only because they have no textures
-            # at all (0 images, 59 constant-colour materials), which is what made the bug read as
-            # "Sponza's assets are broken".
-            #
-            # Placement is load-bearing: after Load(), before FinishedLoading(). This assigns each
-            # texture its bindless descriptor index, and FinishedLoading() is what bakes those
-            # indices into the material buffer.
-            pyd.SceneLoaded(self.m_TextureCache, self.m_CommonPasses)
-
-            self.CreateSunLight()
-            self.CreateSceneLights()
-            self.CreateSceneCameras()
-            self.scene.FinishedLoading(self.GetFrameIndex())
-
-            # copyView=False matters: a fresh SwitchableCamera is in third person
-            # (Camera.h:259-261), so copying the view would take it from the
-            # default-constructed third-person camera -- 30 units back, aimed at the origin --
-            # and overwrite the LookAt below.
-            self.camera.SwitchToFirstPerson(copyView=False)
-            firstPerson = self.camera.GetFirstPersonCamera()
-            firstPerson.LookAt(0.0, 1.8, 0.0, 1.0, 1.8, 0.0)
-            firstPerson.SetMoveSpeed(3.0)
 
             self.gbufferPass = pyd.GBufferFillPass(device, self.m_CommonPasses)
             self.gbufferPass.Init(self.shaderFactory, pyd.GBufferFillPassCreateParameters())
@@ -520,7 +505,41 @@ if __name__ == "__main__":
             )
             self.CreateLightProbes(LIGHT_PROBE_COUNT)
 
+            # Started LAST, once every pass exists. BeginLoadingScene() runs LoadScene() on its
+            # own thread, so from here on Init() would be racing the loader for the device --
+            # the C++ sample gets away with kicking the load off mid-constructor
+            # (FeatureDemo.cpp:407-412, with CreateLightProbes after it) because its remaining
+            # work is a handful of allocations, but there is nothing to gain by copying that.
+            # SceneUnloading() also touches passes that must already exist for a *re*-load.
+            self.SetAsynchronousLoadingEnabled(True)
+
+            # sponza-plus.scene.json, not the sample's "Sponza.gltf": this demo is built around
+            # it -- it is the one scene here with the BrainStem robots the animation toggle
+            # drives. FindPreferredScene falls back to the first entry if it is ever missing.
+            self.SetCurrentSceneName(
+                pyd.FindPreferredScene(self.sceneFilesAvailable, "sponza-plus.scene.json")
+            )
+
             return True
+
+        def GetAvailableScenes(self: FeatureDemo) -> list[str]:
+            return self.sceneFilesAvailable
+
+        def GetCurrentSceneName(self: FeatureDemo) -> str:
+            return self.currentSceneName
+
+        def SetCurrentSceneName(self: FeatureDemo, sceneName: str) -> None:
+            """Switches scenes, asynchronously. Mirrors FeatureDemo.cpp:442-450.
+
+            The no-op guard is what makes this safe to call from the UI every frame the combo
+            is open: re-selecting the active scene must not restart a load. BeginLoadingScene
+            does the rest -- SceneUnloading() if a scene is already up, then the loader thread.
+            """
+            if self.currentSceneName == sceneName:
+                return
+
+            self.currentSceneName = sceneName
+            self.BeginLoadingScene(self.nativeFS, Path(sceneName))
 
         def CreateRenderPasses(self: FeatureDemo) -> None:
             """Recreates every size-dependent pass. Called whenever RenderTargets is rebuilt."""
@@ -1128,8 +1147,6 @@ if __name__ == "__main__":
             self.sunLight.SetName("Sun")
             self.sunLight.SetDirection(0.1, -0.9, 0.1)
 
-            graph.Refresh(0)
-
         def CreateSceneLights(self: FeatureDemo) -> None:
             """Adds the spot and point light this stage demonstrates.
 
@@ -1174,8 +1191,6 @@ if __name__ == "__main__":
             spot.SetPosition(4.0, 5.0, 0.0)
             spot.SetDirection(-0.2, -1.0, 0.0)
 
-            graph.Refresh(0)
-
         def CreateSceneCameras(self: FeatureDemo) -> None:
             """Adds the two scene cameras the camera dropdown demonstrates.
 
@@ -1212,8 +1227,6 @@ if __name__ == "__main__":
             galleryNode = graph.AttachLeafNode(root, gallery)
             gallery.SetName("Gallery")
             galleryNode.SetPositionAndDirection(0.0, 8.0, -4.0, 0.0, -0.4, 1.0)
-
-            graph.Refresh(0)
 
         def PointThirdPersonCameraAt(
             self: FeatureDemo, node: pyd.SceneGraphNode | None
@@ -1314,7 +1327,7 @@ if __name__ == "__main__":
             # upload -- all happen in Scene.Refresh(), which Render() calls once the command
             # list is open. The duration guard is for clips that sample to a single keyframe:
             # math.fmod(t, 0.0) raises ValueError rather than returning 0.
-            if self.ui.EnableAnimations and self.scene is not None:
+            if self.IsSceneLoaded() and self.ui.EnableAnimations:
                 self.wallclockTime += elapsedTimeSeconds
                 offset = 0.0
                 for anim in self.scene.GetSceneGraph().GetAnimations():
@@ -1325,6 +1338,174 @@ if __name__ == "__main__":
 
             if self.toneMappingPass is not None:
                 self.toneMappingPass.AdvanceFrame(elapsedTimeSeconds)
+
+        def SceneUnloading(self: FeatureDemo) -> None:
+            """Drops everything pointing into the outgoing scene, before the next load starts.
+
+            Called by BeginLoadingScene (ApplicationBase.cpp:125-126) on the render thread,
+            with the old scene still alive -- so this is the last safe moment to touch it.
+            Mirrors FeatureDemo.cpp:558-572.
+
+            Every binding cache here holds nvrhi BindingSetHandles built against the outgoing
+            scene's material and geometry buffers. Left in place they would be handed to the
+            new scene's draw calls, which is not a crash but silently wrong geometry.
+            """
+            self.gbufferPass.ResetBindingCache()
+            self.materialIDPass.ResetBindingCache()
+            self.deferredLightingPass.ResetBindingCache()
+            self.forwardPass.ResetBindingCache()
+            self.depthPass.ResetBindingCache()
+            self.lightProbePass.ResetCaches()
+            self.bindingCache.Clear()
+
+            # All three are leaves of / references into the outgoing scene graph. sunLight is
+            # re-derived by CreateSunLight on the next SceneLoaded; the two UI selections have
+            # no counterpart in a different scene and must not survive as dangling picks.
+            self.sunLight = None
+            self.ui.SelectedMaterial = None
+            self.ui.SelectedNode = None
+
+            # The active scene camera is also a leaf of the outgoing graph. The C++ keeps it in
+            # UIData and simply overwrites it in SceneLoaded (FeatureDemo.cpp:631-637); here
+            # SwitchableCamera owns it, so the only way to let go is to switch away.
+            if self.camera.IsSceneCameraActive():
+                self.camera.SwitchToFirstPerson(copyView=False)
+
+            # Their captured cube-map faces show the scene that is going away. The arrays
+            # themselves are kept -- only the content is stale, which is what disabling says.
+            for probe in self.lightProbes:
+                probe.enabled = False
+
+        def LoadScene(self: FeatureDemo, fs: pyd.IFileSystem, sceneFileName: Path) -> bool:
+            """Builds the scene. Runs on the LOADING THREAD, not the render thread.
+
+            ApplicationBase::BeginLoadingScene starts a std::thread whose whole body is this
+            call (ApplicationBase.cpp:140-143), and pybind11 holds the GIL around a Python
+            override -- so the only reason the render thread makes any progress meanwhile is
+            that the Scene.Load binding releases the GIL for the duration of the load. Nothing
+            else added here may block: this method is otherwise pure Python and holds the GIL.
+
+            The new scene is published to self.scene only on success, so a failed load leaves
+            the previous one in place rather than half-replacing it.
+            """
+            scene = pyd.Scene(
+                self.GetDevice(),
+                self.shaderFactory,
+                fs,
+                self.m_TextureCache,
+                self.descriptorTable,
+            )
+
+            startTime = time.perf_counter()
+            if not scene.Load(sceneFileName):
+                pyd.log.error(f"Failed to load {sceneFileName}")
+                return False
+
+            self.scene = scene
+            elapsedMs = (time.perf_counter() - startTime) * 1e3
+            pyd.log.info(f"Scene loading time: {elapsedMs:.0f} ms")
+            return True
+
+        def SceneLoaded(self: FeatureDemo) -> None:
+            """Finalises the scene the loading thread just built. Mirrors FeatureDemo.cpp:599.
+
+            Runs on the RENDER thread: ApplicationBase::Render joins the loading thread and
+            calls this once every deferred texture upload has drained
+            (ApplicationBase.cpp:70-78).
+            """
+            # GltfImporter never loads textures fully synchronously -- every path it has goes
+            # through LoadTextureFrom*Deferred/Async (GltfImporter.cpp:820-831), which only
+            # decodes the pixels and queues the GPU upload. Draining that queue is what actually
+            # creates the textures, and this base call is what drains it
+            # (ApplicationBase.cpp:98-105).
+            #
+            # Without it every texture stays null and MaterialBindingCache silently swaps in its
+            # flat fallback texture (MaterialBindingCache.cpp:110) -- no error, no warning, just
+            # untextured geometry that still lights and shades correctly. Sponza rendered
+            # entirely grey; the BrainStem robots looked fine only because they have no textures
+            # at all (0 images, 59 constant-colour materials), which is what made the bug read as
+            # "Sponza's assets are broken".
+            #
+            # Placement is load-bearing: after Load(), before FinishedLoading(). This assigns
+            # each texture its bindless descriptor index, and FinishedLoading() is what bakes
+            # those indices into the material buffer.
+            super().SceneLoaded()
+
+            assert self.scene is not None
+
+            self.CreateSunLight()
+            self.CreateSceneLights()
+            self.CreateSceneCameras()
+
+            # After the lights and cameras above, not before: FinishedLoading uploads the
+            # instance/geometry/material buffers for the graph as it stands.
+            #
+            # This is also the ONLY scene-graph refresh in the sequence, and that is
+            # load-bearing for skinned meshes. SceneGraph::Refresh stamps each skinned
+            # instance with the frame index it was last dirtied on and then clears the dirty
+            # flags (SceneGraph.cpp:1027-1038), and UpdateSkinnedMeshes skips any instance
+            # whose stamp is more than one frame stale (Scene.cpp:718-720). An earlier refresh
+            # at a different index -- the hardcoded graph.Refresh(0) the three helpers above
+            # used to end with -- consumes the flags and stamps 0, so the skinning dispatch
+            # never runs and every skinned mesh renders as nothing at all. That was invisible
+            # while these ran from Init() at frame 0; SceneLoaded() runs at a live frame index
+            # (8 or so), where 0 + 1 < 8 skips the dispatch and DancingRobot1/2 vanish until
+            # an animation dirties their joints again.
+            self.scene.FinishedLoading(self.GetFrameIndex())
+
+            # A new scene restarts the animation clock, and its first frame has no predecessor
+            # for TAA or motion vectors to reproject from (FeatureDemo.cpp:603-604).
+            self.wallclockTime = 0.0
+            self.previousViewsValid = False
+
+            graph = self.scene.GetSceneGraph()
+
+            # CreateSceneCameras always synthesises two cameras, so the sample's "cameras[0]
+            # becomes the active scene camera" branch (FeatureDemo.cpp:631-636) would start
+            # every scene looking through "Nave". This port starts in first person instead, as
+            # it always has; the scene cameras stay one dropdown pick or T press away.
+            #
+            # copyView=False matters: a fresh SwitchableCamera is in third person
+            # (Camera.h:259-261), so copying the view would take it from the
+            # default-constructed third-person camera -- 30 units back, aimed at the origin --
+            # and overwrite the LookAt below.
+            self.camera.SwitchToFirstPerson(copyView=False)
+            firstPerson = self.camera.GetFirstPersonCamera()
+            firstPerson.LookAt(0.0, 1.8, 0.0, 1.0, 1.8, 0.0)
+            firstPerson.SetMoveSpeed(3.0)
+
+            # Framed on the new scene's bounds, so the third-person camera is already useful
+            # the first time T is pressed (FeatureDemo.cpp:646-647).
+            self.camera.GetThirdPersonCamera().SetRotation(
+                math.radians(135.0), math.radians(20.0)
+            )
+            self.PointThirdPersonCameraAt(graph.GetRootNode())
+
+            # A bare .gltf/.glb is a single model rather than a walkable environment, so the
+            # sample frames it from outside instead (FeatureDemo.cpp:651-652). copyView=False
+            # again -- the third-person camera was just aimed above and must keep that framing
+            # rather than inherit the first-person view.
+            if self.currentSceneName.endswith((".gltf", ".glb")):
+                self.camera.SwitchToThirdPerson(copyView=False)
+
+        def RenderSplashScreen(self: FeatureDemo, framebuffer: pyd.Framebuffer) -> None:
+            """Clears to black while the loading thread works. Mirrors FeatureDemo.cpp:862-870.
+
+            ApplicationBase::Render calls this instead of RenderScene until the scene is loaded
+            AND every deferred texture upload has drained. Clearing is all it can do: the render
+            targets, views and per-frame passes are all built by RenderScene, which has not run.
+            The progress text is drawn on top by UIRenderer.buildUI, a separate render pass.
+            """
+            self.commandList.open()
+            self.commandList.clearTextureFloat(
+                framebuffer.getDesc().getColorAttachment(0).texture, pyd.Color(0.0)
+            )
+            self.commandList.close()
+            self.GetDevice().executeCommandList(self.commandList)
+
+            # Nothing here is worth spinning the GPU for. Animate() re-asserts the UI's own
+            # VSync setting every frame once the scene is up, so this does not stick.
+            self.GetDeviceManager().SetVsyncEnabled(True)
 
         def SetupView(self: FeatureDemo, width: int, height: int) -> bool:
             """Updates self.view/self.viewPrevious for this frame's viewport.
@@ -1408,7 +1589,13 @@ if __name__ == "__main__":
                 return pyd.StereoPlanarView(self.view)
             return pyd.PlanarView(self.view)
 
-        def Render(self: FeatureDemo, framebuffer: pyd.Framebuffer) -> None:
+        def RenderScene(self: FeatureDemo, framebuffer: pyd.Framebuffer) -> None:
+            """The real frame. Called by ApplicationBase::Render only once the scene is loaded
+            and every deferred texture upload has drained (ApplicationBase.cpp:64-80) -- until
+            then RenderSplashScreen runs instead. That inherited Render is also what drains the
+            texture queue each frame and joins the loading thread, which is why this class
+            overrides RenderScene rather than Render (FeatureDemo.cpp:872).
+            """
             device = self.GetDevice()
             fbInfo = framebuffer.getFramebufferInfo()
             width, height = fbInfo.width, fbInfo.height
@@ -1921,12 +2108,60 @@ if __name__ == "__main__":
             self.selectedLight: pyd.Light | None = None
             pyd.ImGui.DisableIniFile()
 
+        def _relativeScenePath(self: UIRenderer, name: str) -> str:
+            """Trims the media-folder prefix off a scene path for display.
+
+            FindScenes returns absolute paths; the C++ does the same trim inline with a
+            starts_with (FeatureDemo.cpp:1517-1521). as_posix() because that is the separator
+            FindScenes uses in the strings it returns, on Windows too.
+            """
+            prefix = self.app.sceneDir.as_posix() + "/"
+            return name[len(prefix):] if name.startswith(prefix) else name
+
         def buildUI(self: UIRenderer) -> None:
             if not self.ui.ShowUI:
                 return
 
+            # Mirrors FeatureDemo.cpp:1480-1496. Ahead of the ShowUI check in spirit but after
+            # it in code, so ESC/TAB still hides everything: while a scene loads there is no
+            # scene, no render targets and no views, and every panel below would fault on the
+            # first self.app.scene access. The early return is what makes those panels' later
+            # `self.app.scene is not None` guards enough.
+            #
+            # These counters are written by the loading thread as this reads them --
+            # ObjectsLoaded/ObjectsTotal are atomics on the engine's one global stats object,
+            # and the texture counts are atomics on TextureCache. A torn read here would only
+            # ever show a number one frame stale.
+            if self.app.IsSceneLoading():
+                stats = pyd.Scene.GetLoadingStats()
+                textureCache = self.app.m_TextureCache
+                self.BeginFullScreenWindow()
+                self.DrawScreenCenteredText(
+                    f"Loading scene {self.app.GetCurrentSceneName()}, please wait...\n"
+                    f"Objects: {stats.ObjectsLoaded}/{stats.ObjectsTotal}, "
+                    f"Textures: {textureCache.GetNumberOfLoadedTextures()}/"
+                    f"{textureCache.GetNumberOfRequestedTextures()}"
+                )
+                self.EndFullScreenWindow()
+                return
+
             pyd.ImGui.SetNextWindowPos(10.0, 10.0)
             pyd.ImGui.Begin("Settings", _IMGUI_WINDOW_FLAGS_ALWAYS_AUTO_RESIZE)
+
+            # Scene picker, mirroring FeatureDemo.cpp:1523-1536. Paths are shown relative to
+            # the media folder -- the absolute ones FindScenes returns are far too long for a
+            # combo. Selecting the active scene is a no-op; selecting any other one re-enters
+            # BeginLoadingScene, so SceneUnloading() fires and the splash screen comes back on
+            # the very next frame.
+            currentScene = self.app.GetCurrentSceneName()
+            if pyd.ImGui.BeginCombo("Scene", self._relativeScenePath(currentScene)):
+                for scene in self.app.GetAvailableScenes():
+                    isSelected = scene == currentScene
+                    if pyd.ImGui.Selectable(self._relativeScenePath(scene), isSelected):
+                        self.app.SetCurrentSceneName(scene)
+                    if isSelected:
+                        pyd.ImGui.SetItemDefaultFocus()
+                pyd.ImGui.EndCombo()
 
             # Rebuild the shaders on disk first (ShaderMake, or another `uv sync`) -- this
             # re-reads the .bin blobs, it does not compile HLSL.

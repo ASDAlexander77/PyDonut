@@ -290,6 +290,15 @@ public:
     void buildUI() override {
         PYBIND11_OVERRIDE_PURE(void, ImGui_Renderer, buildUI);
     }
+
+    // BeginFullScreenWindow/DrawScreenCenteredText/EndFullScreenWindow are protected on
+    // ImGui_Renderer (imgui_renderer.h:169-171), so a Python subclass has no way to reach
+    // them -- these forwarders back the same-named methods bound below. They're what a
+    // loading screen is drawn with: an undecorated window covering the whole viewport, with
+    // text centered in it (feature_demo.py's UIRenderer.buildUI).
+    void PyBeginFullScreenWindow() { BeginFullScreenWindow(); }
+    void PyDrawScreenCenteredText(const std::string& text) { DrawScreenCenteredText(text.c_str()); }
+    void PyEndFullScreenWindow() { EndFullScreenWindow(); }
 };
 
 // Empty tag type so the raw ImGui:: functions below can be grouped as static methods under
@@ -1907,6 +1916,16 @@ PYBIND11_MODULE(_pydonut, m) {
     m.def("GetDirectoryWithExecutable", &donut::app::GetDirectoryWithExecutable);
     m.def("GetShaderTypeName", &donut::app::GetShaderTypeName, py::arg("api"));
 
+    // Scene discovery for samples that offer a scene picker (feature_demo.py). FindScenes
+    // returns absolute paths as strings -- it walks 'path' and its direct subdirectories for
+    // .scene.json/.gltf/.glb files -- and FindPreferredScene picks one of those by filename,
+    // falling back to the first entry when the preferred name isn't present.
+    m.def("FindScenes", [](donut::vfs::IFileSystem& fs, const std::filesystem::path& path) {
+        return donut::app::FindScenes(fs, path);
+    }, py::arg("fs"), py::arg("path"));
+    m.def("FindPreferredScene", &donut::app::FindPreferredScene,
+        py::arg("available"), py::arg("preferred"));
+
     py::class_<Log>(m, "log")
         .def_static("SetMinSeverity", &Log::SetMinSeverity, py::arg("severity"))
         .def_static("SetCallback", &Log::SetCallback, py::arg("callback"))
@@ -2038,6 +2057,11 @@ PYBIND11_MODULE(_pydonut, m) {
     textureCache.def("ProcessRenderingThreadCommands", &donut::engine::TextureCache::ProcessRenderingThreadCommands,
         py::arg("commonPasses"), py::arg("timeLimitMilliseconds"));
     textureCache.def("LoadingFinished", &donut::engine::TextureCache::LoadingFinished);
+    // Counters for a loading screen. "Requested" is incremented when a texture is queued,
+    // "Loaded" when its pixels have been decoded -- both by the loading thread, so like
+    // Scene.GetLoadingStats() they're atomics read from the render thread mid-load.
+    textureCache.def("GetNumberOfLoadedTextures", &donut::engine::TextureCache::GetNumberOfLoadedTextures);
+    textureCache.def("GetNumberOfRequestedTextures", &donut::engine::TextureCache::GetNumberOfRequestedTextures);
 
     // Scene::Load() reads a glTF file synchronously and builds the CPU-side scene graph;
     // FinishedLoading() then uploads the GPU buffers (instances/geometries/materials) on
@@ -2048,9 +2072,30 @@ PYBIND11_MODULE(_pydonut, m) {
             std::shared_ptr<donut::engine::TextureCache> textureCache, std::shared_ptr<donut::engine::DescriptorTableManager> descriptorTable) {
         return new donut::engine::Scene(device, shaderFactory, fs, textureCache, descriptorTable, nullptr);
     }), py::arg("device"), py::arg("shaderFactory"), py::arg("fs"), py::arg("textureCache"), py::arg("descriptorTable"));
+    // Releases the GIL for the duration of the load. ApplicationBase::BeginLoadingScene()
+    // runs LoadScene() on a std::thread (ApplicationBase.cpp:140-143), and pybind11 acquires
+    // the GIL around that Python override -- so without this, the loading thread holds the GIL
+    // for the whole of Scene::Load() and the render thread blocks on its own Render() override,
+    // freezing the window instead of showing the splash screen. Safe because sceneTypeFactory
+    // is always null here (see the constructor above): nothing Scene::Load() reaches can call
+    // back into Python.
     scene.def("Load", [](donut::engine::Scene &self, const std::filesystem::path& sceneFileName) {
         return self.Load(sceneFileName);
-    }, py::arg("sceneFileName"));
+    }, py::arg("sceneFileName"), py::call_guard<py::gil_scoped_release>());
+
+    // Live progress counters for a loading screen, populated by GltfImporter as it walks the
+    // file. Static on Scene in C++, and genuinely global: one set of counters shared by every
+    // scene being loaded. The fields are std::atomic<uint32_t> (SceneTypes.h:156-160), read
+    // here from the render thread while the loading thread writes them.
+    py::class_<donut::engine::SceneLoadingStats>(m, "SceneLoadingStats")
+        .def_property_readonly("ObjectsTotal", [](const donut::engine::SceneLoadingStats &self) {
+            return self.ObjectsTotal.load();
+        })
+        .def_property_readonly("ObjectsLoaded", [](const donut::engine::SceneLoadingStats &self) {
+            return self.ObjectsLoaded.load();
+        });
+    scene.def_static("GetLoadingStats", &donut::engine::Scene::GetLoadingStats,
+        py::return_value_policy::reference);
     scene.def("FinishedLoading", &donut::engine::Scene::FinishedLoading, py::arg("frameIndex"));
     // Distinct from SceneGraph.Refresh(frameIndex) (bound below): this also captures the scene
     // graph's pending structure/transform-change flags onto the Scene itself, which
@@ -3769,6 +3814,19 @@ PYBIND11_MODULE(_pydonut, m) {
     imguiRenderer.def("Init", [](donut::app::ImGui_Renderer &self, std::shared_ptr<donut::engine::ShaderFactory> shaderFactory) {
         return self.Init(shaderFactory);
     }, py::arg("shaderFactory"));
+    // ImGui_Renderer is abstract (buildUI is pure virtual), so every instance really is a
+    // PyImGuiRenderer and these downcasts are safe -- same reasoning as the ApplicationBase
+    // m_TextureCache/m_CommonPasses properties below. Call these only from buildUI(), which is
+    // where an ImGui frame is open. Begin/End must be paired.
+    imguiRenderer.def("BeginFullScreenWindow", [](donut::app::ImGui_Renderer &self) {
+        static_cast<PyImGuiRenderer&>(self).PyBeginFullScreenWindow();
+    });
+    imguiRenderer.def("DrawScreenCenteredText", [](donut::app::ImGui_Renderer &self, const std::string& text) {
+        static_cast<PyImGuiRenderer&>(self).PyDrawScreenCenteredText(text);
+    }, py::arg("text"));
+    imguiRenderer.def("EndFullScreenWindow", [](donut::app::ImGui_Renderer &self) {
+        static_cast<PyImGuiRenderer&>(self).PyEndFullScreenWindow();
+    });
 
     // Only the ImGui:: entry points rt_particles.py's UserInterface.buildUI() actually calls.
     // Out-params (bool*, float*, int*) become (changed, newValue...) return tuples -- Python

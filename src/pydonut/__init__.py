@@ -133,6 +133,7 @@ from pydonut._pydonut import SceneGraphAnimation
 from pydonut._pydonut import SceneGraphNode
 from pydonut._pydonut import SceneGraph
 from pydonut._pydonut import Scene
+from pydonut._pydonut import SceneLoadingStats
 from pydonut._pydonut import SceneLoaded
 from pydonut._pydonut import BaseCamera
 from pydonut._pydonut import FirstPersonCamera
@@ -195,6 +196,8 @@ from pydonut._pydonut import DeviceCreationParameters
 from pydonut._pydonut import GetGraphicsAPIFromCommandLine
 from pydonut._pydonut import GetDirectoryWithExecutable
 from pydonut._pydonut import GetShaderTypeName
+from pydonut._pydonut import FindScenes
+from pydonut._pydonut import FindPreferredScene
 from pydonut._pydonut import AFTERMATH_AVAILABLE
 from pydonut._pydonut import DestroyBufferMemory_UnsafeForCrashTesting
 from pydonut._pydonut import ClearColorAttachment
@@ -333,6 +336,7 @@ __all__ = (
     'SceneGraphNode',
     'SceneGraph',
     'Scene',
+    'SceneLoadingStats',
     'SceneLoaded',
     'BaseCamera',
     'FirstPersonCamera',
@@ -395,6 +399,8 @@ __all__ = (
     'GetGraphicsAPIFromCommandLine',
     'GetDirectoryWithExecutable',
     'GetShaderTypeName',
+    'FindScenes',
+    'FindPreferredScene',
     'AFTERMATH_AVAILABLE',
     'DestroyBufferMemory_UnsafeForCrashTesting',
     'ClearColorAttachment',
