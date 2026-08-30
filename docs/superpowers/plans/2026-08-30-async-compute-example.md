@@ -521,7 +521,7 @@ def test_shader_entry_points_compile_to_spirv(entry, shader_type) -> None:
         _SHADER.read_text(encoding="utf-8"),
         entry,
         shader_type,
-        pyd.GraphicsAPI.VULKAN,
+        pyd.GraphicsAPI.Vulkan,
         sourceName="shaders.hlsl",
         includePaths=[_DONUT_INCLUDE],
     )
