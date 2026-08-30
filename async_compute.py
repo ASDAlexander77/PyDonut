@@ -23,12 +23,12 @@
 
 """Port of Donut's async_compute sample.
 
-A compute thread rewrites a 512x512 noise texture at 100 Hz on the COMPUTE queue while the
-render thread draws it as a full-screen quad on the GRAPHICS queue. Two textures ping-pong
-between the threads, and the two GPU queues are synchronised in both directions with
+A compute thread targets a 100 Hz tick rewriting a 512x512 noise texture on the COMPUTE queue
+while the render thread draws it as a full-screen quad on the GRAPHICS queue. Two textures
+ping-pong between the threads, and the two GPU queues are synchronised in both directions with
 queueWaitForCommandList, keyed on the submission instance IDs executeCommandList returns.
 
-This is the only example that uses a second GPU queue. Three things make it work:
+This is the only example that uses a second GPU queue. Four things make it work:
 
   * DeviceCreationParameters.enableComputeQueue -- without it the device has no compute queue
     and createCommandListLifetimeTracker(Compute) fails.
@@ -36,6 +36,11 @@ This is the only example that uses a second GPU queue. Three things make it work
     without racing the device's internal trackers (nvrhi.h:3150).
   * A GIL released across executeCommandList/setComputeState/dispatch, so the compute thread
     genuinely overlaps the render thread rather than interleaving under the GIL.
+  * A caveat, not a mechanism: RunMessageLoop doesn't release the GIL, so the compute thread
+    only gets scheduled during the render thread's Python callbacks and the released calls
+    above -- which bounds the achieved tick rate to roughly once per rendered frame at vsync.
+    The GPU-side queue overlap this example demonstrates is real; 100 Hz is a ceiling on the
+    compute thread's tick, not a guarantee.
 """
 
 if __name__ == "__main__":
@@ -52,11 +57,14 @@ if __name__ == "__main__":
     folder = Path(__file__).resolve().parent
     donutIncludeDir = folder / "extern" / "donut" / "include"
 
+    # Also hardcoded as 512 in shaders/async_compute/shaders.hlsl's main_cs (verbatim copy,
+    # not parameterized) -- change both together.
     TEXTURE_SIZE = 512
     # Two, as async_compute.cpp:173: one being written by compute while the other is read by
     # the render thread. One would serialise the queues; more would only add latency.
     NUM_TEXTURES = 2
-    # 100 Hz, matching async_compute.cpp:254.
+    # 100 Hz target, matching async_compute.cpp:254 -- the achieved rate is lower in practice;
+    # see the module docstring.
     COMPUTE_INTERVAL_SECONDS = 0.01
     # main_cs is [numthreads(8, 8, 1)], so 512 / 8 = 64 groups per axis.
     DISPATCH_GROUPS = TEXTURE_SIZE // 8
@@ -169,6 +177,9 @@ if __name__ == "__main__":
             self.computeBindings = pyd.BindingCache(device)
 
             self.lifetimeTracker = device.createCommandListLifetimeTracker(pyd.CommandQueue.Compute)
+            if self.lifetimeTracker is None:
+                pyd.log.fatal("Device has no compute queue -- enable it or run on a GPU that supports one.")
+                return False
 
             self.drawCommandList = device.createCommandList()
 
@@ -236,8 +247,9 @@ if __name__ == "__main__":
                     psoDesc, framebuffer.getFramebufferInfo()
                 )
 
-            # Take the newest finished texture, if the compute thread has produced one, and
-            # hand the outgoing one back for reuse.
+            # Take the next finished texture (FIFO; with only two textures in flight this is
+            # always the most recently produced one), if the compute thread has produced one,
+            # and hand the outgoing one back for reuse.
             try:
                 newTexture, newTextureLastUse = self.computeToRender.get_nowait()
             except queue.Empty:
@@ -377,14 +389,18 @@ if __name__ == "__main__":
         sys.exit(1)
 
     example = AsyncCompute(deviceManager)
-    if example.Init():
-        deviceManager.AddRenderPassToBack(example)
-        deviceManager.RunMessageLoop()
-        deviceManager.RemoveRenderPass(example)
-
-    # Before Shutdown(), and after the render pass is unhooked: the compute thread must not be
-    # touching GPU objects while the device is being torn down.
-    example.Stop()
+    try:
+        if example.Init():
+            deviceManager.AddRenderPassToBack(example)
+            try:
+                deviceManager.RunMessageLoop()
+            finally:
+                deviceManager.RemoveRenderPass(example)
+    finally:
+        # Runs even if Init()/RunMessageLoop() raised, and even if Init() returned False (in
+        # which case self.computeThread is still None and Stop() is a safe no-op) -- the
+        # compute thread must never still be touching GPU objects when Shutdown() runs below.
+        example.Stop()
 
     deviceManager.Shutdown()
 

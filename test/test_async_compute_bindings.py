@@ -109,12 +109,16 @@ def test_submit_path_bindings_are_still_callable_after_gil_change() -> None:
     This cannot observe GIL behaviour without a GPU. It is a guard against the edit
     accidentally dropping an argument name or a default while adding the call_guard.
     """
-    # pybind11 records argument names in the docstring signature.
-    assert "commandList" in pyd.Device.executeCommandList.__doc__
-    assert "executionQueue" in pyd.Device.executeCommandList.__doc__
-    assert "state" in pyd.CommandList.setComputeState.__doc__
+    # pybind11 records argument names in the docstring signature. `or ""` satisfies the type
+    # checker, which can't prove these docstrings are non-None -- pybind11 always generates one.
+    execute_doc = pyd.Device.executeCommandList.__doc__ or ""
+    compute_state_doc = pyd.CommandList.setComputeState.__doc__ or ""
+    dispatch_doc = pyd.CommandList.dispatch.__doc__ or ""
+    assert "commandList" in execute_doc
+    assert "executionQueue" in execute_doc
+    assert "state" in compute_state_doc
     for name in ("groupsX", "groupsY", "groupsZ"):
-        assert name in pyd.CommandList.dispatch.__doc__
+        assert name in dispatch_doc
 
 
 _DONUT_INCLUDE = str(pathlib.Path(__file__).resolve().parent.parent / "extern" / "donut" / "include")

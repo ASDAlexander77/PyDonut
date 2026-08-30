@@ -1470,7 +1470,9 @@ PYBIND11_MODULE(_pydonut, m) {
        py::call_guard<py::gil_scoped_release>());
     // Cross-queue synchronisation (nvrhi.h:3760): makes waitQueue block until the submission
     // `instance` on executionQueue has completed. `instance` is the value executeCommandList
-    // returned for that submission. Releases the GIL -- it waits on a GPU fence.
+    // returned for that submission. Releases the GIL because it's called from a worker thread's
+    // submit sequence (see the GIL policy comment above) -- it does not itself block; it
+    // enqueues a GPU-side wait and returns immediately.
     device.def("queueWaitForCommandList", &nvrhi::IDevice::queueWaitForCommandList,
         py::arg("waitQueue"), py::arg("executionQueue"), py::arg("instance"),
         py::call_guard<py::gil_scoped_release>());
@@ -1662,21 +1664,31 @@ PYBIND11_MODULE(_pydonut, m) {
         .def("getBackingMemorySize", &D3D12WorkGraphPipeline::getBackingMemorySize);
 #endif // NVRHI_WITH_DX12
 
-    // GIL policy for this file: a binding gets py::call_guard<py::gil_scoped_release> when it
-    // can BLOCK -- on a driver submit, on a GPU fence, or on a mutex. Releasing there is what
-    // lets Python threads actually run in parallel instead of interleaving under the GIL.
+    // GIL policy for this file: a binding gets py::call_guard<py::gil_scoped_release> when a
+    // worker thread needs to call it and either (a) it can genuinely block -- a driver submit,
+    // a GPU fence, a mutex -- or (b) it's on that worker thread's hot path for command-list
+    // recording or barrier work, where holding the GIL would just serialise it behind the main
+    // thread for no benefit. Releasing there is what lets Python threads actually run in
+    // parallel instead of interleaving under the GIL.
     //
     // Two examples depend on this. threaded_rendering.py records six independent per-face
-    // command lists on a thread pool (open/close/RenderCompositeView). async_compute.py runs a
-    // compute thread that records and submits on the compute queue while the render thread
-    // submits on the graphics queue (executeCommandList, setComputeState, dispatch,
-    // queueWaitForCommandList, BindingCache.GetOrCreateBindingSet,
-    // CommandListLifetimeTracker.runGarbageCollection).
+    // command lists on a thread pool (open/close/RenderCompositeView, setEnableAutomaticBarriers,
+    // setResourceStatesForFramebuffer, setBufferState, setAccelStructState, commitBarriers, the
+    // view-scoped clearTexture* overloads). async_compute.py runs a compute thread that records
+    // and submits on the compute queue while the render thread submits on the graphics queue
+    // (executeCommandList, setComputeState, dispatch, queueWaitForCommandList,
+    // BindingCache.GetOrCreateBindingSet, CommandListLifetimeTracker.runGarbageCollection).
+    //
+    // waitForIdle and executeCommandLists are genuinely blocking (driver submit / GPU fence) but
+    // are deliberately NOT on this list: no current example calls either from a worker thread,
+    // so there's nothing to race against the GIL yet. A future example that does call them from
+    // a worker thread must add the guard there rather than assume this omission was reasoned
+    // about for that case.
     //
     // setPushConstants is deliberately NOT on the list: it is a small memcpy that cannot block,
     // and it holds a pointer obtained from py::buffer_info across the call -- releasing the GIL
     // there would let another Python thread mutate or resize a bytearray mid-copy, trading a
-    // real safety property for nothing. Anything else not listed simply has no blocking call.
+    // real safety property for nothing.
     commandList.def("open", &nvrhi::ICommandList::open, py::call_guard<py::gil_scoped_release>());
     commandList.def("close", &nvrhi::ICommandList::close, py::call_guard<py::gil_scoped_release>());
     commandList.def("setGraphicsState", &nvrhi::ICommandList::setGraphicsState, py::arg("state"));
