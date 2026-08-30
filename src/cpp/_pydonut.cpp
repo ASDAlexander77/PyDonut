@@ -487,6 +487,29 @@ void AddVulkanBindingShiftArgs(std::vector<LPCWSTR> &args) {
     args.push_back(L"-fvk-u-shift"); args.push_back(L"384"); args.push_back(L"0");
 }
 
+// Defines the same platform macros ShaderMake passes when it builds the precompiled
+// shaders (compileshaders.cmake:171 and :267-268), so a shader compiled in-process here
+// sees the identical preprocessor environment.
+//
+// This is not cosmetic. donut/shaders/binding_helpers.hlsli gates every Vulkan-only
+// attribute on `#if defined(SPIRV) || defined(TARGET_VULKAN)`, so without these the
+// attributes silently expand to nothing and the shader still compiles -- just wrongly.
+// DECLARE_PUSH_CONSTANTS degrades to a plain `cbuffer : register(b0)`, which the b-shift
+// above maps to binding 256, a descriptor nvrhi never writes because its binding layout
+// declares a real VkPushConstantRange instead. The result is an unbound descriptor and
+// garbage constants at dispatch, reported by the validation layer but not by DXC.
+void AddPlatformDefineArgs(std::vector<LPCWSTR> &args, nvrhi::GraphicsAPI api) {
+    if (api == nvrhi::GraphicsAPI::VULKAN) {
+        // Both spellings, as ShaderMake does. binding_helpers.hlsli accepts either, and
+        // this repo's own shaders currently spell it SPIRV -- but a shader written against
+        // the newer TARGET_VULKAN name must compile here too.
+        args.push_back(L"-D"); args.push_back(L"SPIRV=1");
+        args.push_back(L"-D"); args.push_back(L"TARGET_VULKAN=1");
+    } else {
+        args.push_back(L"-D"); args.push_back(L"TARGET_D3D12=1");
+    }
+}
+
 // Appends "-I <path>" for each entry so #include <...> in the source can resolve
 // against donut's shared C++/HLSL header directories (e.g. donut/shaders/*.h). The
 // wstring conversions are appended to `storage` so their backing memory outlives `args`.
@@ -533,6 +556,7 @@ py::bytes CompileShaderWithDXC(
         }
         AddVulkanBindingShiftArgs(args);
     }
+    AddPlatformDefineArgs(args, api);
     std::vector<std::wstring> includePathStorage;
     AddIncludePathArgs(args, includePaths, includePathStorage);
 
@@ -563,6 +587,7 @@ py::bytes CompileShaderLibraryWithDXC(
         args.push_back(L"-fspv-target-env=vulkan1.2");
         AddVulkanBindingShiftArgs(args);
     }
+    AddPlatformDefineArgs(args, api);
     std::vector<std::wstring> includePathStorage;
     AddIncludePathArgs(args, includePaths, includePathStorage);
 
@@ -1889,8 +1914,16 @@ PYBIND11_MODULE(_pydonut, m) {
     // to Python -- matches the existing convention of wrapping multi-step C++ procedures behind
     // one call (see SceneLoaded(), CreateMaterialConstantBuffer()).
     m.def("BuildSceneAccelStructs", [](nvrhi::IDevice* device, nvrhi::ICommandList* commandList, donut::engine::Scene &scene) {
-        std::unordered_map<std::shared_ptr<donut::engine::MeshInfo>, nvrhi::rt::AccelStructHandle> meshAccelStructs;
-
+        // Each BLAS is stored on its MeshInfo (SceneTypes.h:344, "for use by applications"),
+        // NOT in a local map, because it has to outlive this function. buildTopLevelAccelStruct
+        // copies only the BLAS's raw device address into the instance data and takes no
+        // reference on it -- it pushes just the TLAS itself onto referencedResources
+        // (vulkan-raytracing.cpp:1038). So a BLAS held only by a scope-local handle is
+        // destroyed the moment this returns, leaving the TLAS pointing at freed GPU memory.
+        // On Vulkan that memory gets recycled and the first TraceRay faults the device
+        // (TDR, "Device Removed!"); D3D12 merely tolerated it. Hanging them off the scene
+        // graph ties their lifetime to the scene, which outlives the TLAS -- the same place
+        // donut's own samples keep them.
         for (const auto &mesh : scene.GetSceneGraph()->GetMeshes())
         {
             nvrhi::rt::AccelStructDesc blasDesc;
@@ -1915,10 +1948,8 @@ PYBIND11_MODULE(_pydonut, m) {
                 blasDesc.bottomLevelGeometries.push_back(geometryDesc);
             }
 
-            nvrhi::rt::AccelStructHandle as = device->createAccelStruct(blasDesc);
-            nvrhi::utils::BuildBottomLevelAccelStruct(commandList, as, blasDesc);
-
-            meshAccelStructs[mesh] = as;
+            mesh->accelStruct = device->createAccelStruct(blasDesc);
+            nvrhi::utils::BuildBottomLevelAccelStruct(commandList, mesh->accelStruct, blasDesc);
         }
 
         nvrhi::rt::AccelStructDesc tlasDesc;
@@ -1929,7 +1960,7 @@ PYBIND11_MODULE(_pydonut, m) {
         for (const auto &instance : scene.GetSceneGraph()->GetMeshInstances())
         {
             nvrhi::rt::InstanceDesc instanceDesc;
-            instanceDesc.bottomLevelAS = meshAccelStructs[instance->GetMesh()];
+            instanceDesc.bottomLevelAS = instance->GetMesh()->accelStruct;
             instanceDesc.instanceMask = 1;
 
             auto *node = instance->GetNode();

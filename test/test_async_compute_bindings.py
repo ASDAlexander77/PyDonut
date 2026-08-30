@@ -31,6 +31,8 @@ name, a chained setter that returns a copy instead of self.
 from __future__ import annotations
 
 import pathlib
+import struct
+
 import pytest
 
 import pydonut as pyd
@@ -151,3 +153,51 @@ def test_shader_entry_points_compile_to_spirv(entry, shader_type) -> None:
         includePaths=[_DONUT_INCLUDE],
     )
     assert len(bytecode) > 0
+
+
+def _opvariable_storage_classes(spirv: bytes) -> set[int]:
+    """Storage class of every OpVariable in a SPIR-V module.
+
+    Hand-decoded rather than pulled from a SPIR-V toolchain: the module header is five
+    words, then a flat instruction stream whose every word packs word-count in the high
+    16 bits and opcode in the low 16. That is enough to walk it without a dependency.
+    """
+    words = struct.unpack("<%dI" % (len(spirv) // 4), spirv)
+    assert words[0] == 0x07230203, "not a SPIR-V module"
+    classes, i = set(), 5
+    while i < len(words):
+        wordCount, opcode = words[i] >> 16, words[i] & 0xFFFF
+        assert wordCount > 0, "malformed SPIR-V instruction"
+        if opcode == 59:  # OpVariable: result-type, result-id, storage-class
+            classes.add(words[i + 3])
+        i += wordCount
+    return classes
+
+
+_STORAGE_CLASS_UNIFORM = 2
+_STORAGE_CLASS_PUSH_CONSTANT = 9
+
+
+@pytest.mark.skipif(pyd.CompileShader is None, reason="native module built without DXC")
+def test_vulkan_compile_defines_spirv_so_push_constants_stay_push_constants() -> None:
+    """CompileShader must define SPIRV/TARGET_VULKAN the way ShaderMake does.
+
+    binding_helpers.hlsli gates [[vk::push_constant]] on those macros, so without them
+    DECLARE_PUSH_CONSTANTS quietly degrades to `cbuffer : register(b0)` -- which the
+    b-shift maps to binding 256, a descriptor nvrhi never writes because its layout
+    declares a real VkPushConstantRange. DXC reports nothing; only the Vulkan validation
+    layer does, at dispatch time, on a machine with a GPU. Asserting on the storage class
+    catches it here instead.
+    """
+    assert pyd.CompileShader is not None
+    bytecode = pyd.CompileShader(
+        _SHADER.read_text(encoding="utf-8"),
+        "main_cs",
+        pyd.ShaderType.Compute,
+        pyd.GraphicsAPI.Vulkan,
+        sourceName="shaders.hlsl",
+        includePaths=[_DONUT_INCLUDE],
+    )
+    classes = _opvariable_storage_classes(bytecode)
+    assert _STORAGE_CLASS_PUSH_CONSTANT in classes
+    assert _STORAGE_CLASS_UNIFORM not in classes
