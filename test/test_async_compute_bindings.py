@@ -84,3 +84,19 @@ def test_parameters_setters_chain_together() -> None:
         .setLifetimeTracker(None)
     )
     assert chained is params
+
+
+def test_device_exposes_queue_wait_for_command_list() -> None:
+    assert hasattr(pyd.Device, "queueWaitForCommandList")
+
+
+def test_binding_cache_exposes_get_or_create_binding_set() -> None:
+    # BindingCache previously bound only Clear(). GetOrCreateBindingSet is what lets the
+    # compute thread build its per-texture UAV binding set without a device round-trip
+    # every tick (BindingCache.h:53).
+    assert callable(pyd.BindingCache.GetOrCreateBindingSet)
+
+
+def test_binding_cache_still_exposes_clear() -> None:
+    # Guards against the new .def() replacing the chain rather than extending it.
+    assert callable(pyd.BindingCache.Clear)

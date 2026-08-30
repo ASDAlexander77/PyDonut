@@ -1467,6 +1467,12 @@ PYBIND11_MODULE(_pydonut, m) {
     device.def("executeCommandList", [](nvrhi::IDevice &self, nvrhi::ICommandList* cmdList, nvrhi::CommandQueue executionQueue) {
         return self.executeCommandList(cmdList, executionQueue);
     }, py::arg("commandList"), py::arg("executionQueue") = nvrhi::CommandQueue::Graphics);
+    // Cross-queue synchronisation (nvrhi.h:3760): makes waitQueue block until the submission
+    // `instance` on executionQueue has completed. `instance` is the value executeCommandList
+    // returned for that submission. Releases the GIL -- it waits on a GPU fence.
+    device.def("queueWaitForCommandList", &nvrhi::IDevice::queueWaitForCommandList,
+        py::arg("waitQueue"), py::arg("executionQueue"), py::arg("instance"),
+        py::call_guard<py::gil_scoped_release>());
     device.def("createShader", [](nvrhi::IDevice &self, const std::string &bytecode, const std::string &entryName, nvrhi::ShaderType shaderType) {
         nvrhi::ShaderDesc desc;
         desc.shaderType = shaderType;
@@ -2006,6 +2012,13 @@ PYBIND11_MODULE(_pydonut, m) {
 
     py::class_<donut::engine::BindingCache>(m, "BindingCache")
         .def(py::init<nvrhi::IDevice*>(), py::arg("device"))
+        // BindingCache is internally thread-safe (a std::shared_mutex; see BindingCache.h:38),
+        // so this may block on that lock and may call into the device to create a set -- hence
+        // the GIL release.
+        .def("GetOrCreateBindingSet", [](donut::engine::BindingCache &self,
+                const nvrhi::BindingSetDesc &desc, nvrhi::IBindingLayout* layout) {
+            return DetachToShared(self.GetOrCreateBindingSet(desc, layout));
+        }, py::arg("desc"), py::arg("layout"), py::call_guard<py::gil_scoped_release>())
         .def("Clear", &donut::engine::BindingCache::Clear);
 
     // Only the fields threaded_rendering.py needs are bound (target framebuffer/viewport,
