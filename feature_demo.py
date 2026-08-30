@@ -239,20 +239,26 @@ if __name__ == "__main__":
         DeferredLightingPassInputs.SetGBuffer -- takes the base class, which .gbuffer is.
         """
 
+        # Declared, not defaulted to None: Init() creates every one of them, the sole
+        # construction site calls it on the next line, and nothing reads a RenderTargets
+        # before that. Annotating instead of assigning keeps them non-optional for every
+        # reader -- an unset one is an AttributeError rather than a None that has to be
+        # re-checked at each of the ~30 use sites in CreateRenderPasses and RenderScene.
+        HdrColor: pyd.Texture
+        LdrColor: pyd.Texture
+        ResolvedColor: pyd.Texture
+        TemporalFeedback1: pyd.Texture
+        TemporalFeedback2: pyd.Texture
+        AmbientOcclusion: pyd.Texture
+        ForwardFramebuffer: pyd.FramebufferFactory
+        HdrFramebuffer: pyd.FramebufferFactory
+        LdrFramebuffer: pyd.FramebufferFactory
+        ResolvedFramebuffer: pyd.FramebufferFactory
+        MaterialIDs: pyd.Texture
+        MaterialIDFramebuffer: pyd.FramebufferFactory
+
         def __init__(self: RenderTargets) -> None:
             self.gbuffer = pyd.GBufferRenderTargets()
-            self.HdrColor: pyd.Texture | None = None
-            self.LdrColor: pyd.Texture | None = None
-            self.ResolvedColor: pyd.Texture | None = None
-            self.TemporalFeedback1: pyd.Texture | None = None
-            self.TemporalFeedback2: pyd.Texture | None = None
-            self.AmbientOcclusion: pyd.Texture | None = None
-            self.ForwardFramebuffer: pyd.FramebufferFactory | None = None
-            self.HdrFramebuffer: pyd.FramebufferFactory | None = None
-            self.LdrFramebuffer: pyd.FramebufferFactory | None = None
-            self.ResolvedFramebuffer: pyd.FramebufferFactory | None = None
-            self.MaterialIDs: pyd.Texture | None = None
-            self.MaterialIDFramebuffer: pyd.FramebufferFactory | None = None
             self.width = 0
             self.height = 0
             self.sampleCount = 0
@@ -322,7 +328,7 @@ if __name__ == "__main__":
                 pyd.Format.RGBA16_FLOAT,
                 "ResolvedColor",
                 True,
-                int(math.floor(math.log2(max(width, height)))) + 1,
+                math.floor(math.log2(max(width, height))) + 1,
             )
             self.TemporalFeedback1 = makeSingleSampled(pyd.Format.RGBA16_SNORM, "TemporalFeedback1", True)
             self.TemporalFeedback2 = makeSingleSampled(pyd.Format.RGBA16_SNORM, "TemporalFeedback2", True)
@@ -544,7 +550,14 @@ if __name__ == "__main__":
         def CreateRenderPasses(self: FeatureDemo) -> None:
             """Recreates every size-dependent pass. Called whenever RenderTargets is rebuilt."""
             device = self.GetDevice()
+            # Everything below is built by Init() and only ever replaced, never cleared, and
+            # self.view is written by SetupView before RenderScene reaches this. Asserted once
+            # here so the rest of the method reads without a None check per argument.
             assert self.renderTargets is not None
+            assert self.shaderFactory is not None and self.bindingCache is not None
+            assert self.gbufferPass is not None and self.forwardPass is not None
+            assert self.deferredLightingPass is not None
+            assert self.view is not None
 
             # RGBA32_UINT is the readback *buffer's* layout and the compute shader variant that
             # fills it -- not the source texture's format, which is RG16_UINT. The mismatch is
@@ -581,12 +594,17 @@ if __name__ == "__main__":
             # SSAO is only available without MSAA: its compute path reads a single-sampled
             # depth buffer (FeatureDemo.cpp:825 guards on GetSampleCount() == 1).
             if self.renderTargets.gbuffer.GetSampleCount() == 1:
+                # GBufferRenderTargets' handles are None only before its own Init(), which
+                # ran with this object's.
+                gbufferDepth = self.renderTargets.gbuffer.Depth
+                gbufferNormals = self.renderTargets.gbuffer.GBufferNormals
+                assert gbufferDepth is not None and gbufferNormals is not None
                 self.ssaoPass = pyd.SsaoPass(
                     device,
                     self.shaderFactory,
                     self.m_CommonPasses,
-                    self.renderTargets.gbuffer.Depth,
-                    self.renderTargets.gbuffer.GBufferNormals,
+                    gbufferDepth,
+                    gbufferNormals,
                     self.renderTargets.AmbientOcclusion,
                 )
             else:
@@ -648,6 +666,7 @@ if __name__ == "__main__":
             shader, which is the failure this method exists to avoid.
             """
             device = self.GetDevice()
+            assert self.shaderFactory is not None and self.bindingCache is not None
 
             # The outgoing pipelines can still be referenced by frames in flight -- NVRHI
             # retires a released object only once the fence it was last used behind has
@@ -727,6 +746,7 @@ if __name__ == "__main__":
             constants rather than sliders -- a bias slider would mean recreating the pass on
             every drag.
             """
+            assert self.shaderFactory is not None
             depthParams = pyd.DepthPassCreateParameters()
             depthParams.depthBias = SHADOW_DEPTH_BIAS
             depthParams.slopeScaledDepthBias = SHADOW_SLOPE_SCALED_DEPTH_BIAS
@@ -746,6 +766,7 @@ if __name__ == "__main__":
             in the constructor and never rebuilt (CascadedShadowMap.cpp:67).
             """
             device = self.GetDevice()
+            assert self.deferredLightingPass is not None and self.forwardPass is not None
 
             # Dropping self.shadowMap and sunLight.shadowMap is not enough to release the
             # outgoing 64 MB array: DeferredLightingPass.m_BindingSets and
@@ -863,6 +884,9 @@ if __name__ == "__main__":
             """
             assert self.scene is not None and self.sunLight is not None
             assert self.lightProbePass is not None
+            assert self.shaderFactory is not None
+            assert self.shadowMap is not None and self.shadowFramebuffer is not None
+            assert self.depthPass is not None
             device = self.GetDevice()
 
             # The environment map this capture renders into. Discarded at the end of the method;
@@ -908,7 +932,9 @@ if __name__ == "__main__":
             # The probe sits wherever the camera is. A scene camera's position comes off its
             # node; a user camera's off the camera itself.
             if self.camera.IsSceneCameraActive():
-                probeX, probeY, probeZ = self.camera.GetSceneCamera().GetPosition()
+                sceneCamera = self.camera.GetSceneCamera()
+                assert sceneCamera is not None
+                probeX, probeY, probeZ = sceneCamera.GetPosition()
             else:
                 probeX, probeY, probeZ = self.camera.GetActiveUserCamera().GetPosition()
 
@@ -1023,9 +1049,14 @@ if __name__ == "__main__":
                 commandList, colorTexture, 0, 0, LIGHT_PROBE_ENVIRONMENT_MIPS - 1
             )
 
+            # Both are the shared cube-map arrays CreateLightProbes assigned; only a probe
+            # built outside that path could carry a null map.
+            diffuseMap, specularMap = probe.diffuseMap, probe.specularMap
+            assert diffuseMap is not None and specularMap is not None
+
             # * 6 on both array indices: a cube "slice" is six faces.
             self.lightProbePass.RenderDiffuseMap(
-                commandList, colorTexture, probe.diffuseMap, probe.diffuseArrayIndex * 6, 0
+                commandList, colorTexture, diffuseMap, probe.diffuseArrayIndex * 6, 0
             )
 
             # One specular mip per roughness step, squared so the low-roughness levels get the
@@ -1036,7 +1067,7 @@ if __name__ == "__main__":
                     commandList,
                     roughness,
                     colorTexture,
-                    probe.specularMap,
+                    specularMap,
                     probe.specularArrayIndex * 6,
                     mipLevel,
                 )
@@ -1071,6 +1102,8 @@ if __name__ == "__main__":
             texture in the same frame.
             """
             assert self.shadowMap is not None and self.sunLight is not None
+            assert self.shadowFramebuffer is not None and self.depthPass is not None
+            assert self.scene is not None and self.view is not None
 
             # The two fits differ in what they take off the view -- the tight one the view
             # frustum, the stable one the projection frustum plus the inverse view matrix -- but
@@ -1305,6 +1338,7 @@ if __name__ == "__main__":
             return True
 
         def BackBufferResizing(self: FeatureDemo) -> None:
+            assert self.bindingCache is not None
             self.renderTargets = None
             self.bindingCache.Clear()
 
@@ -1328,6 +1362,9 @@ if __name__ == "__main__":
             # list is open. The duration guard is for clips that sample to a single keyframe:
             # math.fmod(t, 0.0) raises ValueError rather than returning 0.
             if self.IsSceneLoaded() and self.ui.EnableAnimations:
+                # IsSceneLoaded() is the C++ base's flag, which is set from the same load that
+                # publishes self.scene -- but it is opaque to the type checker.
+                assert self.scene is not None
                 self.wallclockTime += elapsedTimeSeconds
                 offset = 0.0
                 for anim in self.scene.GetSceneGraph().GetAnimations():
@@ -1350,6 +1387,11 @@ if __name__ == "__main__":
             scene's material and geometry buffers. Left in place they would be handed to the
             new scene's draw calls, which is not a crash but silently wrong geometry.
             """
+            assert self.gbufferPass is not None and self.materialIDPass is not None
+            assert self.deferredLightingPass is not None and self.forwardPass is not None
+            assert self.depthPass is not None and self.lightProbePass is not None
+            assert self.bindingCache is not None
+
             self.gbufferPass.ResetBindingCache()
             self.materialIDPass.ResetBindingCache()
             self.deferredLightingPass.ResetBindingCache()
@@ -1388,6 +1430,7 @@ if __name__ == "__main__":
             The new scene is published to self.scene only on success, so a failed load leaves
             the previous one in place rather than half-replacing it.
             """
+            assert self.shaderFactory is not None
             scene = pyd.Scene(
                 self.GetDevice(),
                 self.shaderFactory,
@@ -1496,10 +1539,12 @@ if __name__ == "__main__":
             targets, views and per-frame passes are all built by RenderScene, which has not run.
             The progress text is drawn on top by UIRenderer.buildUI, a separate render pass.
             """
+            assert self.commandList is not None
+            backBuffer = framebuffer.getDesc().getColorAttachment(0).texture
+            assert backBuffer is not None
+
             self.commandList.open()
-            self.commandList.clearTextureFloat(
-                framebuffer.getDesc().getColorAttachment(0).texture, pyd.Color(0.0)
-            )
+            self.commandList.clearTextureFloat(backBuffer, pyd.Color(0.0))
             self.commandList.close()
             self.GetDevice().executeCommandList(self.commandList)
 
@@ -1532,43 +1577,48 @@ if __name__ == "__main__":
             # Swapping the view type mid-run leaves viewPrevious holding the *other* kind, which
             # TAA would then resolve against. Rebuild both together and copy across, as
             # FeatureDemo.cpp:722-726 and :753 do.
+            #
+            # One branch per topology, rebuilding the view only when the live one is the wrong
+            # type and then driving the rest of the branch off the local: that establishes the
+            # concrete type once, rather than re-deriving it at every call below.
             topologyChanged = False
             if self.ui.Stereo:
-                if not isinstance(self.view, pyd.StereoPlanarView):
-                    self.view = pyd.StereoPlanarView()
-                    topologyChanged = True
-            else:
-                if not isinstance(self.view, pyd.PlanarView):
-                    self.view = pyd.PlanarView()
+                stereoView = self.view
+                if not isinstance(stereoView, pyd.StereoPlanarView):
+                    stereoView = self.view = pyd.StereoPlanarView()
                     topologyChanged = True
 
-            if self.ui.Stereo:
                 # Left eye owns the left half, right eye the right half of one back buffer.
-                self.view.LeftView.SetViewport(pyd.Viewport(width * 0.5, float(height)))
-                self.view.RightView.SetViewport(
+                stereoView.LeftView.SetViewport(pyd.Viewport(width * 0.5, float(height)))
+                stereoView.RightView.SetViewport(
                     pyd.Viewport(width * 0.5, float(width), 0.0, float(height), 0.0, 1.0)
                 )
-                self.view.LeftView.SetPixelOffset(pixelOffsetX, pixelOffsetY)
-                self.view.RightView.SetPixelOffset(pixelOffsetX, pixelOffsetY)
+                stereoView.LeftView.SetPixelOffset(pixelOffsetX, pixelOffsetY)
+                stereoView.RightView.SetPixelOffset(pixelOffsetX, pixelOffsetY)
                 # PER-EYE aspect ratio: each eye is half the framebuffer wide
                 # (FeatureDemo.cpp:736). The shim does not halve it internally.
-                self.view.SetMatricesFromSwitchableCamera(
+                stereoView.SetMatricesFromSwitchableCamera(
                     self.camera, width / height * 0.5
                 )
                 # StereoPlanarView has no cache of its own -- each eye is updated individually.
-                self.view.LeftView.UpdateCache()
-                self.view.RightView.UpdateCache()
+                stereoView.LeftView.UpdateCache()
+                stereoView.RightView.UpdateCache()
                 # The third-person camera converts mouse drags into orbit and pan amounts using
                 # the view's own projection and viewport, so it needs one concrete eye, not the
                 # composite (FeatureDemo.cpp:751).
-                self.camera.GetThirdPersonCamera().SetView(self.view.LeftView)
+                self.camera.GetThirdPersonCamera().SetView(stereoView.LeftView)
             else:
-                self.view.SetViewport(pyd.Viewport(float(width), float(height)))
-                self.view.SetPixelOffset(pixelOffsetX, pixelOffsetY)
-                self.view.SetMatricesFromSwitchableCamera(self.camera, width / height)
-                self.view.UpdateCache()
+                planarView = self.view
+                if not isinstance(planarView, pyd.PlanarView):
+                    planarView = self.view = pyd.PlanarView()
+                    topologyChanged = True
+
+                planarView.SetViewport(pyd.Viewport(float(width), float(height)))
+                planarView.SetPixelOffset(pixelOffsetX, pixelOffsetY)
+                planarView.SetMatricesFromSwitchableCamera(self.camera, width / height)
+                planarView.UpdateCache()
                 # As in FeatureDemo.cpp:773.
-                self.camera.GetThirdPersonCamera().SetView(self.view)
+                self.camera.GetThirdPersonCamera().SetView(planarView)
 
             if topologyChanged:
                 # Seed viewPrevious from the view just built, so the first frame after a switch
@@ -1585,6 +1635,7 @@ if __name__ == "__main__":
             The copy constructor is the only way to snapshot a view -- neither type exposes its
             matrices to Python -- and each type has its own, so this has to switch.
             """
+            assert self.view is not None
             if isinstance(self.view, pyd.StereoPlanarView):
                 return pyd.StereoPlanarView(self.view)
             return pyd.PlanarView(self.view)
@@ -1597,6 +1648,18 @@ if __name__ == "__main__":
             overrides RenderScene rather than Render (FeatureDemo.cpp:872).
             """
             device = self.GetDevice()
+
+            # Everything Init() builds and never drops again, asserted once so the ~60 uses
+            # below read without a None check each. self.scene and self.sunLight are covered
+            # too: the base class only calls RenderScene once a scene is loaded, and
+            # SceneLoaded() is what creates the sun. The per-frame passes are asserted further
+            # down, after the CreateRenderPasses call that builds them.
+            assert self.commandList is not None and self.bindingCache is not None
+            assert self.shaderFactory is not None
+            assert self.gbufferPass is not None and self.forwardPass is not None
+            assert self.deferredLightingPass is not None and self.materialIDPass is not None
+            assert self.scene is not None and self.sunLight is not None
+
             fbInfo = framebuffer.getFramebufferInfo()
             width, height = fbInfo.width, fbInfo.height
             sampleCount = SAMPLE_COUNTS[self.ui.AntiAliasingMode]
@@ -1776,6 +1839,15 @@ if __name__ == "__main__":
             if needNewPasses:
                 self.CreateRenderPasses()
 
+            # SetupView has run, and so has CreateRenderPasses -- unconditionally on the first
+            # frame, where renderTargets is still None. So the views and every pass that block
+            # builds are live from here on. ssaoPass is the one exception: it stays None under
+            # MSAA, which is why its uses below keep their explicit guard.
+            assert self.view is not None and self.viewPrevious is not None
+            assert self.renderTargets is not None
+            assert self.skyPass is not None and self.taaPass is not None
+            assert self.toneMappingPass is not None and self.bloomPass is not None
+
             self.commandList.open()
 
             # Propagates the node transforms Animate() just wrote through the scene graph and
@@ -1834,12 +1906,14 @@ if __name__ == "__main__":
                 and self.renderTargets.gbuffer.GetSampleCount() == 1
             )
             if useDeferred:
+                gbufferFramebuffer = self.renderTargets.gbuffer.GBufferFramebuffer
+                assert gbufferFramebuffer is not None
                 gbufferContext = pyd.GBufferFillPassContext()
                 pyd.RenderCompositeView(
                     self.commandList,
                     self.view,
                     self.viewPrevious,
-                    self.renderTargets.gbuffer.GBufferFramebuffer,
+                    gbufferFramebuffer,
                     self.scene.GetSceneGraph().GetRootNode(),
                     self.opaqueDrawStrategy,
                     self.gbufferPass,
@@ -1944,7 +2018,7 @@ if __name__ == "__main__":
                     self.commandList, self.pickPosition[0], self.pickPosition[1]
                 )
 
-            if self.ui.EnableProceduralSky and self.sunLight is not None:
+            if self.ui.EnableProceduralSky:
                 self.skyPass.Render(
                     self.commandList, self.view, self.sunLight, self.ui.SkyParams
                 )
@@ -2053,10 +2127,12 @@ if __name__ == "__main__":
             if self.ui.ScreenshotFileName:
                 fileName = self.ui.ScreenshotFileName
                 self.ui.ScreenshotFileName = ""
+                backBuffer = framebuffer.getDesc().getColorAttachment(0).texture
+                assert backBuffer is not None
                 saved = pyd.SaveTextureToFile(
                     device,
                     self.m_CommonPasses,
-                    framebuffer.getDesc().getColorAttachment(0).texture,
+                    backBuffer,
                     pyd.ResourceStates.RenderTarget,
                     fileName,
                 )
@@ -2524,6 +2600,9 @@ if __name__ == "__main__":
             # Moving between the opaque and alpha-blended domains changes which draw list the
             # material's geometry belongs to, so the scene has to re-evaluate its content.
             if material.domain != previousDomain:
+                # buildUI's IsSceneLoading() early return is what makes this reachable only
+                # with a scene up -- see the comment at the top of buildUI.
+                assert self.app.scene is not None
                 self.app.scene.GetSceneGraph().GetRootNode().InvalidateContent()
 
             pyd.ImGui.PopID()
@@ -2563,7 +2642,13 @@ if __name__ == "__main__":
     example = FeatureDemo(deviceManager, uiData)
     gui = UIRenderer(deviceManager, example, uiData)
 
-    if example.Init() and gui.Init(example.shaderFactory):
+    started = False
+    if example.Init():
+        # Init() is what creates the shader factory, so it exists exactly when Init succeeded.
+        assert example.shaderFactory is not None
+        started = gui.Init(example.shaderFactory)
+
+    if started:
         deviceManager.AddRenderPassToBack(example)
         deviceManager.AddRenderPassToBack(gui)
         deviceManager.RunMessageLoop()

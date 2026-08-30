@@ -1806,7 +1806,7 @@ def RenderView(commandList: CommandList, view: IView, viewPrev: IView | None, fr
 # returns a CompositeView, which derives from ICompositeView directly and is not an IView.
 # passEvent names the pass in a graphics capture. It sits after materialEvents rather than in the
 # C++ parameter order because existing callers pass materialEvents positionally.
-def RenderCompositeView(commandList: CommandList, view: ICompositeView, viewPrev: ICompositeView], framebufferFactory: FramebufferFactory, rootNode: SceneGraphNode, drawStrategy: IDrawStrategy, pass_: IGeometryPass, passContext: GeometryPassContext, materialEvents: bool = False, passEvent: Optional[str | None = None) -> None: ...
+def RenderCompositeView(commandList: CommandList, view: ICompositeView, viewPrev: ICompositeView | None, framebufferFactory: FramebufferFactory, rootNode: SceneGraphNode, drawStrategy: IDrawStrategy, pass_: IGeometryPass, passContext: GeometryPassContext, materialEvents: bool = False, passEvent: str | None = None) -> None: ...
 
 # Writes slice 0, mip 0 of a texture to an image file; the format comes from the extension
 # (BMP, PNG, JPG, TGA). Requires that no immediate command list be open, and creates and
