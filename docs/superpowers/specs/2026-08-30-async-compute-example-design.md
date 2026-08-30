@@ -50,9 +50,19 @@ Missing, and added by this work:
 
 Two substitutions avoid further binding work:
 
-- `GetDevice()->createSampler({})` becomes `self.m_CommonPasses.m_LinearWrapSampler`, which is
-  already bound (`_pydonut.pyi:967`). No `createSampler`/`SamplerDesc` binding is needed. Wrap
-  versus clamp addressing is unobservable for a full-screen quad whose UVs are exactly `[0, 1]`.
+- `GetDevice()->createSampler({})` becomes a sampler taken off a `CommonRenderPasses` instance
+  (`m_LinearWrapSampler`, `_pydonut.pyi:967`). No `createSampler`/`SamplerDesc` binding is
+  needed. Wrap versus clamp addressing is unobservable for a full-screen quad whose UVs are
+  exactly `[0, 1]`.
+
+  **Correction made while writing the implementation plan:** an earlier draft of this spec said
+  `self.m_CommonPasses`. That property is on `ApplicationBase` (`_pydonut.pyi:1868`), and this
+  sample derives from `IRenderPass`, which does not have it. The example instead constructs its
+  own `CommonRenderPasses` in `Init()` — mount `bin/shaders/framework/<api>` on a
+  `RootFileSystem`, build a `ShaderFactory` over it, pass that to `CommonRenderPasses(device,
+  shaderFactory)` — exactly as `vertex_buffer.py:142-150` already does from an `IRenderPass`
+  subclass. Deriving from `ApplicationBase` instead was rejected: its `Render` drives a
+  scene-loading lifecycle and would call `RenderSplashScreen` forever with no scene loaded.
 - The sample's `shaders.cfg` has no PyDonut equivalent: examples here compile HLSL in-process
   with `pyd.CompileShader` rather than through ShaderMake.
 
@@ -177,7 +187,7 @@ Mirrors the C++ class layout — `Init`, `BackBufferResizing`, `Animate`, `Rende
 | --- | --- | --- |
 | `TextureQueue` (`async_compute.cpp:39`): `std::mutex` + `std::queue`, handle swapping | `queue.Queue` of `(texture, lastUse)` tuples | The swap dance exists to move ownership without an AddRef/Release pair. Python refcounting gives that for free, and `queue.Queue` is already the mutex-guarded FIFO being hand-rolled. |
 | `while (!m_Terminate && !TryPop(...)) {}` (`:263`) | `q.get(timeout=0.05)` inside a loop on a `threading.Event` | Transliterating the spin would pin a core and starve the render thread through the GIL. |
-| `createSampler({})` (`:127`) | `self.m_CommonPasses.m_LinearWrapSampler` | Avoids a `createSampler`/`SamplerDesc` binding; addressing mode is unobservable here. |
+| `createSampler({})` (`:127`) | own `CommonRenderPasses` built in `Init()`, then `.m_LinearWrapSampler` | Avoids a `createSampler`/`SamplerDesc` binding; addressing mode is unobservable here. `IRenderPass` has no `m_CommonPasses` — see the correction above. |
 | `~AsyncCompute()` (`:105`) | `Stop()` called from `__main__` | Python has no deterministic destructor; see the decision above. |
 | `std::this_thread::sleep_until` (`:294`) | `time.monotonic()` deadline + `Event.wait(remaining)` | Shutdown must not wait out a full 10 ms tick. |
 
