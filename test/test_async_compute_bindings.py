@@ -100,3 +100,17 @@ def test_binding_cache_exposes_get_or_create_binding_set() -> None:
 def test_binding_cache_still_exposes_clear() -> None:
     # Guards against the new .def() replacing the chain rather than extending it.
     assert callable(pyd.BindingCache.Clear)
+
+
+def test_submit_path_bindings_are_still_callable_after_gil_change() -> None:
+    """The GIL-release widening is a call_guard change only -- no signature may shift.
+
+    This cannot observe GIL behaviour without a GPU. It is a guard against the edit
+    accidentally dropping an argument name or a default while adding the call_guard.
+    """
+    # pybind11 records argument names in the docstring signature.
+    assert "commandList" in pyd.Device.executeCommandList.__doc__
+    assert "executionQueue" in pyd.Device.executeCommandList.__doc__
+    assert "state" in pyd.CommandList.setComputeState.__doc__
+    for name in ("groupsX", "groupsY", "groupsZ"):
+        assert name in pyd.CommandList.dispatch.__doc__

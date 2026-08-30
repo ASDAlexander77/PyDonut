@@ -1466,7 +1466,8 @@ PYBIND11_MODULE(_pydonut, m) {
     }, py::arg("desc"), py::arg("framebufferInfo"));
     device.def("executeCommandList", [](nvrhi::IDevice &self, nvrhi::ICommandList* cmdList, nvrhi::CommandQueue executionQueue) {
         return self.executeCommandList(cmdList, executionQueue);
-    }, py::arg("commandList"), py::arg("executionQueue") = nvrhi::CommandQueue::Graphics);
+    }, py::arg("commandList"), py::arg("executionQueue") = nvrhi::CommandQueue::Graphics,
+       py::call_guard<py::gil_scoped_release>());
     // Cross-queue synchronisation (nvrhi.h:3760): makes waitQueue block until the submission
     // `instance` on executionQueue has completed. `instance` is the value executeCommandList
     // returned for that submission. Releases the GIL -- it waits on a GPU fence.
@@ -1661,20 +1662,32 @@ PYBIND11_MODULE(_pydonut, m) {
         .def("getBackingMemorySize", &D3D12WorkGraphPipeline::getBackingMemorySize);
 #endif // NVRHI_WITH_DX12
 
-    // open/close and the calls below marked with gil_scoped_release are the ones
-    // threaded_rendering.py's worker threads call concurrently while recording independent
-    // per-face command lists; releasing the GIL here is what lets Python's threading actually
-    // run them in parallel instead of just interleaving under the GIL. No other CommandList
-    // methods release the GIL -- this is intentionally scoped to what that example needs.
+    // GIL policy for this file: a binding gets py::call_guard<py::gil_scoped_release> when it
+    // can BLOCK -- on a driver submit, on a GPU fence, or on a mutex. Releasing there is what
+    // lets Python threads actually run in parallel instead of interleaving under the GIL.
+    //
+    // Two examples depend on this. threaded_rendering.py records six independent per-face
+    // command lists on a thread pool (open/close/RenderCompositeView). async_compute.py runs a
+    // compute thread that records and submits on the compute queue while the render thread
+    // submits on the graphics queue (executeCommandList, setComputeState, dispatch,
+    // queueWaitForCommandList, BindingCache.GetOrCreateBindingSet,
+    // CommandListLifetimeTracker.runGarbageCollection).
+    //
+    // setPushConstants is deliberately NOT on the list: it is a small memcpy that cannot block,
+    // and it holds a pointer obtained from py::buffer_info across the call -- releasing the GIL
+    // there would let another Python thread mutate or resize a bytearray mid-copy, trading a
+    // real safety property for nothing. Anything else not listed simply has no blocking call.
     commandList.def("open", &nvrhi::ICommandList::open, py::call_guard<py::gil_scoped_release>());
     commandList.def("close", &nvrhi::ICommandList::close, py::call_guard<py::gil_scoped_release>());
     commandList.def("setGraphicsState", &nvrhi::ICommandList::setGraphicsState, py::arg("state"));
     commandList.def("draw", &nvrhi::ICommandList::draw, py::arg("args"));
     commandList.def("drawIndexed", &nvrhi::ICommandList::drawIndexed, py::arg("args"));
     commandList.def("setMeshletState", &nvrhi::ICommandList::setMeshletState, py::arg("state"));
-    commandList.def("setComputeState", &nvrhi::ICommandList::setComputeState, py::arg("state"));
+    commandList.def("setComputeState", &nvrhi::ICommandList::setComputeState, py::arg("state"),
+        py::call_guard<py::gil_scoped_release>());
     commandList.def("dispatch", &nvrhi::ICommandList::dispatch,
-        py::arg("groupsX"), py::arg("groupsY") = 1, py::arg("groupsZ") = 1);
+        py::arg("groupsX"), py::arg("groupsY") = 1, py::arg("groupsZ") = 1,
+        py::call_guard<py::gil_scoped_release>());
     commandList.def("dispatchMesh", &nvrhi::ICommandList::dispatchMesh,
         py::arg("groupsX"), py::arg("groupsY") = 1, py::arg("groupsZ") = 1);
     commandList.def("writeBuffer", [](nvrhi::ICommandList &self, nvrhi::IBuffer* buffer, py::buffer data, uint64_t destOffsetBytes) {
