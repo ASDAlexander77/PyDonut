@@ -91,6 +91,7 @@ from pydonut._pydonut import ComputePipeline
 from pydonut._pydonut import RayTracingPipeline
 from pydonut._pydonut import ShaderTable
 from pydonut._pydonut import CommandListParameters
+from pydonut._pydonut import CommandListLifetimeTracker
 from pydonut._pydonut import CommandList
 from pydonut._pydonut import Buffer
 from pydonut._pydonut import BindingLayout
@@ -294,6 +295,7 @@ __all__ = (
     'RayTracingPipeline',
     'ShaderTable',
     'CommandListParameters',
+    'CommandListLifetimeTracker',
     'CommandList',
     'Buffer',
     'BindingLayout',

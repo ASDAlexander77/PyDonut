@@ -925,6 +925,14 @@ PYBIND11_MODULE(_pydonut, m) {
     py::class_<nvrhi::IBindingLayout, std::shared_ptr<nvrhi::IBindingLayout>> bindingLayout(m, "BindingLayout");
     py::class_<nvrhi::IBindingSet, std::shared_ptr<nvrhi::IBindingSet>> bindingSet(m, "BindingSet");
     py::class_<nvrhi::ISampler, std::shared_ptr<nvrhi::ISampler>>(m, "Sampler");
+    // Per-queue command list lifetime tracker (nvrhi.h:3157). A thread that submits work to a
+    // queue should own one for that queue, so it can retire its own submissions without racing
+    // the device's internal trackers -- which is exactly what async_compute.py's compute thread
+    // does. runGarbageCollection polls the GPU, so it releases the GIL.
+    py::class_<nvrhi::ICommandListLifetimeTracker,
+               std::shared_ptr<nvrhi::ICommandListLifetimeTracker>>(m, "CommandListLifetimeTracker")
+        .def("runGarbageCollection", &nvrhi::ICommandListLifetimeTracker::runGarbageCollection,
+             py::call_guard<py::gil_scoped_release>());
     py::class_<nvrhi::rt::IAccelStruct, std::shared_ptr<nvrhi::rt::IAccelStruct>> accelStruct(m, "AccelStruct");
     py::class_<nvrhi::rt::IShaderTable, std::shared_ptr<nvrhi::rt::IShaderTable>> shaderTable(m, "ShaderTable");
     py::class_<nvrhi::rt::IPipeline, std::shared_ptr<nvrhi::rt::IPipeline>> rtPipeline(m, "RayTracingPipeline");
@@ -1427,12 +1435,23 @@ PYBIND11_MODULE(_pydonut, m) {
         .def(py::init<>())
         .def("setEnableImmediateExecution", [](nvrhi::CommandListParameters &self, bool value) -> nvrhi::CommandListParameters& {
             return self.setEnableImmediateExecution(value);
-        }, py::arg("value"), py::return_value_policy::reference);
+        }, py::arg("value"), py::return_value_policy::reference)
+        .def("setQueueType", [](nvrhi::CommandListParameters &self, nvrhi::CommandQueue value) -> nvrhi::CommandListParameters& {
+            return self.setQueueType(value);
+        }, py::arg("value"), py::return_value_policy::reference)
+        // The stored pointer is RAW and NON-OWNING (nvrhi.h:3135) -- the caller must keep the
+        // tracker alive for as long as any command list built from these parameters is.
+        .def("setLifetimeTracker", [](nvrhi::CommandListParameters &self, nvrhi::ICommandListLifetimeTracker* value) -> nvrhi::CommandListParameters& {
+            return self.setLifetimeTracker(value);
+        }, py::arg("value").none(true), py::return_value_policy::reference);
 
     device.def("getGraphicsAPI", &nvrhi::IDevice::getGraphicsAPI);
     device.def("createCommandList", [](nvrhi::IDevice &self, const nvrhi::CommandListParameters &params) {
         return DetachToShared(self.createCommandList(params));
     }, py::arg("params") = nvrhi::CommandListParameters());
+    device.def("createCommandListLifetimeTracker", [](nvrhi::IDevice &self, nvrhi::CommandQueue executionQueue) {
+        return DetachToShared(self.createCommandListLifetimeTracker(executionQueue));
+    }, py::arg("executionQueue"));
     // Batched, atomic submission of multiple command lists in one call -- used by examples
     // that record several command lists (e.g. one per thread) and submit them together, as
     // opposed to executeCommandList's one-at-a-time submission.
