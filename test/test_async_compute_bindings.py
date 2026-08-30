@@ -30,6 +30,7 @@ name, a chained setter that returns a copy instead of self.
 
 from __future__ import annotations
 
+import pathlib
 import pytest
 
 import pydonut as pyd
@@ -114,3 +115,35 @@ def test_submit_path_bindings_are_still_callable_after_gil_change() -> None:
     assert "state" in pyd.CommandList.setComputeState.__doc__
     for name in ("groupsX", "groupsY", "groupsZ"):
         assert name in pyd.CommandList.dispatch.__doc__
+
+
+_DONUT_INCLUDE = str(pathlib.Path(__file__).resolve().parent.parent / "extern" / "donut" / "include")
+_SHADER = pathlib.Path(__file__).resolve().parent.parent / "shaders" / "async_compute" / "shaders.hlsl"
+
+
+@pytest.mark.skipif(pyd.CompileShader is None, reason="native module built without DXC")
+@pytest.mark.parametrize(
+    "entry,shader_type",
+    [
+        ("main_vs", pyd.ShaderType.Vertex),
+        ("main_ps", pyd.ShaderType.Pixel),
+        ("main_cs", pyd.ShaderType.Compute),
+    ],
+)
+def test_shader_entry_points_compile_to_spirv(entry, shader_type) -> None:
+    """Compiles for Vulkan, which needs no device and works on every platform.
+
+    This is the one behavioural check available without a GPU: it proves the shader's
+    binding_helpers.hlsli include resolves and that all three entry points exist with the
+    names async_compute.py passes.
+    """
+    assert pyd.CompileShader is not None
+    bytecode = pyd.CompileShader(
+        _SHADER.read_text(encoding="utf-8"),
+        entry,
+        shader_type,
+        pyd.GraphicsAPI.Vulkan,
+        sourceName="shaders.hlsl",
+        includePaths=[_DONUT_INCLUDE],
+    )
+    assert len(bytecode) > 0
