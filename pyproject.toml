@@ -1,15 +1,59 @@
 [project]
 name = "pydonut"
 version = "0.1.0"
-description = "Add your description here"
+description = "Python bindings for NVIDIA Donut and NVRHI: real-time Direct3D 12 and Vulkan rendering, hardware ray tracing, mesh shaders and GPU compute from Python."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "ASDAlexander77", email = "duzhar@googlemail.com" }
 ]
 requires-python = ">=3.14"
+keywords = [
+    "graphics",
+    "rendering",
+    "real-time-rendering",
+    "3d",
+    "gpu",
+    "directx",
+    "direct3d",
+    "d3d12",
+    "vulkan",
+    "ray-tracing",
+    "dxr",
+    "nvrhi",
+    "donut",
+    "nvidia",
+    "hlsl",
+    "shaders",
+    "mesh-shaders",
+    "compute-shader",
+    "gltf",
+    "game-engine",
+    "pybind11",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Games/Entertainment",
+    "Topic :: Multimedia :: Graphics :: 3D Rendering",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 dependencies = [
     "pybind11>=3.0.4",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ASDAlexander77/PyDonut"
+Repository = "https://github.com/ASDAlexander77/PyDonut"
+Issues = "https://github.com/ASDAlexander77/PyDonut/issues"
+Documentation = "https://github.com/ASDAlexander77/PyDonut#readme"
 
 [tool.scikit-build]
 minimum-version = "build-system.requires"
