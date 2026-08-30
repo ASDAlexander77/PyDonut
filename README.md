@@ -132,6 +132,7 @@ Each example is a single self-contained Python file at the repository root — r
 | Example | What it demonstrates |
 | --- | --- |
 | [`headless.py`](headless.py) | **No window at all**: a compute-shader reduction with a readback buffer. The template for GPU compute and CI-friendly runs. |
+| [`async_compute.py`](async_compute.py) | A second GPU queue: a Python thread rewrites a noise texture at 100 Hz on the **compute queue** while the render thread draws it on the graphics queue, with `queueWaitForCommandList` synchronising the two in both directions. |
 | [`work_graphs.py`](work_graphs.py) | D3D12 **work graphs** (`D3D12WorkGraphPipeline`, shader model 6.8) with an ImGui front end. **D3D12 only.** |
 | [`work_graphs_prototype.py`](work_graphs_prototype.py) | Minimal, windowless work-graph smoke test. **D3D12 only.** |
 | [`aftermath.py`](aftermath.py) | NSight Aftermath GPU crash dumps — deliberately triggers a TDR timeout or a page fault. Needs an [Aftermath-enabled build](#optional-nsight-aftermath-gpu-crash-dumps). |
