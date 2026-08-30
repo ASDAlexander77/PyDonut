@@ -17,3 +17,6 @@ wheels/
 # scheduler lock are local state.
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+
+# Subagent-driven-development scratch workspaces (ledgers, briefs, review packages).
+.superpowers/
