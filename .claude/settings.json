@@ -1,8 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(uv run python -c ' *)",
-      "Bash(git push *)"
+      "Bash(uv run *)",
+      "Bash(git *)",
+      "Bash(tasklist *)",
+      "Bash(echo *)",
+      "Bash(.venv/Scripts/python *)",
+      "Bash(xargs grep *)"
     ]
   }
 }
