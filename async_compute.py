@@ -302,41 +302,57 @@ if __name__ == "__main__":
                 except queue.Empty:
                     continue
 
-                self.computeCommandList.open()
+                try:
+                    self.computeCommandList.open()
 
-                bindingDesc = pyd.BindingSetDesc()
-                bindingDesc.bindings = [
-                    pyd.BindingSetItem.Texture_UAV(0, texture),
-                    pyd.BindingSetItem.PushConstants(0, 4),
-                ]
-                bindings = self.computeBindings.GetOrCreateBindingSet(
-                    bindingDesc, self.computeBindingLayout
-                )
-
-                state = pyd.ComputeState()
-                state.pipeline = self.computePipeline
-                state.addBindingSet(bindings)
-                self.computeCommandList.setComputeState(state)
-                self.computeCommandList.setPushConstants(struct.pack("<I", counter))
-                self.computeCommandList.dispatch(DISPATCH_GROUPS, DISPATCH_GROUPS)
-                self.computeCommandList.close()
-
-                # Compute must not overwrite the texture until the graphics queue has finished
-                # reading it. Instance 0 means "never used by graphics yet".
-                if textureLastUse > 0:
-                    device.queueWaitForCommandList(
-                        pyd.CommandQueue.Compute, pyd.CommandQueue.Graphics, textureLastUse
+                    bindingDesc = pyd.BindingSetDesc()
+                    bindingDesc.bindings = [
+                        pyd.BindingSetItem.Texture_UAV(0, texture),
+                        pyd.BindingSetItem.PushConstants(0, 4),
+                    ]
+                    bindings = self.computeBindings.GetOrCreateBindingSet(
+                        bindingDesc, self.computeBindingLayout
                     )
-                textureLastUse = device.executeCommandList(
-                    self.computeCommandList, pyd.CommandQueue.Compute
-                )
-                self.computeToRender.put((texture, textureLastUse))
+
+                    state = pyd.ComputeState()
+                    state.pipeline = self.computePipeline
+                    state.addBindingSet(bindings)
+                    self.computeCommandList.setComputeState(state)
+                    self.computeCommandList.setPushConstants(struct.pack("<I", counter))
+                    self.computeCommandList.dispatch(DISPATCH_GROUPS, DISPATCH_GROUPS)
+                    self.computeCommandList.close()
+
+                    # Compute must not overwrite the texture until the graphics queue has
+                    # finished reading it. Instance 0 means "never used by graphics yet".
+                    if textureLastUse > 0:
+                        device.queueWaitForCommandList(
+                            pyd.CommandQueue.Compute, pyd.CommandQueue.Graphics, textureLastUse
+                        )
+                    textureLastUse = device.executeCommandList(
+                        self.computeCommandList, pyd.CommandQueue.Compute
+                    )
+                    self.computeToRender.put((texture, textureLastUse))
+                except Exception as e:
+                    # Nothing else observes this thread dying otherwise: Render()'s
+                    # get_nowait() would just keep raising queue.Empty forever and silently
+                    # keep redrawing the last successfully computed frame, with no indication
+                    # anything failed. Log clearly and stop the thread instead of letting
+                    # threading.excepthook's traceback (easy to miss) be the only sign.
+                    pyd.log.error(f"Compute thread failed, stopping: {e}")
+                    break
 
                 counter += 1
                 # Event.wait rather than sleep: shutdown must not wait out a full tick.
                 remaining = nextTime - time.monotonic()
                 if remaining > 0:
                     self.stopEvent.wait(remaining)
+
+    # On Windows, Donut's default log config shows errors as a blocking MessageBox instead
+    # of printing them -- redirect to the console so failures (including the new AsyncThreadProc
+    # error path and the "did not stop within 5s" diagnostic in Stop()) are actually visible in
+    # captured output rather than silently blocking on a modal. Same convention as
+    # feature_demo.py and most other examples.
+    pyd.log.ConsoleApplicationMode()
 
     api = pyd.GetGraphicsAPIFromCommandLine(sys.argv)
     print(f"Selected Graphics API: {api}")
