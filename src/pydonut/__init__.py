@@ -226,6 +226,20 @@ try:
 except ImportError:
     D3D12WorkGraphPipeline = None
 
+try:
+    # Only present when donut was built with DONUT_WITH_DLSS=ON, which fetches the NGX SDK.
+    # A default build has no DLSS, so callers must test `if pyd.DLSS is not None` before use.
+    # Being non-None still only means the SDK is linked -- whether this particular GPU/driver
+    # can run DLSS is a separate runtime question, answered by DLSS.Create returning None or
+    # by IsDlssInitialized() after Init().
+    from pydonut._pydonut import DLSS
+    from pydonut._pydonut import DLSSInitParameters
+    from pydonut._pydonut import DLSSEvaluateParameters
+except ImportError:
+    DLSS = None
+    DLSSInitParameters = None
+    DLSSEvaluateParameters = None
+
 __all__ = (
     'GraphicsAPI',
     'Format',
@@ -417,4 +431,7 @@ __all__ = (
     'CompileShader',
     'CompileShaderLibrary',
     'D3D12WorkGraphPipeline',
+    'DLSS',
+    'DLSSInitParameters',
+    'DLSSEvaluateParameters',
 )

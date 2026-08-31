@@ -2,6 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Note, 2026-08-31 — DLSS is no longer out of scope.** This plan's quoted docstrings and
+> commit messages say DLSS is permanently out of scope; that was true when it was written.
+> DLSS was ported on 2026-08-31 behind donut's `DONUT_WITH_DLSS=ON` build option — see the
+> superseded note in `docs/superpowers/specs/2026-08-25-feature-demo-stage1-design.md`. The
+> snippets below are left exactly as this stage wrote them: they record that stage, not the
+> current `feature_demo.py`. taskflow and the ImGui console do remain out of scope.
+
 **Goal:** Bind Donut's `SwitchableCamera`, `SceneCamera`/`PerspectiveCamera` and `app::MaterialEditor`, and give `feature_demo.py` a camera dropdown over two synthesised scene cameras plus a material editor window.
 
 **Architecture:** Three binding tasks extend the single pybind11 translation unit `src/cpp/_pydonut.cpp`, then three tasks grow `feature_demo.py`. Camera switching is delegated wholesale to Donut's `SwitchableCamera` rather than hand-rolled in Python, which keeps view matrices on the C++ side of the boundary; a new `PlanarView.SetMatricesFromSwitchableCamera` shim is the only place they are touched.

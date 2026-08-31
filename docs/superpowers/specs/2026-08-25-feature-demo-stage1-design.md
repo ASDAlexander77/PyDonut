@@ -28,9 +28,23 @@ producing a throwaway example that stage 3 replaces.
 
 Permanently out of scope, in every stage:
 
-- **DLSS** (18 references in the original) — needs the NGX SDK, which this repo does not vendor.
-  The AA dropdown therefore ships as `NONE / TEMPORAL / MSAA_2X / MSAA_4X / MSAA_8X`, with no
-  `DLSS` entry at all rather than a permanently-greyed one.
+- ~~**DLSS** (18 references in the original) — needs the NGX SDK, which this repo does not
+  vendor. The AA dropdown therefore ships as `NONE / TEMPORAL / MSAA_2X / MSAA_4X / MSAA_8X`,
+  with no `DLSS` entry at all rather than a permanently-greyed one.~~
+
+  > **Superseded 2026-08-31 — DLSS is now ported.** The premise above no longer holds: the
+  > NGX SDK is vendored on demand by donut's own `DONUT_WITH_DLSS=ON` option, which clones it
+  > at configure time, so nothing had to be committed to this repo. `pyd.DLSS` and its two
+  > parameter structs are bound, and `feature_demo.py` offers DLSS as an AA mode.
+  >
+  > The dropdown reasoning above survived intact and is the shape actually implemented: the
+  > entry is *omitted*, never greyed — it appears only when the SDK is compiled in **and**
+  > NGX initialises on the running machine (`UIData.DlssAvailable`). A default build still
+  > ships exactly the five modes listed above.
+  >
+  > It is configured for DLAA (input size == output size), matching the C++ sample; it is not
+  > used as an upscaler. See the "Optional: DLSS" section of `README.md` for the build flag,
+  > and `test/test_dlss_bindings.py` for the optional-name contract.
 - **taskflow** — the original's `#ifdef DONUT_WITH_TASKFLOW` parallel scene load.
 - **`ImGui_Console` / `ConsoleInterpreter` / `ConsoleObjects`** — a whole second UI subsystem
   that demonstrates nothing about rendering.

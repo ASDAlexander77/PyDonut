@@ -273,4 +273,33 @@ if (PYDONUT_WITH_AFTERMATH)
     endif()
 endif()
 
+# The NGX feature DLLs are loaded at RUNTIME by name, from a directory the application hands
+# to DLSS::Create -- they are not linked, so nothing pulls them in automatically. donut's
+# samples get them next to their .exe; a Python extension has no .exe of its own (the process
+# is python.exe, in the venv), so they go beside _pydonut instead and DLSS.Create is passed
+# that directory. Without this, NGX starts but reports FeatureNotFound (0xbad00004).
+#
+# Both DLLs are shipped: nvngx_dlss.dll is DLSS proper, nvngx_dlssd.dll is Ray Reconstruction
+# (the "d" is denoiser) -- DLSS::Create probes for both and logs each independently.
+if (DONUT_WITH_DLSS AND WIN32)
+    set(DLSS_RUNTIME_DIR "${DONUT_DLSS_FETCH_DIR}/lib/Windows_x86_64/rel")
+    set(DLSS_RUNTIME_FILES
+        "${DLSS_RUNTIME_DIR}/nvngx_dlss.dll"
+        "${DLSS_RUNTIME_DIR}/nvngx_dlssd.dll")
+
+    foreach(dll IN LISTS DLSS_RUNTIME_FILES)
+        if (NOT EXISTS "${dll}")
+            # Loud, not silent: a missing DLL here degrades to "DLSS mysteriously unavailable
+            # at runtime", which is exactly the failure this block exists to prevent.
+            message(FATAL_ERROR "pydonut: DONUT_WITH_DLSS is ON but ${dll} was not found.")
+        endif()
+    endforeach()
+
+    add_custom_command(TARGET _pydonut POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${DLSS_RUNTIME_FILES} "$<TARGET_FILE_DIR:_pydonut>"
+        COMMENT "pydonut: copying DLSS runtime libraries next to _pydonut")
+    install(FILES ${DLSS_RUNTIME_FILES} DESTINATION ${SKBUILD_PROJECT_NAME})
+    message(STATUS "pydonut: DLSS enabled (${DLSS_RUNTIME_DIR})")
+endif()
+
 install(TARGETS _pydonut DESTINATION ${SKBUILD_PROJECT_NAME})

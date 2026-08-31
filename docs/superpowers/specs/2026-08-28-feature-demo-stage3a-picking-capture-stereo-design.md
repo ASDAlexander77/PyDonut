@@ -26,8 +26,13 @@ a normal size and each SDD run independently reviewable.
 
 The five clusters are mutually independent — no ordering constraint between 3a and 3b.
 
-Permanently out of scope regardless of stage: DLSS (no NGX SDK vendored), taskflow parallel
-scene load, the ImGui console subsystem.
+Permanently out of scope regardless of stage: ~~DLSS (no NGX SDK vendored)~~, taskflow
+parallel scene load, the ImGui console subsystem.
+
+> **Superseded 2026-08-31 — DLSS is now ported**, behind donut's `DONUT_WITH_DLSS=ON` build
+> option. See the superseded note in
+> `docs/superpowers/specs/2026-08-25-feature-demo-stage1-design.md`. taskflow and the ImGui
+> console remain permanently out of scope.
 
 ## MaterialID picking
 
@@ -445,7 +450,8 @@ signatures stayed source-compatible; their existing tests already cover the pass
 
 ## Out of scope
 
-Light probes (stage 3b). DLSS, taskflow parallel scene load, the ImGui console. Per-object
+Light probes (stage 3b). DLSS (ported later — see the superseded note above), taskflow
+parallel scene load, the ImGui console. Per-object
 shadows and `SetupPerObjectShadow`. `SsaoPass`'s `CreateParameters` constructor and
 `bindingSetIndex`. Visual verification of stereo, picking accuracy, or screenshot contents —
 none of that is reachable from a headless test, and it is called out here so no reviewer

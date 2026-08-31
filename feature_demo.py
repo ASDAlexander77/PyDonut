@@ -29,8 +29,20 @@ with cascaded sun shadows, a spot and a point light, a switchable first-person/t
 scene camera, live light and material editors, right-click material picking, screenshots, a
 MipMapGen test pass, a side-by-side stereo mode and four capturable light probes.
 
-This completes the port. DLSS, taskflow and the ImGui console are out of scope permanently:
-see docs/superpowers/specs/2026-08-25-feature-demo-stage1-design.md.
+This completes the port. taskflow and the ImGui console are out of scope permanently: see
+docs/superpowers/specs/2026-08-25-feature-demo-stage1-design.md.
+
+DLSS was originally out of scope there too, and is now ported. It is OPTIONAL in two
+independent ways, and both have to hold before the AA dropdown offers it:
+
+  * The native module must be built with the NGX SDK -- `SKBUILD_CMAKE_DEFINE=
+    DONUT_WITH_DLSS=ON uv sync --reinstall-package pydonut`. A default build has no DLSS
+    at all and `pyd.DLSS` is None.
+  * NGX must then initialise on the running machine (RTX GPU, recent driver), which is
+    what DLSS.Create returning non-None and IsDlssInitialized() report.
+
+Configured for DLAA -- antialiasing at native resolution, input size == output size --
+which is what the C++ sample does; it is not used as an upscaler here.
 
 Scenes load ASYNCHRONOUSLY, as in the C++ sample. Init() only starts the load; the class
 then follows ApplicationBase's lifecycle rather than driving it:
@@ -67,17 +79,26 @@ if __name__ == "__main__":
     _IMGUI_WINDOW_FLAGS_ALWAYS_AUTO_RESIZE = 64
 
     class AntiAliasingMode(IntEnum):
-        """No DLSS entry -- it needs the NGX SDK, which this repo does not vendor."""
+        """Values match FeatureDemo.cpp:227-235, DLSS included.
+
+        DLSS is only selectable when the native module was built with DONUT_WITH_DLSS=ON
+        *and* NGX initialises on this machine -- UIData.DlssAvailable carries that answer
+        and the AA dropdown hides the entry when it is False, as the C++ does.
+        """
 
         NONE = 0
         TEMPORAL = 1
-        MSAA_2X = 2
-        MSAA_4X = 3
-        MSAA_8X = 4
+        DLSS = 2
+        MSAA_2X = 3
+        MSAA_4X = 4
+        MSAA_8X = 5
 
     SAMPLE_COUNTS = {
         AntiAliasingMode.NONE: 1,
         AntiAliasingMode.TEMPORAL: 1,
+        # DLSS resolves a single-sampled input, exactly like TAA -- so switching between
+        # TEMPORAL and DLSS needs no render-target rebuild.
+        AntiAliasingMode.DLSS: 1,
         AntiAliasingMode.MSAA_2X: 2,
         AntiAliasingMode.MSAA_4X: 4,
         AntiAliasingMode.MSAA_8X: 8,
@@ -224,6 +245,10 @@ if __name__ == "__main__":
             # Side-by-side split viewport, not stereo hardware -- both eyes render into the one
             # back buffer (FeatureDemo.cpp:726-744).
             self.Stereo = False
+            # Written by CreateRenderPasses from DLSS.IsDlssInitialized() -- False until DLSS
+            # has actually initialised, and permanently False in a build without the NGX SDK
+            # (FeatureDemo.cpp:254). The AA dropdown hides the DLSS entry while it is False.
+            self.DlssAvailable = False
             # Light probes. The two scales are pushed onto every enabled probe each frame in
             # Render -- LightProbe::FillLightProbeConstants reads them off the struct, so the UI
             # has no other route to them.
@@ -404,6 +429,9 @@ if __name__ == "__main__":
             self.skyPass: pyd.SkyPass | None = None
             self.ssaoPass: pyd.SsaoPass | None = None
             self.taaPass: pyd.TemporalAntiAliasingPass | None = None
+            # Unlike every other pass here, this one is NOT rebuilt by CreateRenderPasses --
+            # see where it is created in Init (FeatureDemo.cpp:406-409).
+            self.dlss: "pyd.DLSS | None" = None
             self.toneMappingPass: pyd.ToneMappingPass | None = None
             self.bloomPass: pyd.BloomPass | None = None
             self.shadowMap: pyd.CascadedShadowMap | None = None
@@ -510,6 +538,30 @@ if __name__ == "__main__":
                 device, self.shaderFactory, self.m_CommonPasses
             )
             self.CreateLightProbes(LIGHT_PROBE_COUNT)
+
+            # Created once here rather than in CreateRenderPasses: DLSS survives a shader
+            # reload and a resize, and re-creating it would drop the NGX feature handle and
+            # its temporal history along with it (FeatureDemo.cpp:406-409). Only Init() --
+            # which takes the render-target size -- is re-run per resize, from
+            # CreateRenderPasses.
+            #
+            # Two independent reasons this can stay None: pyd.DLSS is None in a build without
+            # DONUT_WITH_DLSS, and Create() returns None when NGX cannot start on this machine
+            # (driver too old, nvngx_dlss.dll missing). Neither is an error -- the AA dropdown
+            # simply has no DLSS entry.
+            if pyd.DLSS is not None:
+                # NOT GetDirectoryWithExecutable() as the C++ uses: that is where the NGX
+                # feature DLLs sit next to a sample .exe, but here the executable is
+                # python.exe inside the venv. CMake copies nvngx_dlss*.dll next to the
+                # pydonut extension module instead, so that is the directory to hand NGX --
+                # otherwise it starts and then reports FeatureNotFound (0xbad00004).
+                # as_posix() matches the C++'s generic_string().
+                dlssSearchDir = Path(pyd.__file__).resolve().parent
+                self.dlss = pyd.DLSS.Create(
+                    device, self.shaderFactory, dlssSearchDir.as_posix()
+                )
+                if self.dlss is None:
+                    pyd.log.info("DLSS is compiled in but NGX did not initialise on this device.")
 
             # Started LAST, once every pass exists. BeginLoadingScene() runs LoadScene() on its
             # own thread, so from here on Init() would be racing the loader for the device --
@@ -655,6 +707,29 @@ if __name__ == "__main__":
                 self.renderTargets.ResolvedFramebuffer,
                 self.view,
             )
+
+            # DLSS is re-Init'd (not re-Created) whenever the render targets change size, since
+            # NGX allocates its internal buffers against a fixed input/output size
+            # (FeatureDemo.cpp:840-853).
+            #
+            # Input size == output size: this is DLAA, antialiasing at native resolution rather
+            # than upscaling, which is what the C++ sample configures. Feeding a smaller input
+            # size here is what would turn it into an upscaler, and that would also require
+            # rendering the scene at the reduced size.
+            if self.dlss is not None:
+                # self.dlss being non-None already implies the DLSS names imported, but the
+                # type checker can't see that -- same assert convention as pyd.CompileShader.
+                assert pyd.DLSSInitParameters is not None
+                initParameters = pyd.DLSSInitParameters()
+                initParameters.inputWidth = self.renderTargets.width
+                initParameters.inputHeight = self.renderTargets.height
+                initParameters.outputWidth = self.renderTargets.width
+                initParameters.outputHeight = self.renderTargets.height
+                self.dlss.Init(initParameters)
+
+                # Init can fail without raising -- IsDlssInitialized is the authoritative
+                # answer, and it is what gates the dropdown entry and the Evaluate call.
+                self.ui.DlssAvailable = self.dlss.IsDlssInitialized()
 
         def ReloadShaders(self: FeatureDemo) -> None:
             """Drops every compiled shader and rebuilds the passes holding pipelines from them.
@@ -1569,7 +1644,13 @@ if __name__ == "__main__":
             # switching away does not leave a stale offset skewing the projection matrix
             # (View.cpp:68-70 folds it into m_PixelOffsetMatrix on UpdateCache).
             # taaPass is None on the first frame, before CreateRenderPasses has run.
-            if self.ui.AntiAliasingMode == AntiAliasingMode.TEMPORAL and self.taaPass is not None:
+            # DLSS consumes the same jittered input and motion vectors TAA does, so it jitters
+            # too (FeatureDemo.cpp:687-688).
+            if (
+                self.ui.AntiAliasingMode
+                in (AntiAliasingMode.TEMPORAL, AntiAliasingMode.DLSS)
+                and self.taaPass is not None
+            ):
                 pixelOffsetX, pixelOffsetY = self.taaPass.GetCurrentPixelOffset()
             else:
                 pixelOffsetX, pixelOffsetY = 0.0, 0.0
@@ -2026,25 +2107,57 @@ if __name__ == "__main__":
             finalHdrColor = self.renderTargets.HdrColor
             finalHdrFramebuffer = self.renderTargets.HdrFramebuffer
 
-            if self.ui.AntiAliasingMode == AntiAliasingMode.TEMPORAL:
+            if self.ui.AntiAliasingMode in (
+                AntiAliasingMode.TEMPORAL,
+                AntiAliasingMode.DLSS,
+            ):
                 if self.previousViewsValid:
                     self.taaPass.RenderMotionVectors(
                         self.commandList, self.view, self.viewPrevious
                     )
-                self.taaPass.TemporalResolve(
-                    self.commandList,
-                    self.ui.TemporalAntiAliasingParams,
-                    self.previousViewsValid,
-                    self.view,
-                    self.view,
-                )
-                # Paired 1:1 with TemporalResolve, not with the frame: AdvanceFrame also
-                # ping-pongs the two resolve binding sets, which is what swaps the feedback
-                # pair's history and output roles (TemporalAntiAliasingPass.cpp:300-317).
-                # TEMPORAL and NONE share a sample count, so switching between them does not
-                # rebuild the pass -- calling this unconditionally would desynchronise the
-                # ping-pong from the resolves it belongs to.
-                self.taaPass.AdvanceFrame()
+
+                if self.ui.AntiAliasingMode == AntiAliasingMode.DLSS:
+                    # DLSS resolves a single PlanarView, so the side-by-side stereo mode has
+                    # to fall back too -- the C++ guards on !IsStereo() and dynamic_casts the
+                    # view to PlanarView (FeatureDemo.cpp:1093-1097).
+                    if (
+                        self.dlss is not None
+                        and self.dlss.IsDlssInitialized()
+                        and isinstance(self.view, pyd.PlanarView)
+                    ):
+                        assert pyd.DLSSEvaluateParameters is not None
+                        dlssParams = pyd.DLSSEvaluateParameters()
+                        dlssParams.depthTexture = self.renderTargets.gbuffer.Depth
+                        dlssParams.motionVectorsTexture = self.renderTargets.gbuffer.MotionVectors
+                        dlssParams.inputColorTexture = self.renderTargets.HdrColor
+                        dlssParams.outputColorTexture = self.renderTargets.ResolvedColor
+                        dlssParams.exposureBuffer = self.toneMappingPass.GetExposureBuffer()
+                        self.dlss.Evaluate(self.commandList, dlssParams, self.view)
+                    else:
+                        # Fall back to TAA for this frame and permanently, exactly as
+                        # FeatureDemo.cpp:1109-1110 does. Both modes are sample count 1, so
+                        # this needs no render-target rebuild.
+                        self.ui.AntiAliasingMode = AntiAliasingMode.TEMPORAL
+
+                # Not `else`: the DLSS branch above may have just switched the mode to TEMPORAL,
+                # and that fallback has to resolve this same frame rather than skip it.
+                if self.ui.AntiAliasingMode == AntiAliasingMode.TEMPORAL:
+                    self.taaPass.TemporalResolve(
+                        self.commandList,
+                        self.ui.TemporalAntiAliasingParams,
+                        self.previousViewsValid,
+                        self.view,
+                        self.view,
+                    )
+                    # Paired 1:1 with TemporalResolve, not with the frame: AdvanceFrame also
+                    # ping-pongs the two resolve binding sets, which is what swaps the feedback
+                    # pair's history and output roles (TemporalAntiAliasingPass.cpp:300-317).
+                    # TEMPORAL, DLSS and NONE all share a sample count, so switching between
+                    # them does not rebuild the pass -- calling this on a frame that did not
+                    # resolve (a DLSS frame) would desynchronise the ping-pong from the
+                    # resolves it belongs to.
+                    self.taaPass.AdvanceFrame()
+
                 finalHdrColor = self.renderTargets.ResolvedColor
                 finalHdrFramebuffer = self.renderTargets.ResolvedFramebuffer
                 self.previousViewsValid = True
@@ -2244,12 +2357,26 @@ if __name__ == "__main__":
             if pyd.ImGui.Button("Reload Shaders"):
                 self.ui.ShaderReloadRequested = True
 
-            aaNames = [m.name for m in AntiAliasingMode]
+            # DLSS drops out of the list entirely when unavailable, rather than being greyed
+            # out (FeatureDemo.cpp:1585-1586). Because ImGui.Combo maps the selected index
+            # straight onto the names it was given, the modes are filtered FIRST and the
+            # index is mapped back through that filtered list -- casting the index to the
+            # enum would select the wrong mode whenever DLSS is missing.
+            if self.ui.AntiAliasingMode == AntiAliasingMode.DLSS and not self.ui.DlssAvailable:
+                self.ui.AntiAliasingMode = AntiAliasingMode.TEMPORAL
+
+            aaModes = [
+                mode
+                for mode in AntiAliasingMode
+                if mode != AntiAliasingMode.DLSS or self.ui.DlssAvailable
+            ]
             changed, index = pyd.ImGui.Combo(
-                "AA Mode", int(self.ui.AntiAliasingMode), aaNames
+                "AA Mode",
+                aaModes.index(self.ui.AntiAliasingMode),
+                [mode.name for mode in aaModes],
             )
             if changed:
-                self.ui.AntiAliasingMode = AntiAliasingMode(index)
+                self.ui.AntiAliasingMode = aaModes[index]
 
             # Deferred shading does not work with MSAA: DeferredLightingPass is a compute
             # pass writing to `output`, but HdrColor is created with isUAV = (sampleCount
@@ -2633,6 +2760,23 @@ if __name__ == "__main__":
     if is_debug:
         deviceParams.enableDebugRuntime = True
         deviceParams.enableNvrhiValidationLayer = True
+
+    # NGX needs its Vulkan extensions requested at DEVICE CREATION -- after this point there
+    # is no way to add them, and DLSS.Create would simply fail later with no obvious cause
+    # (FeatureDemo.cpp:1771-1778). They are *optional* extensions, so a driver without them
+    # still yields a working device, just no DLSS.
+    #
+    # Concatenation rather than .append(): these properties are bound with def_readwrite over
+    # std::vector<std::string>, so reading one hands back a converted copy and appending to
+    # that copy would be silently discarded.
+    if api == pyd.GraphicsAPI.Vulkan and pyd.DLSS is not None:
+        instanceExtensions, deviceExtensions = pyd.DLSS.GetRequiredVulkanExtensions()
+        deviceParams.optionalVulkanInstanceExtensions = (
+            list(deviceParams.optionalVulkanInstanceExtensions) + instanceExtensions
+        )
+        deviceParams.optionalVulkanDeviceExtensions = (
+            list(deviceParams.optionalVulkanDeviceExtensions) + deviceExtensions
+        )
 
     if not deviceManager.CreateWindowDeviceAndSwapChain(deviceParams, WINDOW_TITLE):
         pyd.log.fatal("Cannot initialize a graphics device with the requested parameters")

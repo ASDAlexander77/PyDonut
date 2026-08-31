@@ -2,6 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Note, 2026-08-31 — DLSS is no longer out of scope.** This plan's quoted docstrings and
+> commit messages say DLSS is permanently out of scope; that was true when it was written.
+> DLSS was ported on 2026-08-31 behind donut's `DONUT_WITH_DLSS=ON` build option — see the
+> superseded note in `docs/superpowers/specs/2026-08-25-feature-demo-stage1-design.md`. The
+> snippets below are left exactly as this stage wrote them: they record that stage, not the
+> current `feature_demo.py`. taskflow and the ImGui console do remain out of scope.
+
 **Goal:** Port FeatureDemo's light probes — four on-demand cube-map captures, processed into diffuse irradiance and roughness-filtered specular maps, feeding both the forward and the deferred shading path — completing the PyDonut FeatureDemo port.
 
 **Architecture:** Seven tasks. Tasks 1–3 add the native bindings (`LightProbe` and its two consumers; `LightProbeProcessingPass`; six supporting accessors) and are mutually independent. Tasks 4–7 wire them into `feature_demo.py` sequentially: probe allocation, the capture routine, per-frame plumbing, then UI. Every binding task ships tests in one new GPU-free file; the behavioural proof that a probe actually lights the scene is the manual run at the end of Task 7.

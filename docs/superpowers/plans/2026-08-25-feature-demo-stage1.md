@@ -21,6 +21,13 @@
 - **C++ `float` defaults widen lossily into Python.** A `float` field whose default is not binary-exact (0.1f, 0.8f, 0.95f, 0.02f, …) arrives in Python as a `double` carrying the float32 residue — `0.1f` becomes `0.10000000149011612`. Assert those with `pytest.approx(...)`. Defaults that ARE binary-exact (0.5, 1.0, 2.0, 3.0, 16.0, 100.0, -0.5) stay on exact `==` deliberately, so a genuine drift in them still fails the test. The test module imports `pytest` for this.
 - **Out of scope for every task in this plan:** DLSS, taskflow, ImGui console, shadows, light probes, MaterialID/PixelReadback, MipMapGen, stereo, screenshots.
 
+> **Note, 2026-08-31:** everything on that list except taskflow and the ImGui console has since
+> been ported — the later stages delivered the rest, and DLSS followed on 2026-08-31 behind
+> donut's `DONUT_WITH_DLSS=ON` build option (see the superseded note in
+> `docs/superpowers/specs/2026-08-25-feature-demo-stage1-design.md`). The code snippets quoted
+> further down this plan are left exactly as stage 1 wrote them and are **not** updated — they
+> are a record of that stage, not of the current file.
+
 ---
 
 ## File Structure

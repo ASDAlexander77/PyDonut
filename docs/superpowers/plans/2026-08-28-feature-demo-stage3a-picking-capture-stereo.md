@@ -2,6 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Note, 2026-08-31 — DLSS is no longer out of scope.** This plan's quoted docstrings and
+> commit messages say DLSS is permanently out of scope; that was true when it was written.
+> DLSS was ported on 2026-08-31 behind donut's `DONUT_WITH_DLSS=ON` build option — see the
+> superseded note in `docs/superpowers/specs/2026-08-25-feature-demo-stage1-design.md`. The
+> snippets below are left exactly as this stage wrote them: they record that stage, not the
+> current `feature_demo.py`. taskflow and the ImGui console do remain out of scope.
+
 **Goal:** Port FeatureDemo's right-click MaterialID picking, screenshots, MipMapGen test pass and stereo rendering into `feature_demo.py`, adding the native bindings each needs.
 
 **Architecture:** Seven tasks. Task 1 widens ten bound view parameters that were narrowed to `PlanarView` — a correctness fix on its own merits and a hard prerequisite for stereo. Tasks 2–4 add the new bindings for picking, capture and stereo, each with its own new GPU-free test file. Tasks 5–7 wire each feature into `feature_demo.py`.

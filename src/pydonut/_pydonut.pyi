@@ -352,6 +352,66 @@ def CompileShaderLibrary(
     includePaths: list[str] = [],
 ) -> bytes: ...
 
+# NGX DLSS integration. Only present when donut was built with DONUT_WITH_DLSS=ON (which
+# fetches the DLSS SDK); pydonut re-exports these as None otherwise, so test
+# `if pyd.DLSS is not None` before use.
+class DLSSInitParameters:
+    def __init__(self) -> None: ...
+    inputWidth: int
+    inputHeight: int
+    # Equal to the input size for DLAA (native-resolution antialiasing); larger than the
+    # input for upscaling.
+    outputWidth: int
+    outputHeight: int
+    useLinearDepth: bool
+    useAutoExposure: bool
+    useRayReconstruction: bool
+
+class DLSSEvaluateParameters:
+    def __init__(self) -> None: ...
+    depthTexture: Texture | None
+    motionVectorsTexture: Texture | None
+    inputColorTexture: Texture | None
+    outputColorTexture: Texture | None
+    # Optional; ToneMappingPass.GetExposureBuffer(). Ignored when useAutoExposure is set.
+    exposureBuffer: Buffer | None
+    # DLSS Ray Reconstruction only -- leave unset for plain DLSS.
+    diffuseAlbedo: Texture | None
+    specularAlbedo: Texture | None
+    normalRoughness: Texture | None
+    exposureScale: float
+    sharpness: float
+    resetHistory: bool
+
+class DLSS:
+    # Returns None when NGX cannot initialise on this machine (no driver support, missing
+    # nvngx_dlss.dll). directoryWithExecutable is where the DLL is looked up -- pass
+    # GetDirectoryWithExecutable().
+    @staticmethod
+    def Create(
+        device: Device,
+        shaderFactory: ShaderFactory,
+        directoryWithExecutable: str,
+        applicationID: int = ...,
+    ) -> DLSS | None: ...
+    # (instanceExtensions, deviceExtensions) that must be added to
+    # DeviceCreationParameters BEFORE CreateWindowDeviceAndSwapChain, or DLSS cannot
+    # initialise on Vulkan. Unlike the C++ out-parameter form, this returns new lists.
+    @staticmethod
+    def GetRequiredVulkanExtensions() -> tuple[list[str], list[str]]: ...
+    def IsDlssSupported(self) -> bool: ...
+    # False until Init() has run successfully; this is the flag to gate Evaluate on.
+    def IsDlssInitialized(self) -> bool: ...
+    def IsRayReconstructionSupported(self) -> bool: ...
+    def IsRayReconstructionInitialized(self) -> bool: ...
+    def Init(self, params: DLSSInitParameters) -> None: ...
+    def Evaluate(
+        self,
+        commandList: CommandList,
+        params: DLSSEvaluateParameters,
+        view: PlanarView,
+    ) -> None: ...
+
 # D3D12 Work Graphs interop prototype. Only present in Windows/D3D12 builds. Builds the
 # ID3D12StateObject for a single-library work graph; raises RuntimeError if the device/driver
 # doesn't report D3D12_WORK_GRAPHS_TIER support, or if state object creation fails.

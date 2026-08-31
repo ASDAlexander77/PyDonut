@@ -10,8 +10,13 @@ deferred shading path as image-based ambient light.
 Reference sample: `E:\Gits\Donut-Samples\feature_demo\FeatureDemo.cpp`.
 
 This completes the port. After 3b, the only unported FeatureDemo features are the three
-that are permanently out of scope: DLSS (no NGX SDK vendored), taskflow parallel scene
+that are permanently out of scope: ~~DLSS (no NGX SDK vendored)~~, taskflow parallel scene
 load, and the ImGui console subsystem.
+
+> **Superseded 2026-08-31 — DLSS is now ported**, behind donut's `DONUT_WITH_DLSS=ON` build
+> option. See the superseded note in
+> `docs/superpowers/specs/2026-08-25-feature-demo-stage1-design.md`. That leaves taskflow and
+> the ImGui console as the only unported FeatureDemo features.
 
 ## Position in the staging
 
@@ -459,8 +464,9 @@ existing forward-shading tests are what prove it stayed source-compatible.
 
 ## Out of scope
 
-DLSS, taskflow parallel scene load, the ImGui console — permanently, as in every prior
-stage. Per-object shadows and `SetupPerObjectShadow`. Probe placement UI: probes capture at
+DLSS (ported later — see the superseded note above), taskflow parallel scene load, the ImGui
+console — the latter two permanently, as in every prior stage. Per-object shadows and
+`SetupPerObjectShadow`. Probe placement UI: probes capture at
 wherever the camera happens to be, exactly as the sample does, with no way to move a probe
 after capture. Probe serialisation. `BlitCubemap` is bound for completeness but the sample
 never calls it, so nothing in `feature_demo.py` exercises it.

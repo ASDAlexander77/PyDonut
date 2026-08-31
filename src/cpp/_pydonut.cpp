@@ -68,6 +68,10 @@
 #include <donut/render/LightProbeProcessingPass.h>
 #include <donut/render/ToneMappingPasses.h>
 #include <donut/render/BloomPass.h>
+// Defines DONUT_WITH_DLSS itself (0 or 1) via donut_render's PUBLIC compile definitions
+// (donut-render.cmake:57/59), so this include must precede any #if on that macro. The
+// header is present even in a DLSS-less build; only the NGX SDK behind it is optional.
+#include <donut/render/DLSS.h>
 #include <donut/render/CascadedShadowMap.h>
 #include <donut/render/GeometryPasses.h>
 #include <donut/render/DrawStrategy.h>
@@ -3247,6 +3251,83 @@ PYBIND11_MODULE(_pydonut, m) {
         .def("GetExposureBuffer", [](donut::render::ToneMappingPass &self) {
             return DetachToShared(self.GetExposureBuffer());
         });
+
+#if DONUT_WITH_DLSS
+    // DLSS is bound only when donut was built with DONUT_WITH_DLSS=ON, which fetches the
+    // NGX SDK (CMakeLists.txt:110). Without it these names are absent from the native module
+    // and __init__.py rebinds them to None, the same contract CompileShader already uses --
+    // so Python callers test `if pyd.DLSS is not None` rather than catching ImportError.
+    py::class_<donut::render::DLSS::InitParameters>(m, "DLSSInitParameters")
+        .def(py::init<>())
+        .def_readwrite("inputWidth", &donut::render::DLSS::InitParameters::inputWidth)
+        .def_readwrite("inputHeight", &donut::render::DLSS::InitParameters::inputHeight)
+        .def_readwrite("outputWidth", &donut::render::DLSS::InitParameters::outputWidth)
+        .def_readwrite("outputHeight", &donut::render::DLSS::InitParameters::outputHeight)
+        .def_readwrite("useLinearDepth", &donut::render::DLSS::InitParameters::useLinearDepth)
+        .def_readwrite("useAutoExposure", &donut::render::DLSS::InitParameters::useAutoExposure)
+        .def_readwrite("useRayReconstruction", &donut::render::DLSS::InitParameters::useRayReconstruction);
+
+    // Every texture/buffer field is an nvrhi handle, so each needs def_property with a raw
+    // pointer on the Python side rather than def_readwrite -- same convention as LightProbe's
+    // maps above. The DLSS-RR fields (diffuseAlbedo/specularAlbedo/normalRoughness) are bound
+    // for completeness even though feature_demo.py leaves them unset, as the C++ sample does.
+    py::class_<donut::render::DLSS::EvaluateParameters>(m, "DLSSEvaluateParameters")
+        .def(py::init<>())
+#define PYDONUT_DLSS_TEX_PROPERTY(name)                                                        \
+        .def_property(#name,                                                                   \
+            [](const donut::render::DLSS::EvaluateParameters &p) -> nvrhi::ITexture* {         \
+                return p.name; },                                                              \
+            [](donut::render::DLSS::EvaluateParameters &p, nvrhi::ITexture* t) {               \
+                p.name = t; },                                                                 \
+            py::return_value_policy::reference)
+        PYDONUT_DLSS_TEX_PROPERTY(depthTexture)
+        PYDONUT_DLSS_TEX_PROPERTY(motionVectorsTexture)
+        PYDONUT_DLSS_TEX_PROPERTY(inputColorTexture)
+        PYDONUT_DLSS_TEX_PROPERTY(outputColorTexture)
+        PYDONUT_DLSS_TEX_PROPERTY(diffuseAlbedo)
+        PYDONUT_DLSS_TEX_PROPERTY(specularAlbedo)
+        PYDONUT_DLSS_TEX_PROPERTY(normalRoughness)
+#undef PYDONUT_DLSS_TEX_PROPERTY
+        .def_property("exposureBuffer",
+            [](const donut::render::DLSS::EvaluateParameters &p) -> nvrhi::IBuffer* { return p.exposureBuffer; },
+            [](donut::render::DLSS::EvaluateParameters &p, nvrhi::IBuffer* b) { p.exposureBuffer = b; },
+            py::return_value_policy::reference)
+        .def_readwrite("exposureScale", &donut::render::DLSS::EvaluateParameters::exposureScale)
+        .def_readwrite("sharpness", &donut::render::DLSS::EvaluateParameters::sharpness)
+        .def_readwrite("resetHistory", &donut::render::DLSS::EvaluateParameters::resetHistory);
+
+    py::class_<donut::render::DLSS, std::shared_ptr<donut::render::DLSS>>(m, "DLSS")
+        // No py::init: DLSS is abstract and the concrete subclass is chosen per graphics API
+        // inside Create (DLSS.h:95). Create returns unique_ptr, converted to the shared_ptr
+        // holder Python uses; it can return nullptr when NGX is unavailable on the machine
+        // (no driver support, missing nvngx_dlss.dll), which surfaces as None.
+        .def_static("Create", [](nvrhi::IDevice* device,
+                const std::shared_ptr<donut::engine::ShaderFactory> &shaderFactory,
+                const std::string &directoryWithExecutable,
+                uint32_t applicationID) -> std::shared_ptr<donut::render::DLSS> {
+            return donut::render::DLSS::Create(device, *shaderFactory, directoryWithExecutable, applicationID);
+        }, py::arg("device"), py::arg("shaderFactory"), py::arg("directoryWithExecutable"),
+           py::arg("applicationID") = donut::render::DLSS::DefaultApplicationID)
+        // Returns the two lists instead of filling caller-provided ones: the C++ signature
+        // appends to std::vector<std::string>& out-params, but DeviceCreationParameters'
+        // extension vectors are bound with def_readwrite, so Python reads a *copy* and an
+        // in-place append would be silently discarded. Callers extend the lists themselves.
+        .def_static("GetRequiredVulkanExtensions", []() {
+            std::vector<std::string> instanceExtensions, deviceExtensions;
+            donut::render::DLSS::GetRequiredVulkanExtensions(instanceExtensions, deviceExtensions);
+            return py::make_tuple(instanceExtensions, deviceExtensions);
+        })
+        .def("IsDlssSupported", &donut::render::DLSS::IsDlssSupported)
+        .def("IsDlssInitialized", &donut::render::DLSS::IsDlssInitialized)
+        .def("IsRayReconstructionSupported", &donut::render::DLSS::IsRayReconstructionSupported)
+        .def("IsRayReconstructionInitialized", &donut::render::DLSS::IsRayReconstructionInitialized)
+        .def("Init", &donut::render::DLSS::Init, py::arg("params"))
+        .def("Evaluate", [](donut::render::DLSS &self, nvrhi::ICommandList* commandList,
+                const donut::render::DLSS::EvaluateParameters &params,
+                const donut::engine::PlanarView &view) {
+            self.Evaluate(commandList, params, view);
+        }, py::arg("commandList"), py::arg("params"), py::arg("view"));
+#endif // DONUT_WITH_DLSS
 
     // The FramebufferFactory is passed both at construction and at every Render call, and they
     // are not always the same one: the sample blooms into the resolved framebuffer on the TAA

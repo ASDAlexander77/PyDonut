@@ -288,6 +288,32 @@ In such a build `pyd.AFTERMATH_AVAILABLE` is `True` and `DeviceCreationParameter
 `enableAftermath` field. **In a default build that field does not exist at all** — always guard
 access on `pyd.AFTERMATH_AVAILABLE`, as `aftermath.py` does.
 
+### Optional: DLSS
+
+[`feature_demo.py`](feature_demo.py) offers DLSS as an AA mode when the NGX SDK is compiled in:
+
+```sh
+SKBUILD_CMAKE_DEFINE=DONUT_WITH_DLSS=ON uv sync --reinstall-package pydonut
+```
+
+As with Aftermath, `--reinstall-package pydonut` is required, and the option clones the DLSS
+SDK from `github.com/NVIDIA/DLSS` at configure time, so this build needs network access. The
+NGX runtime DLLs (`nvngx_dlss.dll`, `nvngx_dlssd.dll`) are copied next to the `pydonut`
+extension module — *not* next to `python.exe` — so pass that directory to `DLSS.Create`:
+
+```python
+pyd.DLSS.Create(device, shaderFactory, Path(pyd.__file__).parent.as_posix())
+```
+
+In such a build `pyd.DLSS`, `pyd.DLSSInitParameters` and `pyd.DLSSEvaluateParameters` are real
+types; **in a default build all three are `None`** — guard on `pyd.DLSS is not None`, as
+`feature_demo.py` does. Being non-`None` only means the SDK is linked: whether this particular
+GPU and driver can run DLSS is answered at runtime by `DLSS.Create` returning `None`, and by
+`IsDlssInitialized()` after `Init()`.
+
+On Vulkan, DLSS needs extra device extensions requested **before** device creation — see the
+`GetRequiredVulkanExtensions` call in `feature_demo.py`; there is no way to add them later.
+
 Dumps are written to `<directory containing the running executable>/crash_<timestamp>/`, as
 `crash.nv-gpudmp` plus one `.nvdbg` per shader. They do *not* go to
 `Documents/NVIDIA Corporation/CrashDump/` — that folder belongs to the NSight Aftermath Monitor,
