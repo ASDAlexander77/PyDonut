@@ -11,6 +11,7 @@ file, with the same abstractions Donut exposes to C++.
 [![Platforms: Windows | Linux](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux-lightgrey)](#backends-and-platform-support)
 [![Built with pybind11](https://img.shields.io/badge/built%20with-pybind11-orange)](https://github.com/pybind/pybind11)
 [![Ray tracing: DXR and VK_KHR](https://img.shields.io/badge/ray%20tracing-DXR%20%26%20VK__KHR-8a2be2)](#ray-tracing)
+[![Developed with Claude Code](https://img.shields.io/badge/developed%20with-Claude%20Code-d97757)](https://claude.com/claude-code)
 
 | Feature demo — Windows (D3D12) | Feature demo — Linux (Vulkan) |
 | --- | --- |
@@ -37,6 +38,7 @@ file, with the same abstractions Donut exposes to C++.
 - [Project layout](#project-layout)
 - [Development](#development)
 - [FAQ](#faq)
+- [Developed with Claude Code](#developed-with-claude-code)
 - [Related projects](#related-projects)
 - [License](#license)
 
@@ -493,6 +495,12 @@ optional features queried at runtime with `device.queryFeatureSupport(...)`.
 **Does it work in WSL?**
 Only with Mesa's `dzn` Vulkan-on-D3D12 driver; a stock WSL2 falls back to CPU software
 rasterization. See [WSL2](#wsl2).
+
+## Developed with Claude Code
+
+PyDonut was developed with [Claude Code](https://claude.com/claude-code), Anthropic's agentic
+coding tool. The pybind11 binding layer, the example scripts and the documentation were written
+in collaboration with it.
 
 ## Related projects
 
