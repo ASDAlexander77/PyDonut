@@ -303,3 +303,11 @@ if (DONUT_WITH_DLSS AND WIN32)
 endif()
 
 install(TARGETS _pydonut DESTINATION ${SKBUILD_PROJECT_NAME})
+
+# The C interop seam's public header ships inside the wheel so a companion extension module
+# (PyRTXPT and friends) can compile against an *installed* pydonut with no source checkout:
+# `pydonut.get_include()` returns this directory, and the header is included as
+# <pydonut/pydonut_capi.h>. Keep the nested pydonut/ path -- get_include() returns the parent,
+# so flattening it here would break that include spelling.
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/include/pydonut/pydonut_capi.h"
+        DESTINATION "${SKBUILD_PROJECT_NAME}/include/pydonut")

@@ -286,6 +286,19 @@ def FindPreferredScene(available: list[str], preferred: str) -> str: ...
 # DeviceCreationParameters has no enableAftermath attribute and no crash dumps are written.
 AFTERMATH_AVAILABLE: bool
 
+# --- C interop seam (see include/pydonut/pydonut_capi.h) ---
+# ABI version of the PyDonut_CAPI table below. A companion extension module built against a
+# different value must not be loaded; checking this from Python gives a readable ImportError
+# before the mismatch reaches that module's C init.
+CAPI_ABI_VERSION: int
+# Comma-separated build switches of this pydonut, e.g. "d3d12,vulkan,dxc,". Empty-ish strings
+# are possible; test with `"d3d12," in pyd.CAPI_BUILD_CONFIG` rather than parsing strictly.
+CAPI_BUILD_CONFIG: str
+# PyCapsule named "pydonut._pydonut._C_API" wrapping a pointer to the PyDonut_CAPI table.
+# Opaque and useless from Python -- it exists for other C++ extension modules, which reach it
+# via PyDonut_ImportCAPI() rather than by touching this attribute.
+_C_API: object
+
 # DELIBERATELY UNSAFE -- crash testing only. Destroys the native API memory backing `buffer`
 # while the GPU may still be reading it, so the next draw page-faults. The device cannot be
 # recovered afterwards. Raises RuntimeError on D3D11, which does not fault this way.

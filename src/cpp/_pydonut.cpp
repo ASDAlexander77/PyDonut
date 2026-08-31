@@ -77,6 +77,11 @@
 #include <donut/render/DrawStrategy.h>
 #include <nvrhi/utils.h>
 
+// The C interop seam exposed to separate extension modules (e.g. PyRTXPT). Must come after the
+// donut/nvrhi headers above: the header only forward-declares those types, and the definitions
+// are what let the accessors below actually cast to them.
+#include <pydonut/pydonut_capi.h>
+
 #if PYDONUT_HAVE_DXC
 #include <dxcapi.h>
 #endif
@@ -389,6 +394,133 @@ std::shared_ptr<T> DetachToShared(nvrhi::RefCountPtr<T> handle) {
     return std::shared_ptr<T>(raw, [](T* p) { if (p) p->Release(); });
 }
 
+// ---------------------------------------------------------------------------------------
+// C interop seam (include/pydonut/pydonut_capi.h)
+//
+// These back the function pointers handed to other extension modules through the _C_API
+// capsule, so they are the one place in this file that is called from code pybind11 knows
+// nothing about. Two rules follow from that and are enforced here rather than documented and
+// hoped for: nothing throws across the boundary (every function is noexcept and converts C++
+// exceptions into Python errors), and ownership follows the header's stated conventions.
+// ---------------------------------------------------------------------------------------
+namespace capi {
+
+// Borrows: returns the raw pointer owned by `obj` without touching any refcount. None maps to
+// nullptr with NO error set -- "absent" is a valid answer that callers distinguish from failure
+// via PyErr_Occurred(), so it must not look like a type error.
+template <typename T>
+T *Unwrap(PyObject *obj) noexcept {
+    if (obj == nullptr || obj == Py_None) {
+        return nullptr;
+    }
+    try {
+        return py::handle(obj).cast<T *>();
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_TypeError, e.what());
+        return nullptr;
+    } catch (...) {
+        PyErr_SetString(PyExc_TypeError, "pydonut: unwrap failed with an unknown exception");
+        return nullptr;
+    }
+}
+
+// Wraps an nvrhi IResource-derived pointer into the Python type pydonut registered for it,
+// adding a reference the returned object owns. Only sound for intrusively refcounted types --
+// see the header for why donut's shared_ptr-held classes deliberately have no Wrap.
+template <typename T>
+PyObject *WrapRefCounted(T *ptr) noexcept {
+    if (ptr == nullptr) {
+        Py_RETURN_NONE;
+    }
+
+    ptr->AddRef();
+
+    std::shared_ptr<T> holder;
+    try {
+        // Takes over the AddRef above; from here on every exit path releases it exactly once.
+        holder = std::shared_ptr<T>(ptr, [](T *p) { if (p) p->Release(); });
+    } catch (...) {
+        ptr->Release();
+        PyErr_NoMemory();
+        return nullptr;
+    }
+
+    try {
+        // py::cast copies the shared_ptr into the new Python object, so `holder` going out of
+        // scope below leaves exactly the one reference that object owns.
+        return py::cast(holder).release().ptr();
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return nullptr;
+    } catch (...) {
+        PyErr_SetString(PyExc_RuntimeError, "pydonut: wrap failed with an unknown exception");
+        return nullptr;
+    }
+}
+
+// Reported to consumers as PyDonut_CAPI::build_config. Adjacent string literals concatenate, so
+// this is a single compile-time string naming only the switches that are actually on.
+const char *const kBuildConfig =
+#if defined(NVRHI_WITH_DX12) && NVRHI_WITH_DX12
+    "d3d12,"
+#endif
+#if defined(DONUT_WITH_VULKAN) && DONUT_WITH_VULKAN
+    "vulkan,"
+#endif
+#if defined(PYDONUT_HAVE_DXC) && PYDONUT_HAVE_DXC
+    "dxc,"
+#endif
+#if defined(DONUT_WITH_DLSS) && DONUT_WITH_DLSS
+    "dlss,"
+#endif
+#if defined(DONUT_WITH_AFTERMATH) && DONUT_WITH_AFTERMATH
+    "aftermath,"
+#endif
+    "";
+
+// Namespace-scope so it outlives the module object the capsule is attached to. Member order
+// must match PyDonut_CAPI exactly; it is checked by the compiler rather than by review, since
+// every slot has a distinct function-pointer type, so a reordering fails to convert instead of
+// silently binding one accessor into another's slot.
+PyDonut_CAPI g_capi = {
+    /* .abi_version  = */ PYDONUT_CAPI_ABI_VERSION,
+    /* .struct_size  = */ static_cast<uint32_t>(sizeof(PyDonut_CAPI)),
+    /* .build_config = */ kBuildConfig,
+
+    &Unwrap<nvrhi::IDevice>,
+    &Unwrap<nvrhi::ICommandList>,
+    &Unwrap<nvrhi::ITexture>,
+    &Unwrap<nvrhi::IBuffer>,
+    &Unwrap<nvrhi::IFramebuffer>,
+    &Unwrap<nvrhi::ISampler>,
+    &Unwrap<nvrhi::IBindingLayout>,
+    &Unwrap<nvrhi::IBindingSet>,
+    &Unwrap<nvrhi::IShader>,
+    &Unwrap<nvrhi::rt::IAccelStruct>,
+
+    &Unwrap<donut::app::DeviceManager>,
+    &Unwrap<donut::engine::ShaderFactory>,
+    &Unwrap<donut::engine::CommonRenderPasses>,
+    &Unwrap<donut::engine::DescriptorTableManager>,
+    &Unwrap<donut::engine::TextureCache>,
+    &Unwrap<donut::engine::FramebufferFactory>,
+    &Unwrap<donut::engine::Scene>,
+    &Unwrap<donut::engine::SceneGraph>,
+    &Unwrap<donut::engine::IView>,
+
+    &WrapRefCounted<nvrhi::ICommandList>,
+    &WrapRefCounted<nvrhi::ITexture>,
+    &WrapRefCounted<nvrhi::IBuffer>,
+    &WrapRefCounted<nvrhi::IFramebuffer>,
+    &WrapRefCounted<nvrhi::ISampler>,
+    &WrapRefCounted<nvrhi::IBindingLayout>,
+    &WrapRefCounted<nvrhi::IBindingSet>,
+    &WrapRefCounted<nvrhi::IShader>,
+    &WrapRefCounted<nvrhi::rt::IAccelStruct>,
+};
+
+} // namespace capi
+
 #if PYDONUT_HAVE_DXC
 
 // Minimal COM smart pointer, standing in for Microsoft::WRL::ComPtr (Windows-only,
@@ -644,6 +776,17 @@ void RequireCascadeExponent(const char* call, float exponent)
 
 PYBIND11_MODULE(_pydonut, m) {
     m.doc() = "pybind11 donut module";
+
+    // The C interop seam. Registered first, before any py::class_ below, purely so that a
+    // consumer module importing pydonut can never observe a half-built table -- the capsule
+    // either is not there yet or is complete. The accessors it holds resolve their types
+    // through pybind11's registry at call time, so registration order does not otherwise
+    // matter. See include/pydonut/pydonut_capi.h for the contract.
+    m.attr("_C_API") = py::capsule(&capi::g_capi, PYDONUT_CAPI_CAPSULE_NAME);
+    // Same number as PyDonut_CAPI::abi_version, readable from Python so a companion package
+    // can fail with a clear message at import instead of inside its own C extension init.
+    m.attr("CAPI_ABI_VERSION") = PYDONUT_CAPI_ABI_VERSION;
+    m.attr("CAPI_BUILD_CONFIG") = capi::kBuildConfig;
 
     pybind11::native_enum<nvrhi::GraphicsAPI>(m, "GraphicsAPI", "enum.Enum")
         .value("D3D11", nvrhi::GraphicsAPI::D3D11)

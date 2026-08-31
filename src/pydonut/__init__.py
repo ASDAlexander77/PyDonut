@@ -22,7 +22,14 @@
 # ******************************************************************************/
 
 from __future__ import annotations
+import os
 import typing
+# The compiled module itself, not just names from it: get_include() locates the interop header
+# relative to the .pyd/.so, which is the only one of the two package directories an editable
+# install puts it in.
+from pydonut import _pydonut as _native
+from pydonut._pydonut import CAPI_ABI_VERSION
+from pydonut._pydonut import CAPI_BUILD_CONFIG
 from pydonut._pydonut import GraphicsAPI
 from pydonut._pydonut import Format
 from pydonut._pydonut import LogSeverity
@@ -211,6 +218,47 @@ from pydonut._pydonut import ComputeRotatingViewProjMatrix
 from pydonut._pydonut import CreateBindingSetAndLayout
 from pydonut._pydonut import log
 
+
+def get_include() -> str:
+    """Directory to add to a C++ compiler's include path to build against pydonut.
+
+    A companion extension module (PyRTXPT and friends) shares nvrhi/donut objects with pydonut
+    through the C interop seam rather than by linking its own copy of donut; this is where that
+    seam's header lives, so it is included as ``<pydonut/pydonut_capi.h>``::
+
+        $(python -c "import pydonut; print(pydonut.get_include())")
+
+    Three layouts have to resolve, which is why this searches rather than computing one path:
+
+    * a normal wheel install -- the header sits next to ``_pydonut`` inside the package;
+    * an editable install (what ``uv sync`` produces for this project) -- ``__init__.py`` is
+      served from ``src/pydonut`` while ``_pydonut`` and the installed header are in
+      site-packages, so anchoring on ``__file__`` alone would point at a directory that has
+      never contained the header;
+    * a plain source checkout -- neither of the above exists and the header is in
+      ``<repo>/include``.
+
+    Falls back to the wheel-relative path if none of them is present, so the caller sees a
+    missing-include error naming a sensible location rather than a silently wrong one.
+    """
+    candidates = []
+
+    native = getattr(_native, "__file__", None)
+    if native:
+        candidates.append(os.path.join(os.path.dirname(native), "include"))
+
+    package_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates.append(os.path.join(package_dir, "include"))
+    # src/pydonut/__init__.py -> <repo>/include
+    candidates.append(os.path.normpath(os.path.join(package_dir, os.pardir, os.pardir, "include")))
+
+    for candidate in candidates:
+        if os.path.isfile(os.path.join(candidate, "pydonut", "pydonut_capi.h")):
+            return candidate
+
+    return candidates[0]
+
+
 try:
     # Only present when the native module was built with DXC available.
     from pydonut._pydonut import CompileShader
@@ -241,6 +289,9 @@ except ImportError:
     DLSSEvaluateParameters = None
 
 __all__ = (
+    'CAPI_ABI_VERSION',
+    'CAPI_BUILD_CONFIG',
+    'get_include',
     'GraphicsAPI',
     'Format',
     'LogSeverity',

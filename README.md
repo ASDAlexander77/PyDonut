@@ -37,6 +37,7 @@ file, with the same abstractions Donut exposes to C++.
 - [Hello triangle](#hello-triangle)
 - [Project layout](#project-layout)
 - [Development](#development)
+  - [Building a companion extension module](#building-a-companion-extension-module)
 - [FAQ](#faq)
 - [Developed with Claude Code](#developed-with-claude-code)
 - [Related projects](#related-projects)
@@ -432,7 +433,7 @@ basic_triangle.py        Hello-triangle example; the other 18 examples sit besid
 feature_demo.py          Full renderer: shadows, SSAO, TAA, bloom, tone mapping, light probes
 src/cpp/_pydonut.cpp     pybind11 bindings for the native module
 src/pydonut/             Python package (__init__.py, _pydonut.pyi type stubs, py.typed)
-include/pydonut/         C++ headers for the bindings
+include/pydonut/         Public C++ headers; pydonut_capi.h is the interop seam for companion modules
 shaders/                 HLSL shaders used by the examples, one directory per example
 media/                   glTF sample assets (Sponza, BrainStem) and scene files
 test/                    pytest suite covering the bindings
@@ -458,6 +459,43 @@ uv sync                  # rebuild after editing src/cpp/_pydonut.cpp
 When you add or change a binding in `src/cpp/_pydonut.cpp`, update
 [`src/pydonut/_pydonut.pyi`](src/pydonut/_pydonut.pyi) to match — it is the only thing editors and
 type checkers see.
+
+### Building a companion extension module
+
+A *separate* Python extension module can share pydonut's nvrhi and donut objects through the C
+interop seam in [`include/pydonut/pydonut_capi.h`](include/pydonut/pydonut_capi.h). This exists
+because `_pydonut` statically links donut and NVRHI: a second module linking its own copy would
+get a duplicate set of their globals and could not be handed pydonut's `DeviceManager` or command
+lists. Instead the companion links **no** donut or nvrhi implementation at all — nvrhi's
+interfaces are pure virtual, so calling them needs only the headers and a valid pointer.
+
+```cpp
+// -I $(python -c "import pydonut; print(pydonut.get_include())")
+#include <pydonut/pydonut_capi.h>
+
+static const PyDonut_CAPI *g_pyd = nullptr;
+
+PYBIND11_MODULE(_mymodule, m) {
+    g_pyd = PyDonut_ImportCAPI();          // version-checked; nullptr sets a Python error
+    if (!g_pyd) throw py::error_already_set();
+
+    m.def("render", [](py::object pyDevice, py::object pyTarget) {
+        nvrhi::IDevice *device = g_pyd->UnwrapDevice(pyDevice.ptr());
+        nvrhi::ITexture *target = g_pyd->UnwrapTexture(pyTarget.ptr());
+        ...
+    });
+}
+```
+
+`Unwrap*` borrows a raw pointer out of a Python object; `Wrap*` turns an nvrhi resource back
+into the Python type pydonut registered for it. The header is the contract — read the
+conventions block at the top of it, particularly that every call needs the GIL held, that `None`
+unwraps to `nullptr` *without* an error, and that `Wrap*` exists only for nvrhi's refcounted
+types and deliberately not for donut's `shared_ptr`-held engine classes.
+
+The companion must compile against a Donut commit close enough to pydonut's that vtable layouts
+agree; nothing can check that at runtime, which is what `PYDONUT_CAPI_ABI_VERSION` and
+`pyd.CAPI_BUILD_CONFIG` (e.g. `"d3d12,vulkan,dxc,"`) exist to narrow.
 
 ## FAQ
 
